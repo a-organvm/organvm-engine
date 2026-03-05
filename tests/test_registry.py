@@ -2,10 +2,11 @@
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from organvm_engine.registry.loader import load_registry
+from organvm_engine.registry.loader import load_registry, save_registry
 from organvm_engine.registry.query import find_repo, all_repos, list_repos, resolve_organ_key
 from organvm_engine.registry.validator import validate_registry
 from organvm_engine.registry.updater import update_repo
@@ -19,6 +20,25 @@ class TestLoader:
     def test_load_missing_file_raises(self):
         with pytest.raises(FileNotFoundError):
             load_registry("/nonexistent/path.json")
+
+    def test_save_to_explicit_path(self, registry, tmp_path):
+        out = tmp_path / "out.json"
+        save_registry(registry, out)
+        reloaded = load_registry(out)
+        assert reloaded["version"] == "2.0"
+
+    def test_save_refuses_small_registry_to_production_path(self):
+        """Guard against test fixture data overwriting production registry."""
+        tiny = {"version": "2.0", "organs": {"ORGAN-I": {"name": "Theory", "repositories": [{"name": "repo-a"}]}}}
+        with pytest.raises(ValueError, match="Refusing to write registry with only 1 repos"):
+            save_registry(tiny)
+
+    def test_save_allows_small_registry_to_explicit_path(self, tmp_path):
+        """Small registries are fine when writing to an explicit non-production path."""
+        tiny = {"version": "2.0", "organs": {"ORGAN-I": {"name": "Theory", "repositories": [{"name": "repo-a"}]}}}
+        out = tmp_path / "test-registry.json"
+        save_registry(tiny, out)
+        assert out.exists()
 
 
 class TestQuery:
