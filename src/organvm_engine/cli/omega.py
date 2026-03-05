@@ -30,6 +30,9 @@ def cmd_omega_update(args: argparse.Namespace) -> int:
     registry = load_registry(args.registry)
     scorecard = evaluate(registry=registry)
 
+    # --write overrides the default dry_run=True
+    dry_run = not getattr(args, "write", False)
+
     # Show what changed
     changes = diff_snapshots(scorecard)
     print(f"\n  Omega Update — {scorecard.met_count}/{scorecard.total} MET")
@@ -37,8 +40,9 @@ def cmd_omega_update(args: argparse.Namespace) -> int:
     for change in changes:
         print(f"  {change}")
 
-    if args.dry_run:
+    if dry_run:
         print("\n  [DRY RUN] Would write snapshot to data/omega/")
+        print("  Re-run with --write to apply.")
     else:
         path = write_snapshot(scorecard)
         print(f"\n  Snapshot written: {path}")

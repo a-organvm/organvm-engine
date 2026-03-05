@@ -6,11 +6,14 @@ import argparse
 def cmd_context_sync(args: argparse.Namespace) -> int:
     from organvm_engine.contextmd.sync import sync_all
 
+    # --write overrides the default dry_run=True
+    dry_run = not getattr(args, "write", False)
+
     organs = [args.organ] if args.organ else None
     result = sync_all(
         workspace=args.workspace,
         registry_path=args.registry,
-        dry_run=args.dry_run,
+        dry_run=dry_run,
         organs=organs,
     )
 

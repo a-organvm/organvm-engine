@@ -326,8 +326,12 @@ def build_parser() -> argparse.ArgumentParser:
         "update", help="Evaluate and write omega snapshot",
     )
     om_update.add_argument(
-        "--dry-run", action="store_true",
-        help="Preview without writing",
+        "--dry-run", action="store_true", default=True,
+        help="Preview without writing (default)",
+    )
+    om_update.add_argument(
+        "--write", action="store_true",
+        help="Actually write snapshot (overrides --dry-run)",
     )
 
     # pitch
@@ -379,8 +383,12 @@ def build_parser() -> argparse.ArgumentParser:
         "sync", help="Sync CLAUDE.md, GEMINI.md, and AGENTS.md",
     )
     c_sync.add_argument(
-        "--dry-run", action="store_true",
-        help="Report changes without writing",
+        "--dry-run", action="store_true", default=True,
+        help="Report changes without writing (default)",
+    )
+    c_sync.add_argument(
+        "--write", action="store_true",
+        help="Actually write changes (overrides --dry-run)",
     )
     c_sync.add_argument(
         "--organ", default=None,
