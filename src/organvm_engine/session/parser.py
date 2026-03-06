@@ -312,6 +312,199 @@ class SessionExport:
 """
 
 
+def _extract_human_text(msg: dict) -> str:
+    """Extract readable text from a human message."""
+    content = msg.get("message", {}).get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text = part.get("text", "")
+                if text:
+                    parts.append(text)
+        return "\n".join(parts)
+    return ""
+
+
+def _extract_assistant_actions(msg: dict) -> list[str]:
+    """Extract tool calls from an assistant message as concise action summaries."""
+    content = msg.get("message", {}).get("content", [])
+    actions = []
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                name = block.get("name", "unknown")
+                inp = block.get("input", {})
+                # Build a concise summary of the action
+                if name in ("Read", "read_file"):
+                    actions.append(f"Read `{inp.get('file_path', inp.get('path', '?'))}`")
+                elif name in ("Write", "write_file"):
+                    actions.append(f"Write `{inp.get('file_path', inp.get('path', '?'))}`")
+                elif name == "Edit":
+                    actions.append(f"Edit `{inp.get('file_path', '?')}`")
+                elif name == "Bash":
+                    cmd = inp.get("command", "")
+                    if len(cmd) > 120:
+                        cmd = cmd[:120] + "..."
+                    actions.append(f"Bash: `{cmd}`")
+                elif name == "Grep":
+                    actions.append(f"Grep `{inp.get('pattern', '?')}` in {inp.get('path', '.')}")
+                elif name == "Glob":
+                    actions.append(f"Glob `{inp.get('pattern', '?')}`")
+                elif name == "Agent":
+                    actions.append(f"Agent: {str(inp.get('prompt', ''))[:100]}")
+                else:
+                    actions.append(f"{name}")
+    return actions
+
+
+def render_prompts(jsonl_path: Path) -> str:
+    """Extract human prompts with assistant action summaries for audit.
+
+    Produces a clean prompts-only view with:
+    - Numbered, timestamped human messages (full text)
+    - Elapsed time between prompts
+    - Condensed assistant actions (tool calls only, no prose)
+    - Summary statistics at the end
+    """
+    meta = parse_session(jsonl_path)
+    if not meta:
+        return ""
+
+    lines: list[str] = []
+    duration = f"~{meta.duration_minutes} min" if meta.duration_minutes else "unknown"
+
+    lines.append(f"# Session Prompts: {meta.date_str}")
+    lines.append("")
+    lines.append(f"**Session ID:** `{meta.session_id}`")
+    lines.append(f"**Duration:** {duration}")
+    lines.append(f"**Working directory:** `{meta.cwd}`")
+    lines.append(f"**Prompts:** {meta.human_messages} human messages")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    prompt_num = 0
+    last_human_ts: datetime | None = None
+    pending_actions: list[str] = []
+    prompt_texts: list[str] = []  # for pattern summary
+
+    with jsonl_path.open(encoding="utf-8") as f:
+        for raw_line in f:
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            try:
+                msg = json.loads(raw_line)
+            except json.JSONDecodeError:
+                continue
+
+            msg_type = msg.get("type", "")
+
+            if msg_type == "assistant":
+                pending_actions.extend(_extract_assistant_actions(msg))
+
+            elif msg_type == "user":
+                text = _extract_human_text(msg)
+
+                # Skip tool results and system noise
+                if not text or len(text.strip()) < 5:
+                    continue
+                # Skip tool_result-only messages (user turn carrying tool output back)
+                msg_content = msg.get("message", {}).get("content", "")
+                if isinstance(msg_content, list):
+                    has_text = any(
+                        isinstance(p, dict) and p.get("type") == "text" and len(p.get("text", "").strip()) > 5
+                        for p in msg_content
+                    )
+                    has_tool_result = any(
+                        isinstance(p, dict) and p.get("type") == "tool_result"
+                        for p in msg_content
+                    )
+                    if has_tool_result and not has_text:
+                        continue
+
+                # Emit prior assistant actions before next prompt
+                if pending_actions and prompt_num > 0:
+                    lines.append("**Actions taken:**")
+                    for a in pending_actions:
+                        lines.append(f"- {a}")
+                    lines.append("")
+                    lines.append("---")
+                    lines.append("")
+                pending_actions = []
+
+                prompt_num += 1
+
+                # Timestamp and elapsed
+                ts_str = msg.get("timestamp", "")
+                ts_short = ts_str[:19].replace("T", " ") if ts_str else ""
+                elapsed = ""
+                if ts_str:
+                    try:
+                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                        if last_human_ts:
+                            delta = ts - last_human_ts
+                            mins = int(delta.total_seconds() / 60)
+                            if mins > 0:
+                                elapsed = f" (+{mins}m)"
+                        last_human_ts = ts
+                    except (ValueError, TypeError):
+                        pass
+
+                lines.append(f"### P{prompt_num} — {ts_short}{elapsed}")
+                lines.append("")
+                lines.append(text)
+                lines.append("")
+
+                prompt_texts.append(text)
+
+    # Emit final assistant actions
+    if pending_actions:
+        lines.append("**Actions taken:**")
+        for a in pending_actions:
+            lines.append(f"- {a}")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    # Summary section
+    lines.append("---")
+    lines.append("")
+    lines.append("## Prompt Summary")
+    lines.append("")
+    lines.append(f"**Total prompts:** {prompt_num}")
+    lines.append(f"**Session duration:** {duration}")
+    if prompt_num > 0 and meta.duration_minutes:
+        avg = meta.duration_minutes / prompt_num
+        lines.append(f"**Avg time between prompts:** ~{avg:.1f} min")
+    lines.append("")
+
+    # Categorize prompts by rough type
+    plan_count = sum(1 for t in prompt_texts if any(
+        kw in t.lower() for kw in ["implement", "plan", "build", "create", "add", "write"]
+    ))
+    question_count = sum(1 for t in prompt_texts if "?" in t)
+    fix_count = sum(1 for t in prompt_texts if any(
+        kw in t.lower() for kw in ["fix", "error", "bug", "broken", "fail", "wrong"]
+    ))
+    review_count = sum(1 for t in prompt_texts if any(
+        kw in t.lower() for kw in ["check", "verify", "review", "audit", "look at", "show"]
+    ))
+
+    lines.append("### Prompt Categories (heuristic)")
+    lines.append("")
+    lines.append(f"- **Directives** (implement/build/create/add/write): {plan_count}")
+    lines.append(f"- **Questions**: {question_count}")
+    lines.append(f"- **Fixes** (fix/error/bug/broken/fail): {fix_count}")
+    lines.append(f"- **Reviews** (check/verify/review/audit): {review_count}")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 def render_transcript(jsonl_path: Path) -> str:
     """Render a full session transcript as readable markdown."""
     meta = parse_session(jsonl_path)

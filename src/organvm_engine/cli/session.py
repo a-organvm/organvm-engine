@@ -6,6 +6,7 @@ Usage:
     organvm session show <session-id>
     organvm session export <session-id> --slug <slug> [--output <dir>]
     organvm session transcript <session-id> [--output <file>]
+    organvm session prompts <session-id> [--output <file>]
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from organvm_engine.session.parser import (
     list_projects,
     list_sessions,
     parse_session,
+    render_prompts,
     render_transcript,
 )
 
@@ -112,7 +114,7 @@ def cmd_session_show(args: argparse.Namespace) -> int:
 
 
 def cmd_session_export(args: argparse.Namespace) -> int:
-    """Export a session as a praxis-perpetua session review."""
+    """Export a session as a praxis-perpetua session review + prompts extract."""
     session_id = args.session_id
     slug = args.slug
     output_dir = Path(args.output).expanduser().resolve() if args.output else _default_praxis_sessions()
@@ -129,44 +131,48 @@ def cmd_session_export(args: argparse.Namespace) -> int:
         print(f"Could not parse session: {jsonl_path}")
         return 1
 
-    filename = f"{meta.date_str}--{slug}.md"
-    output_path = output_dir / filename
+    base_name = f"{meta.date_str}--{slug}"
+    review_path = output_dir / f"{base_name}.md"
+    prompts_path = output_dir / f"{base_name}--prompts.md"
 
-    export = SessionExport(meta=meta, slug=slug, output_path=output_path)
-    content = export.render()
+    export = SessionExport(meta=meta, slug=slug, output_path=review_path)
+    review_content = export.render()
+    prompts_content = render_prompts(jsonl_path)
 
     if dry_run:
-        print(f"Would write to: {output_path}")
-        print(f"Content length: {len(content)} chars")
-        print()
-        print(content[:500])
-        print("...")
+        print(f"Would write review to:  {review_path}")
+        print(f"Would write prompts to: {prompts_path}")
+        print(f"Review: {len(review_content)} chars")
+        print(f"Prompts: {len(prompts_content)} chars, {prompts_content.count('### P')} prompts extracted")
         return 0
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if output_path.exists():
-        print(f"File already exists: {output_path}")
+    if review_path.exists():
+        print(f"File already exists: {review_path}")
         print("Use a different --slug or remove the existing file.")
         return 1
 
-    output_path.write_text(content, encoding="utf-8")
-    print(f"Exported session review to: {output_path}")
+    review_path.write_text(review_content, encoding="utf-8")
+    prompts_path.write_text(prompts_content, encoding="utf-8")
+
+    prompt_count = prompts_content.count("### P")
+    print(f"Exported session review to: {review_path}")
+    print(f"Exported prompts extract to: {prompts_path}")
     print(f"  Session: {meta.session_id}")
     print(f"  Date: {meta.date_str}")
     print(f"  Messages: {meta.message_count}")
+    print(f"  Prompts extracted: {prompt_count}")
     dur = f"{meta.duration_minutes} min" if meta.duration_minutes else "unknown"
     print(f"  Duration: {dur}")
-    print()
-    print("Next steps:")
-    print("  1. Open the file and fill in the TODO sections")
-    print("  2. Complete the self-critique phases (inventory, triage, audit, lessons)")
-    print("  3. Update lessons/derived-principles.md if new patterns emerged")
     return 0
 
 
 def cmd_session_transcript(args: argparse.Namespace) -> int:
-    """Render full session transcript as readable markdown."""
+    """Render full session transcript as readable markdown.
+
+    When writing to file, automatically produces a companion --prompts.md.
+    """
     session_id = args.session_id
     output = getattr(args, "output", None)
 
@@ -189,6 +195,49 @@ def cmd_session_transcript(args: argparse.Namespace) -> int:
         size_kb = len(content.encode("utf-8")) / 1024
         print(f"Transcript written to: {out_path}")
         print(f"  {lines} lines, {size_kb:.0f} KB")
+
+        # Auto-generate companion prompts file
+        prompts_content = render_prompts(jsonl_path)
+        if prompts_content:
+            prompts_path = out_path.with_name(
+                out_path.stem.replace("--transcript", "") + "--prompts.md"
+            )
+            if "--transcript" not in out_path.stem:
+                prompts_path = out_path.with_name(out_path.stem + "--prompts.md")
+            prompts_path.write_text(prompts_content, encoding="utf-8")
+            prompt_count = prompts_content.count("### P")
+            print(f"Prompts written to: {prompts_path}")
+            print(f"  {prompt_count} prompts extracted")
+    else:
+        print(content)
+
+    return 0
+
+
+def cmd_session_prompts(args: argparse.Namespace) -> int:
+    """Extract prompts only from a session transcript."""
+    session_id = args.session_id
+    output = getattr(args, "output", None)
+
+    jsonl_path = find_session(session_id)
+    if not jsonl_path:
+        print(f"Session not found: {session_id}")
+        print("Use 'organvm session list' to see available sessions.")
+        return 1
+
+    content = render_prompts(jsonl_path)
+    if not content:
+        print(f"Could not parse session: {jsonl_path}")
+        return 1
+
+    if output:
+        out_path = Path(output).expanduser().resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(content, encoding="utf-8")
+        prompt_count = content.count("### P")
+        size_kb = len(content.encode("utf-8")) / 1024
+        print(f"Prompts written to: {out_path}")
+        print(f"  {prompt_count} prompts, {size_kb:.0f} KB")
     else:
         print(content)
 

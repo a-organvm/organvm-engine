@@ -9,11 +9,14 @@ import pytest
 from organvm_engine.session.parser import (
     SessionExport,
     SessionMeta,
+    _extract_assistant_actions,
+    _extract_human_text,
     _read_cwd_from_project,
     find_session,
     list_projects,
     list_sessions,
     parse_session,
+    render_prompts,
 )
 
 
@@ -301,3 +304,157 @@ class TestSessionExport:
 
         assert out.exists()
         assert "test-456" in out.read_text()
+
+
+class TestExtractHumanText:
+    def test_string_content(self):
+        msg = {"message": {"content": "hello world"}}
+        assert _extract_human_text(msg) == "hello world"
+
+    def test_list_content(self):
+        msg = {"message": {"content": [
+            {"type": "text", "text": "first part"},
+            {"type": "text", "text": "second part"},
+        ]}}
+        assert "first part" in _extract_human_text(msg)
+        assert "second part" in _extract_human_text(msg)
+
+    def test_empty(self):
+        assert _extract_human_text({}) == ""
+        assert _extract_human_text({"message": {}}) == ""
+
+
+class TestExtractAssistantActions:
+    def test_tool_use_actions(self):
+        msg = {"message": {"content": [
+            {"type": "text", "text": "Let me read that."},
+            {"type": "tool_use", "name": "Read", "input": {"file_path": "/foo/bar.py"}},
+            {"type": "tool_use", "name": "Bash", "input": {"command": "git status"}},
+        ]}}
+        actions = _extract_assistant_actions(msg)
+        assert len(actions) == 2
+        assert "Read `/foo/bar.py`" in actions[0]
+        assert "Bash: `git status`" in actions[1]
+
+    def test_write_action(self):
+        msg = {"message": {"content": [
+            {"type": "tool_use", "name": "Write", "input": {"file_path": "/out.md"}},
+        ]}}
+        actions = _extract_assistant_actions(msg)
+        assert actions == ["Write `/out.md`"]
+
+    def test_edit_action(self):
+        msg = {"message": {"content": [
+            {"type": "tool_use", "name": "Edit", "input": {"file_path": "/src/app.py"}},
+        ]}}
+        assert _extract_assistant_actions(msg) == ["Edit `/src/app.py`"]
+
+    def test_grep_glob(self):
+        msg = {"message": {"content": [
+            {"type": "tool_use", "name": "Grep", "input": {"pattern": "TODO", "path": "/src"}},
+            {"type": "tool_use", "name": "Glob", "input": {"pattern": "**/*.py"}},
+        ]}}
+        actions = _extract_assistant_actions(msg)
+        assert "Grep `TODO`" in actions[0]
+        assert "Glob `**/*.py`" in actions[1]
+
+    def test_unknown_tool(self):
+        msg = {"message": {"content": [
+            {"type": "tool_use", "name": "CustomTool", "input": {}},
+        ]}}
+        assert _extract_assistant_actions(msg) == ["CustomTool"]
+
+    def test_no_tools(self):
+        msg = {"message": {"content": [
+            {"type": "text", "text": "just text"},
+        ]}}
+        assert _extract_assistant_actions(msg) == []
+
+    def test_long_bash_truncated(self):
+        long_cmd = "x" * 200
+        msg = {"message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": long_cmd}},
+        ]}}
+        actions = _extract_assistant_actions(msg)
+        assert len(actions[0]) < 200  # truncated
+
+
+class TestRenderPrompts:
+    def test_basic_prompt_extraction(self, tmp_path):
+        f = _make_jsonl(tmp_path, [
+            _user_msg("Implement the feature please", ts="2026-03-06T10:00:00Z"),
+            _assistant_msg("ok", ts="2026-03-06T10:01:00Z", tools=["Read", "Write"]),
+            _user_msg("Now check if it works correctly", ts="2026-03-06T10:05:00Z"),
+            _assistant_msg("verified", ts="2026-03-06T10:06:00Z"),
+        ])
+
+        content = render_prompts(f)
+        assert "### P1" in content
+        assert "### P2" in content
+        assert "Implement the feature please" in content
+        assert "Now check if it works correctly" in content
+        assert "(+5m)" in content  # elapsed time
+
+    def test_actions_between_prompts(self, tmp_path):
+        f = _make_jsonl(tmp_path, [
+            _user_msg("Build it", ts="2026-03-06T10:00:00Z"),
+            _assistant_msg("on it", ts="2026-03-06T10:01:00Z", tools=["Read", "Write"]),
+            _user_msg("Check it", ts="2026-03-06T10:05:00Z"),
+        ])
+
+        content = render_prompts(f)
+        assert "**Actions taken:**" in content
+        assert "Read" in content
+
+    def test_prompt_summary(self, tmp_path):
+        f = _make_jsonl(tmp_path, [
+            _user_msg("Implement the feature", ts="2026-03-06T10:00:00Z"),
+            _assistant_msg("done"),
+            _user_msg("Is there a bug here?", ts="2026-03-06T10:10:00Z"),
+            _assistant_msg("no"),
+            _user_msg("Fix the error in line 5", ts="2026-03-06T10:20:00Z"),
+            _assistant_msg("fixed"),
+        ])
+
+        content = render_prompts(f)
+        assert "## Prompt Summary" in content
+        assert "**Total prompts:** 3" in content
+        assert "Prompt Categories" in content
+        assert "**Directives**" in content
+        assert "**Questions**" in content
+        assert "**Fixes**" in content
+
+    def test_filters_tool_results(self, tmp_path):
+        """Tool result messages (user turns carrying tool output) should be filtered."""
+        messages = [
+            _user_msg("Start the task with enough text to pass filter", ts="2026-03-06T10:00:00Z"),
+            _assistant_msg("ok"),
+            # Simulate a tool_result-only user message
+            {
+                "type": "user",
+                "sessionId": "test-session-001",
+                "slug": "test-slug",
+                "cwd": "/test",
+                "gitBranch": "main",
+                "timestamp": "2026-03-06T10:01:00Z",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "abc", "content": "file contents here"},
+                    ],
+                },
+            },
+            _user_msg("Second real prompt with enough words", ts="2026-03-06T10:02:00Z"),
+        ]
+        f = _make_jsonl(tmp_path, messages)
+
+        content = render_prompts(f)
+        # Should have P1 and P2 but not a prompt for the tool_result
+        assert "### P1" in content
+        assert "### P2" in content
+        assert "### P3" not in content
+
+    def test_empty_session(self, tmp_path):
+        f = tmp_path / "empty.jsonl"
+        f.write_text("")
+        assert render_prompts(f) == ""
