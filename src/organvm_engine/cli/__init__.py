@@ -79,6 +79,12 @@ from organvm_engine.cli.registry import (
     cmd_registry_validate,
 )
 from organvm_engine.cli.seed import cmd_seed_discover, cmd_seed_graph, cmd_seed_validate
+from organvm_engine.cli.session import (
+    cmd_session_export,
+    cmd_session_list,
+    cmd_session_projects,
+    cmd_session_show,
+)
 from organvm_engine.cli.status import cmd_status
 from organvm_engine.paths import registry_path as _default_registry_path
 
@@ -568,6 +574,52 @@ def build_parser() -> argparse.ArgumentParser:
         help="Actually write snapshot (overrides --dry-run)",
     )
 
+    # session
+    sess = sub.add_parser(
+        "session",
+        help="Session transcript management and export",
+    )
+    sess_sub = sess.add_subparsers(dest="subcommand")
+
+    sess_sub.add_parser("projects", help="List Claude Code project directories")
+
+    sess_list = sess_sub.add_parser("list", help="List sessions with metadata")
+    sess_list.add_argument(
+        "--project",
+        default=None,
+        help="Filter to specific project directory name",
+    )
+    sess_list.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Max sessions to show (default 20, 0=all)",
+    )
+
+    sess_show = sess_sub.add_parser("show", help="Show session details")
+    sess_show.add_argument("session_id", help="Session ID (full or prefix)")
+
+    sess_export = sess_sub.add_parser(
+        "export",
+        help="Export session as praxis-perpetua review",
+    )
+    sess_export.add_argument("session_id", help="Session ID (full or prefix)")
+    sess_export.add_argument(
+        "--slug",
+        required=True,
+        help="Descriptive slug for the filename (e.g., 'gemini-styx-research')",
+    )
+    sess_export.add_argument(
+        "--output",
+        default=None,
+        help="Output directory (default: praxis-perpetua/sessions/)",
+    )
+    sess_export.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview without writing",
+    )
+
     return parser
 
 
@@ -625,6 +677,18 @@ def main() -> int:
         if getattr(args, "subcommand", None) == "snapshot":
             return cmd_organism_snapshot(args)
         return cmd_organism(args)
+    if args.command == "session":
+        session_dispatch = {
+            "projects": cmd_session_projects,
+            "list": cmd_session_list,
+            "show": cmd_session_show,
+            "export": cmd_session_export,
+        }
+        handler = session_dispatch.get(getattr(args, "subcommand", "") or "")
+        if handler:
+            return handler(args)
+        parser.parse_args(["session", "--help"])
+        return 0
 
     subcommand: str | None = getattr(args, "subcommand", None)
     handler = dispatch.get((args.command, subcommand or ""))
