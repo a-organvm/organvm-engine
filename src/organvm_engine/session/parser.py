@@ -312,6 +312,103 @@ class SessionExport:
 """
 
 
+def render_transcript(jsonl_path: Path) -> str:
+    """Render a full session transcript as readable markdown."""
+    meta = parse_session(jsonl_path)
+    if not meta:
+        return ""
+
+    lines: list[str] = []
+    duration = f"~{meta.duration_minutes} min" if meta.duration_minutes else "unknown"
+
+    lines.append(f"# Session Transcript: {meta.date_str}")
+    lines.append("")
+    lines.append(f"**Session ID:** `{meta.session_id}`")
+    lines.append(f"**Slug:** `{meta.slug}`")
+    lines.append(f"**Duration:** {duration}")
+    lines.append(f"**Working directory:** `{meta.cwd}`")
+    lines.append(f"**Branch:** `{meta.git_branch}`")
+    lines.append(f"**Messages:** {meta.message_count} ({meta.human_messages} human, {meta.assistant_messages} assistant)")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    turn = 0
+    with jsonl_path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            msg_type = msg.get("type", "")
+
+            if msg_type == "user":
+                turn += 1
+                ts = msg.get("timestamp", "")
+                ts_short = ts[:19].replace("T", " ") if ts else ""
+                lines.append(f"## [{turn}] Human — {ts_short}")
+                lines.append("")
+
+                content = msg.get("message", {}).get("content", "")
+                if isinstance(content, str):
+                    lines.append(content)
+                elif isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict):
+                            if part.get("type") == "text":
+                                lines.append(part.get("text", ""))
+                            elif part.get("type") == "tool_result":
+                                tool_id = part.get("tool_use_id", "")
+                                lines.append(f"*Tool result for `{tool_id}`*")
+                                result_content = part.get("content", "")
+                                if isinstance(result_content, str):
+                                    lines.append(f"```\n{result_content[:2000]}\n```")
+                                elif isinstance(result_content, list):
+                                    for rc in result_content:
+                                        if isinstance(rc, dict) and rc.get("type") == "text":
+                                            lines.append(f"```\n{rc.get('text', '')[:2000]}\n```")
+                lines.append("")
+                lines.append("---")
+                lines.append("")
+
+            elif msg_type == "assistant":
+                turn += 1
+                ts = msg.get("timestamp", "")
+                ts_short = ts[:19].replace("T", " ") if ts else ""
+                lines.append(f"## [{turn}] Assistant — {ts_short}")
+                lines.append("")
+
+                content = msg.get("message", {}).get("content", [])
+                if isinstance(content, str):
+                    lines.append(content)
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict):
+                            if block.get("type") == "text":
+                                lines.append(block.get("text", ""))
+                                lines.append("")
+                            elif block.get("type") == "tool_use":
+                                name = block.get("name", "unknown")
+                                inp = block.get("input", {})
+                                lines.append(f"**Tool: `{name}`**")
+                                # Render key input params concisely
+                                if isinstance(inp, dict):
+                                    for k, v in inp.items():
+                                        v_str = str(v)
+                                        if len(v_str) > 500:
+                                            v_str = v_str[:500] + "..."
+                                        lines.append(f"- `{k}`: {v_str}")
+                                lines.append("")
+                lines.append("---")
+                lines.append("")
+
+    return "\n".join(lines)
+
+
 def find_session(session_id: str) -> Path | None:
     """Find a session .jsonl by full or partial ID."""
     # Try exact match first

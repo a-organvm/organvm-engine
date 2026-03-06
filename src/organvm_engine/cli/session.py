@@ -5,6 +5,7 @@ Usage:
     organvm session projects
     organvm session show <session-id>
     organvm session export <session-id> --slug <slug> [--output <dir>]
+    organvm session transcript <session-id> [--output <file>]
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from organvm_engine.session.parser import (
     list_projects,
     list_sessions,
     parse_session,
+    render_transcript,
 )
 
 
@@ -160,6 +162,36 @@ def cmd_session_export(args: argparse.Namespace) -> int:
     print("  1. Open the file and fill in the TODO sections")
     print("  2. Complete the self-critique phases (inventory, triage, audit, lessons)")
     print("  3. Update lessons/derived-principles.md if new patterns emerged")
+    return 0
+
+
+def cmd_session_transcript(args: argparse.Namespace) -> int:
+    """Render full session transcript as readable markdown."""
+    session_id = args.session_id
+    output = getattr(args, "output", None)
+
+    jsonl_path = find_session(session_id)
+    if not jsonl_path:
+        print(f"Session not found: {session_id}")
+        print("Use 'organvm session list' to see available sessions.")
+        return 1
+
+    content = render_transcript(jsonl_path)
+    if not content:
+        print(f"Could not parse session: {jsonl_path}")
+        return 1
+
+    if output:
+        out_path = Path(output).expanduser().resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(content, encoding="utf-8")
+        lines = content.count("\n")
+        size_kb = len(content.encode("utf-8")) / 1024
+        print(f"Transcript written to: {out_path}")
+        print(f"  {lines} lines, {size_kb:.0f} KB")
+    else:
+        print(content)
+
     return 0
 
 

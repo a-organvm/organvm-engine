@@ -84,6 +84,7 @@ from organvm_engine.cli.session import (
     cmd_session_list,
     cmd_session_projects,
     cmd_session_show,
+    cmd_session_transcript,
 )
 from organvm_engine.cli.status import cmd_status
 from organvm_engine.paths import registry_path as _default_registry_path
@@ -620,6 +621,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Preview without writing",
     )
 
+    sess_transcript = sess_sub.add_parser(
+        "transcript",
+        help="Render full session transcript as readable markdown",
+    )
+    sess_transcript.add_argument("session_id", help="Session ID (full or prefix)")
+    sess_transcript.add_argument(
+        "--output",
+        default=None,
+        help="Write to file instead of stdout",
+    )
+
     return parser
 
 
@@ -683,6 +695,7 @@ def main() -> int:
             "list": cmd_session_list,
             "show": cmd_session_show,
             "export": cmd_session_export,
+            "transcript": cmd_session_transcript,
         }
         handler = session_dispatch.get(getattr(args, "subcommand", "") or "")
         if handler:
