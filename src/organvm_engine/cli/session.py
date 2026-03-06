@@ -8,6 +8,9 @@ Usage:
     organvm session export <session-id> --slug <slug> [--output <dir>]
     organvm session transcript <session-id> [--unabridged] [--output <file>]
     organvm session prompts <session-id> [--output <file>]
+    organvm session plans [--project X] [--since YYYY-MM-DD] [audit]
+    organvm session analyze [--agent X] [--full] [--output <file>]
+    organvm session review <session-id> | --latest [--project <path>]
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ import argparse
 from pathlib import Path
 
 from organvm_engine.session.agents import agent_summary, discover_all_sessions
+from organvm_engine.session.plans import discover_plans
 from organvm_engine.session.parser import (
     SessionExport,
     detect_agent,
@@ -339,6 +343,126 @@ def cmd_session_prompts(args: argparse.Namespace) -> int:
     else:
         print(content)
 
+    return 0
+
+
+def cmd_session_plans(args: argparse.Namespace) -> int:
+    """List or audit plan files across the workspace."""
+    from organvm_engine.session.plans import (
+        discover_plans,
+        render_plan_audit,
+        render_plan_inventory,
+    )
+
+    project = getattr(args, "project", None)
+    since = getattr(args, "since", None)
+    audit = getattr(args, "audit", False)
+
+    plans = discover_plans(project_filter=project, since=since)
+
+    if audit:
+        print(render_plan_audit(plans))
+    else:
+        print(render_plan_inventory(plans))
+
+    return 0
+
+
+def cmd_session_analyze(args: argparse.Namespace) -> int:
+    """Run cross-session prompt analysis."""
+    from organvm_engine.session.analysis import (
+        analyze_prompts,
+        render_analysis_report,
+    )
+
+    agent = getattr(args, "agent", None)
+    full = getattr(args, "full", False)
+    output = getattr(args, "output", None)
+    sample_limit = 0 if full else 200
+
+    print(f"Analyzing prompts (limit={sample_limit or 'all'}, agent={agent or 'all'})...")
+    stats = analyze_prompts(agent=agent, sample_limit=sample_limit)
+    report = render_analysis_report(stats)
+
+    if output:
+        out_path = Path(output).expanduser().resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(report, encoding="utf-8")
+        print(f"Report written to: {out_path}")
+    else:
+        print(report)
+
+    return 0
+
+
+def cmd_session_review(args: argparse.Namespace) -> int:
+    """Review a session: summary, prompt list, related plans."""
+    session_id = getattr(args, "session_id", None)
+    latest = getattr(args, "latest", False)
+    project = getattr(args, "project", None)
+
+    if latest:
+        sessions = discover_all_sessions(project_filter=project)
+        if not sessions:
+            print("No sessions found.")
+            return 1
+        target = sessions[0]
+        jsonl_path = target.file_path
+    elif session_id:
+        jsonl_path = find_session(session_id)
+        if not jsonl_path:
+            print(f"Session not found: {session_id}")
+            return 1
+    else:
+        print("Provide a session ID or use --latest.")
+        return 1
+
+    meta = parse_any_session(jsonl_path)
+    if not meta:
+        print(f"Could not parse session: {jsonl_path}")
+        return 1
+
+    agent = detect_agent(jsonl_path)
+    dur = f"{meta.duration_minutes} min" if meta.duration_minutes else "unknown"
+    short_id = meta.session_id[:8]
+
+    print(f"Session Review: {short_id} ({meta.date_str}, {dur}, {meta.message_count} messages)")
+    print(f"Agent: {agent} | Project: {meta.project_dir}")
+    print()
+
+    # Extract and list human prompts
+    prompts_content = render_any_prompts(jsonl_path)
+    prompt_count = prompts_content.count("### P")
+    print(f"Prompts ({meta.human_messages} human messages, {prompt_count} extracted):")
+
+    # Show first few prompt opening lines
+    prompt_lines = [
+        line for line in prompts_content.splitlines()
+        if line.startswith("### P")
+    ]
+    for line in prompt_lines[:10]:
+        print(f"  {line}")
+    if len(prompt_lines) > 10:
+        print(f"  ... and {len(prompt_lines) - 10} more")
+    print()
+
+    # Find related plans
+    project_slug = meta.project_dir or meta.cwd
+    plans = discover_plans(project_filter=project_slug)
+
+    if plans:
+        print(f"Plans in this project ({len(plans)} total):")
+        for p in plans[:5]:
+            marker = " <- same day" if p.date == meta.date_str else ""
+            print(f"  {p.date} {p.title}{marker}")
+        if len(plans) > 5:
+            print(f"  ... and {len(plans) - 5} more")
+    else:
+        print("No plans found for this project.")
+    print()
+
+    print(f"Export: organvm session export {short_id} --slug <your-slug>")
+    print(f"Full transcript: organvm session transcript {short_id}")
     return 0
 
 

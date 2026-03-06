@@ -112,3 +112,21 @@ def format_consumes_edge(source: str, artifact: str, event: str = "") -> str:
 def format_no_edges() -> str:
     """Placeholder when no edges exist."""
     return "- *No inter-repo edges declared in seed.yaml*"
+
+
+# ── Session review protocol (injected into repo-level context) ────
+
+SESSION_REVIEW_SECTION = """\
+
+## Session Review Protocol
+
+At the end of each session that produces or modifies files:
+1. Run `organvm session review --latest` to get a session summary
+2. Check for unimplemented plans: `organvm session plans --project .`
+3. Export significant sessions: `organvm session export <id> --slug <slug>`
+
+Transcripts are on-demand (never committed):
+- `organvm session transcript <id>` — conversation summary
+- `organvm session transcript <id> --unabridged` — full audit trail
+- `organvm session prompts <id>` — human prompts only
+"""

@@ -54,6 +54,7 @@ from organvm_engine.cli.git_cmds import (
     cmd_git_sync_all,
     cmd_git_sync_organ,
 )
+from organvm_engine.cli.lint_vars import cmd_lint_vars
 from organvm_engine.cli.governance import (
     cmd_governance_audit,
     cmd_governance_checkdeps,
@@ -69,6 +70,7 @@ from organvm_engine.cli.metrics import (
 from organvm_engine.cli.omega import cmd_omega_check, cmd_omega_status, cmd_omega_update
 from organvm_engine.cli.organism import cmd_organism, cmd_organism_snapshot
 from organvm_engine.cli.pitch import cmd_pitch_generate, cmd_pitch_sync
+from organvm_engine.cli.refresh import cmd_refresh
 from organvm_engine.cli.registry import (
     cmd_registry_deps,
     cmd_registry_list,
@@ -81,10 +83,13 @@ from organvm_engine.cli.registry import (
 from organvm_engine.cli.seed import cmd_seed_discover, cmd_seed_graph, cmd_seed_validate
 from organvm_engine.cli.session import (
     cmd_session_agents,
+    cmd_session_analyze,
     cmd_session_export,
     cmd_session_list,
+    cmd_session_plans,
     cmd_session_projects,
     cmd_session_prompts,
+    cmd_session_review,
     cmd_session_show,
     cmd_session_transcript,
 )
@@ -577,6 +582,53 @@ def build_parser() -> argparse.ArgumentParser:
         help="Actually write snapshot (overrides --dry-run)",
     )
 
+    # refresh
+    ref = sub.add_parser(
+        "refresh",
+        help="Unified refresh: metrics + variables + propagation + context + organism",
+    )
+    ref.add_argument(
+        "--workspace",
+        default=None,
+        help="Workspace root directory",
+    )
+    ref.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview without writing",
+    )
+    ref.add_argument(
+        "--skip-context",
+        action="store_true",
+        help="Skip context file sync",
+    )
+    ref.add_argument(
+        "--skip-organism",
+        action="store_true",
+        help="Skip organism snapshot",
+    )
+    ref.add_argument(
+        "--skip-legacy",
+        action="store_true",
+        help="Skip legacy regex propagation",
+    )
+
+    # lint-vars
+    lv = sub.add_parser(
+        "lint-vars",
+        help="Check for unbound metric references in markdown",
+    )
+    lv.add_argument(
+        "--workspace",
+        default=None,
+        help="Workspace root directory",
+    )
+    lv.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit non-zero if violations found",
+    )
+
     # session
     sess = sub.add_parser(
         "session",
@@ -657,6 +709,71 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write to file instead of stdout",
     )
 
+    # plans
+    sess_plans = sess_sub.add_parser(
+        "plans",
+        help="List or audit plan files across the workspace",
+    )
+    sess_plans.add_argument(
+        "--project",
+        default=None,
+        help="Filter by project path substring",
+    )
+    sess_plans.add_argument(
+        "--since",
+        default=None,
+        help="Only plans on or after this date (YYYY-MM-DD)",
+    )
+    sess_plans.add_argument(
+        "--audit",
+        action="store_true",
+        help="Render plan-vs-reality audit scaffold",
+    )
+
+    # analyze
+    sess_analyze = sess_sub.add_parser(
+        "analyze",
+        help="Cross-session prompt analysis",
+    )
+    sess_analyze.add_argument(
+        "--agent",
+        default=None,
+        choices=["claude", "gemini", "codex"],
+        help="Filter to specific agent",
+    )
+    sess_analyze.add_argument(
+        "--full",
+        action="store_true",
+        help="Analyze all sessions (slow)",
+    )
+    sess_analyze.add_argument(
+        "--output",
+        default=None,
+        help="Write report to file",
+    )
+
+    # review
+    sess_review = sess_sub.add_parser(
+        "review",
+        help="Review a session: summary, prompts, related plans",
+    )
+    sess_review.add_argument(
+        "session_id",
+        nargs="?",
+        default=None,
+        help="Session ID (full or prefix)",
+    )
+    sess_review.add_argument(
+        "--latest",
+        action="store_true",
+        help="Review the most recent session",
+    )
+    sess_review.add_argument(
+        "--project",
+        default=None,
+        help="Filter to project when using --latest",
+    )
+
     return parser
 
 
@@ -710,6 +827,10 @@ def main() -> int:
         return cmd_status(args)
     if args.command == "deadlines":
         return cmd_deadlines(args)
+    if args.command == "refresh":
+        return cmd_refresh(args)
+    if args.command == "lint-vars":
+        return cmd_lint_vars(args)
     if args.command == "organism":
         if getattr(args, "subcommand", None) == "snapshot":
             return cmd_organism_snapshot(args)
@@ -723,6 +844,9 @@ def main() -> int:
             "export": cmd_session_export,
             "transcript": cmd_session_transcript,
             "prompts": cmd_session_prompts,
+            "plans": cmd_session_plans,
+            "analyze": cmd_session_analyze,
+            "review": cmd_session_review,
         }
         handler = session_dispatch.get(getattr(args, "subcommand", "") or "")
         if handler:

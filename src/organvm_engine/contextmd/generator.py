@@ -12,6 +12,7 @@ from organvm_engine.contextmd.templates import (
     AGENTS_SECTION,
     ORGAN_SECTION,
     REPO_SECTION,
+    SESSION_REVIEW_SECTION,
     WORKSPACE_SECTION,
     format_consumes_edge,
     format_no_edges,
@@ -73,7 +74,7 @@ def generate_repo_section(
 
     governance_block = "\n".join(gov) if gov else "- *Standard ORGANVM governance applies*"
 
-    return REPO_SECTION.format(
+    section = REPO_SECTION.format(
         organ_key=organ_key,
         organ_name=organ_data.get("name", organ_key),
         tier=repo_data.get("tier", "standard"),
@@ -85,6 +86,16 @@ def generate_repo_section(
         governance_block=governance_block,
         timestamp=_timestamp(),
     )
+
+    # Inject session review protocol before the AUTO:END marker
+    end_marker = "<!-- ORGANVM:AUTO:END -->"
+    if end_marker in section:
+        section = section.replace(
+            end_marker,
+            SESSION_REVIEW_SECTION + "\n" + end_marker,
+        )
+
+    return section
 
 
 def generate_agents_section(

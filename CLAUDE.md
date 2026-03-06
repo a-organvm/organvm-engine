@@ -1,88 +1,76 @@
 # CLAUDE.md — organvm-engine
 
-**ORGAN Meta** (Meta) · `meta-organvm/organvm-engine`
-**Status:** ACTIVE · **Branch:** `main`
+Core Python package for the ORGANVM eight-organ system: registry, governance, seed discovery, metrics, dispatch, git superproject management, context file sync, session analysis, and the unified `organvm` CLI.
 
-## What This Repo Is
-
-Core Python package — governance, registry, seed discovery, metrics, dispatch, and unified CLI for the eight-organ system. Consolidates ~30 standalone scripts into a proper installable package.
-
-## Stack
-
-**Languages:** Python
-**Build:** Python (pip/setuptools)
-**Testing:** pytest (likely)
-
-## Directory Structure
-
-```
-📁 .github/
-📁 src/
-    organvm_engine
-📁 tests/
-    fixtures
-    test_dispatch.py
-    test_governance.py
-    test_metrics.py
-    test_registry.py
-    test_seed.py
-  CHANGELOG.md
-  README.md
-  pyproject.toml
-  seed.yaml
-```
-
-## Key Files
-
-- `README.md` — Project documentation
-- `pyproject.toml` — Python project config
-- `seed.yaml` — ORGANVM orchestration metadata
-- `src/` — Main source code
-- `tests/` — Test suite
-
-## Development
+## Commands
 
 ```bash
-pip install -e .    # Install in development mode
-pytest              # Run tests
+# Install (use the workspace venv at meta-organvm/.venv)
+pip install -e ".[dev]"
+
+# Test
+pytest tests/ -v                              # all tests
+pytest tests/test_registry.py -v              # one module
+pytest tests/test_registry.py::test_name -v   # one test
+
+# Lint
+ruff check src/
+
+# Typecheck
+pyright
 ```
 
-## ORGANVM Context
+## Architecture
 
-This repository is part of the **ORGANVM** eight-organ creative-institutional system.
-It belongs to **ORGAN Meta (Meta)** under the `meta-organvm` GitHub organization.
+### Foundation modules
 
-**Dependencies:**
-- meta-organvm/schema-definitions
+Every other module imports from these two; change them carefully.
 
-**Registry:** [`registry-v2.json`](https://github.com/meta-organvm/organvm-corpvs-testamentvm/blob/main/registry-v2.json)
-**Corpus:** [`organvm-corpvs-testamentvm`](https://github.com/meta-organvm/organvm-corpvs-testamentvm)
+- **`organ_config.py`** — Single source of truth for organ key/directory/registry-key/GitHub-org mappings. The `ORGANS` dict maps CLI short keys (`"I"`, `"META"`, `"LIMINAL"`) to metadata. All organ lookups across the codebase derive from helper functions here (`organ_dir_map`, `organ_aliases`, `registry_key_to_dir`, etc.).
 
-<!-- ORGANVM:AUTO:START -->
-## System Context (auto-generated — do not edit)
+- **`paths.py`** — Resolves canonical filesystem paths (`workspace_root`, `corpus_dir`, `registry_path`, `governance_rules_path`, `soak_dir`). Reads `ORGANVM_WORKSPACE_DIR` and `ORGANVM_CORPUS_DIR` env vars, falls back to `~/Workspace` conventions.
 
-**Organ:** META-ORGANVM (Meta) | **Tier:** flagship | **Status:** CANDIDATE
-**Org:** `unknown` | **Repo:** `organvm-engine`
+### Domain modules (13)
 
-### Edges
-- **Produces** → `unknown`: unknown
-- **Produces** → `unknown`: unknown
-- **Consumes** ← `META-ORGANVM`: unknown
-- **Consumes** ← `META-ORGANVM`: unknown
+| Module | Role |
+|--------|------|
+| `registry/` | Load/save/query/validate/update `registry-v2.json` |
+| `governance/` | Promotion state machine, dependency graph validation, audit, blast-radius impact |
+| `seed/` | Discover `seed.yaml` files across workspace, read them, build produces/consumes graph |
+| `metrics/` | Calculate system metrics, propagate into markdown/JSON, timeseries, variable resolution |
+| `dispatch/` | Event payload validation, routing, cascade |
+| `git/` | Superproject init/sync, submodule status/drift, workspace reproduction |
+| `contextmd/` | Auto-generate CLAUDE.md/GEMINI.md/AGENTS.md across all repos from templates |
+| `omega/` | 17-criterion binary scorecard for system maturity |
+| `ci/` | CI health triage from soak-test data |
+| `deadlines/` | Parse deadlines from `rolling-todo.md` |
+| `pitchdeck/` | HTML pitch deck generation per repo |
+| `session/` | Multi-agent session transcript parsing (Claude, Gemini, Codex), plan auditing, prompt analysis |
+| `cli/` | One module per command group, wired together in `cli/__init__.py` |
 
-### Siblings in Meta
-`.github`, `organvm-corpvs-testamentvm`, `alchemia-ingestvm`, `schema-definitions`, `system-dashboard`, `organvm-mcp-server`
+### CLI dispatch pattern
 
-### Governance
-- *Standard ORGANVM governance applies*
+`cli/__init__.py` builds an argparse tree with `build_parser()` and dispatches via a `(command, subcommand)` tuple dict. Each CLI module (e.g., `cli/registry.py`) exports `cmd_*` functions that take an `argparse.Namespace` and return an `int` exit code. Top-level commands without subcommands (`status`, `deadlines`, `refresh`, `lint-vars`, `organism`, `session`) are dispatched via explicit `if` branches before the dict lookup.
 
-*Last synced: 2026-02-24T12:41:28Z*
-<!-- ORGANVM:AUTO:END -->
+### Registry data safety
 
+`registry/loader.py` → `save_registry()` refuses to write fewer than 50 repos to the production path. This prevents test fixtures from accidentally overwriting the real `registry-v2.json` (2,200+ lines).
 
-## ⚡ Conductor OS Integration
-This repository is a managed component of the ORGANVM meta-workspace.
-- **Orchestration:** Use `conductor patch` for system status and work queue.
-- **Lifecycle:** Follow the `FRAME -> SHAPE -> BUILD -> PROVE` workflow.
-- **Governance:** Promotions are managed via `conductor wip promote`.
-- **Intelligence:** Conductor MCP tools are available for routing and mission synthesis.
+### Test isolation
+
+`tests/conftest.py` has an **autouse** fixture `_block_production_paths` that monkeypatches `paths._DEFAULT_WORKSPACE` and `loader._default_registry_path` to `/nonexistent/organvm-test-guard`. Every test runs in this sandbox — any test needing real file I/O must use `tmp_path` or `tests/fixtures/`. The `registry` fixture loads `fixtures/registry-minimal.json`.
+
+## Key conventions
+
+- **`src/` layout** — all imports are `from organvm_engine.X import Y`
+- **No default exports** — CLI entry point is `organvm_engine.cli:main` (declared in `pyproject.toml`)
+- **ruff config** — line-length 100, py311, rules: E/F/W/I/B/PTH/RET/SIM/COM/PL (see `pyproject.toml` for ignores)
+- **pyright** — basic mode, py311
+- **Commit prefixes** — `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`
+
+## Environment variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ORGANVM_WORKSPACE_DIR` | `~/Workspace` | Workspace root for all organ directories |
+| `ORGANVM_CORPUS_DIR` | `<workspace>/meta-organvm/organvm-corpvs-testamentvm` | Path to corpus repo (registry, governance rules) |
