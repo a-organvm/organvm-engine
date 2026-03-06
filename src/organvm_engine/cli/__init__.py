@@ -80,6 +80,7 @@ from organvm_engine.cli.registry import (
 )
 from organvm_engine.cli.seed import cmd_seed_discover, cmd_seed_graph, cmd_seed_validate
 from organvm_engine.cli.session import (
+    cmd_session_agents,
     cmd_session_export,
     cmd_session_list,
     cmd_session_projects,
@@ -584,12 +585,19 @@ def build_parser() -> argparse.ArgumentParser:
     sess_sub = sess.add_subparsers(dest="subcommand")
 
     sess_sub.add_parser("projects", help="List Claude Code project directories")
+    sess_sub.add_parser("agents", help="Show session inventory across all agents")
 
     sess_list = sess_sub.add_parser("list", help="List sessions with metadata")
     sess_list.add_argument(
         "--project",
         default=None,
-        help="Filter to specific project directory name",
+        help="Filter to specific project directory name or path substring",
+    )
+    sess_list.add_argument(
+        "--agent",
+        default=None,
+        choices=["claude", "gemini", "codex"],
+        help="Filter to specific agent (default: all)",
     )
     sess_list.add_argument(
         "--limit",
@@ -709,6 +717,7 @@ def main() -> int:
     if args.command == "session":
         session_dispatch = {
             "projects": cmd_session_projects,
+            "agents": cmd_session_agents,
             "list": cmd_session_list,
             "show": cmd_session_show,
             "export": cmd_session_export,

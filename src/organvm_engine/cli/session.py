@@ -1,9 +1,10 @@
-"""CLI commands for session transcript management.
+"""CLI commands for multi-agent session transcript management.
 
 Usage:
-    organvm session list [--project X] [--limit N]
+    organvm session list [--project X] [--limit N] [--agent X]
     organvm session projects
     organvm session show <session-id>
+    organvm session agents
     organvm session export <session-id> --slug <slug> [--output <dir>]
     organvm session transcript <session-id> [--unabridged] [--output <file>]
     organvm session prompts <session-id> [--output <file>]
@@ -14,12 +15,17 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from organvm_engine.session.agents import agent_summary, discover_all_sessions
 from organvm_engine.session.parser import (
     SessionExport,
+    detect_agent,
     find_session,
     list_projects,
     list_sessions,
+    parse_any_session,
     parse_session,
+    render_any_prompts,
+    render_any_transcript,
     render_prompts,
     render_transcript,
     render_transcript_unabridged,
@@ -42,11 +48,91 @@ def cmd_session_projects(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_session_agents(args: argparse.Namespace) -> int:
+    """Show session inventory across all agents."""
+    summary = agent_summary()
+
+    if not summary:
+        print("No agent sessions found.")
+        return 0
+
+    total_sessions = 0
+    total_bytes = 0
+
+    print(f"{'Agent':<10} {'Sessions':>8} {'Size':>10} {'Earliest':>12} {'Latest':>12}")
+    print("-" * 56)
+    for agent, info in sorted(summary.items()):
+        print(
+            f"{agent:<10} {info['count']:>8} {info['total_human']:>10} "
+            f"{info['earliest'] or '?':>12} {info['latest'] or '?':>12}"
+        )
+        total_sessions += info["count"]
+        total_bytes += info["total_bytes"]
+
+    from organvm_engine.session.agents import _human_size
+
+    print("-" * 56)
+    print(f"{'Total':<10} {total_sessions:>8} {_human_size(total_bytes):>10}")
+    print()
+    print("Storage locations:")
+    print("  Claude: ~/.claude/projects/<encoded-path>/*.jsonl")
+    print("  Gemini: ~/.gemini/tmp/<project>/chats/session-*.json")
+    print("  Codex:  ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl")
+    print("          ~/.codex/archived_sessions/rollout-*.jsonl")
+    print()
+    print("All local-only. Back up ~/.claude, ~/.gemini, ~/.codex for durability.")
+    return 0
+
+
 def cmd_session_list(args: argparse.Namespace) -> int:
-    """List sessions with summary metadata."""
+    """List sessions with summary metadata. Supports multi-agent via --agent."""
     project = getattr(args, "project", None)
     limit = getattr(args, "limit", 20)
+    agent = getattr(args, "agent", None)
 
+    if agent and agent != "claude":
+        # Multi-agent listing via agents module
+        sessions = discover_all_sessions(agent=agent, project_filter=project)
+        if not sessions:
+            print(f"No {agent} sessions found.")
+            return 0
+        if limit:
+            sessions = sessions[:limit]
+
+        print(f"{'Date':<12} {'Agent':<8} {'Size':>8} {'Dur':>6} {'ID (first 8)':<10} {'Project'}")
+        print("-" * 80)
+        for s in sessions:
+            date = s.date_str
+            dur = f"{s.duration_minutes}m" if s.duration_minutes else "?"
+            short_id = s.session_id[:8]
+            proj = s.project_dir[:35]
+            print(f"{date:<12} {s.agent:<8} {s.size_human:>8} {dur:>6} {short_id:<10} {proj}")
+
+        print(f"\nShowing {len(sessions)} sessions")
+        return 0
+
+    if agent is None:
+        # Check if user wants all agents
+        all_sessions = discover_all_sessions(project_filter=project)
+        if all_sessions and not project:
+            # Show multi-agent view
+            if limit:
+                all_sessions = all_sessions[:limit]
+
+            print(f"{'Date':<12} {'Agent':<8} {'Size':>8} {'Dur':>6} {'ID (first 8)':<10} {'Project'}")
+            print("-" * 80)
+            for s in all_sessions:
+                date = s.date_str
+                dur = f"{s.duration_minutes}m" if s.duration_minutes else "?"
+                short_id = s.session_id[:8]
+                proj = s.project_dir[:35]
+                print(f"{date:<12} {s.agent:<8} {s.size_human:>8} {dur:>6} {short_id:<10} {proj}")
+
+            shown = len(all_sessions)
+            print(f"\nShowing {shown} sessions across all agents" + (f" (use --limit to see more)" if limit and shown == limit else ""))
+            return 0
+
+    # Claude-only (legacy path, or --agent claude)
     sessions = list_sessions(project)
 
     if not sessions:
@@ -83,11 +169,13 @@ def cmd_session_show(args: argparse.Namespace) -> int:
         print("Use 'organvm session list' to see available sessions.")
         return 1
 
-    meta = parse_session(jsonl_path)
+    agent = detect_agent(jsonl_path)
+    meta = parse_any_session(jsonl_path)
     if not meta:
         print(f"Could not parse session: {jsonl_path}")
         return 1
 
+    print(f"Agent:   {agent}")
     print(f"Session: {meta.session_id}")
     print(f"Slug:    {meta.slug}")
     print(f"CWD:     {meta.cwd}")
@@ -125,6 +213,7 @@ def cmd_session_export(args: argparse.Namespace) -> int:
 
     Committed artifacts: review scaffold (with referential wires) + prompts extract.
     Transcripts are rendered on-demand via CLI, not persisted.
+    Works with any supported agent (Claude, Gemini, Codex).
     """
     session_id = args.session_id
     slug = args.slug
@@ -137,7 +226,7 @@ def cmd_session_export(args: argparse.Namespace) -> int:
         print("Use 'organvm session list' to see available sessions.")
         return 1
 
-    meta = parse_session(jsonl_path)
+    meta = parse_any_session(jsonl_path)
     if not meta:
         print(f"Could not parse session: {jsonl_path}")
         return 1
@@ -148,7 +237,7 @@ def cmd_session_export(args: argparse.Namespace) -> int:
 
     export = SessionExport(meta=meta, slug=slug, output_path=review_path)
     review_content = export.render()
-    prompts_content = render_prompts(jsonl_path)
+    prompts_content = render_any_prompts(jsonl_path)
 
     if dry_run:
         print(f"Would write review to:  {review_path}")
@@ -202,10 +291,7 @@ def cmd_session_transcript(args: argparse.Namespace) -> int:
         print("Use 'organvm session list' to see available sessions.")
         return 1
 
-    if unabridged:
-        content = render_transcript_unabridged(jsonl_path)
-    else:
-        content = render_transcript(jsonl_path)
+    content = render_any_transcript(jsonl_path, unabridged=unabridged)
 
     if not content:
         print(f"Could not parse session: {jsonl_path}")
@@ -237,7 +323,7 @@ def cmd_session_prompts(args: argparse.Namespace) -> int:
         print("Use 'organvm session list' to see available sessions.")
         return 1
 
-    content = render_prompts(jsonl_path)
+    content = render_any_prompts(jsonl_path)
     if not content:
         print(f"Could not parse session: {jsonl_path}")
         return 1
