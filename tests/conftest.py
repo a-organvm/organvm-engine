@@ -25,7 +25,9 @@ def _block_production_paths(monkeypatch):
     import organvm_engine.registry.loader as loader_mod
 
     monkeypatch.setattr(paths_mod, "_DEFAULT_WORKSPACE", _BLOCKED)
-    monkeypatch.setattr(loader_mod, "DEFAULT_REGISTRY_PATH", _BLOCKED / "registry-v2.json")
+    monkeypatch.setattr(
+        loader_mod, "_default_registry_path", lambda: _BLOCKED / "registry-v2.json"
+    )
 
 
 @pytest.fixture

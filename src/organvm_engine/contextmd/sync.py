@@ -31,13 +31,13 @@ def sync_all(
 ) -> dict[str, Any]:
     """Sync auto-generated sections across all context files."""
     from organvm_engine.git.superproject import REGISTRY_KEY_MAP
-    from organvm_engine.registry.loader import DEFAULT_REGISTRY_PATH, load_registry
+    from organvm_engine.registry.loader import load_registry
     from organvm_engine.registry.validator import validate_registry
     from organvm_engine.seed.discover import discover_seeds
     from organvm_engine.seed.reader import read_seed
 
     ws = Path(workspace) if workspace else Path.home() / "Workspace"
-    reg = load_registry(registry_path or DEFAULT_REGISTRY_PATH)
+    reg = load_registry(registry_path)
 
     # Pre-flight: Validate registry before sync to prevent breaking 100+ files
     val_result = validate_registry(reg)

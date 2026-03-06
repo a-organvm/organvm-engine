@@ -238,9 +238,12 @@ def compute_vitals(metrics: dict) -> dict:
             "orgs": c.get("total_organs", 8),
         },
         "substance": {
-            "code_files": m.get("code_files", 0),
-            "test_files": m.get("test_files", 0),
-            "automated_tests": m.get("automated_tests", m.get("repos_with_tests", 0)),
+            "code_files": c.get("code_files") or m.get("code_files", 0),
+            "test_files": c.get("test_files") or m.get("test_files", 0),
+            "automated_tests": (
+                c.get("repos_with_tests")
+                or m.get("automated_tests", m.get("repos_with_tests", 0))
+            ),
             "ci_passing": ci_workflows,
             "ci_coverage_pct": ci_coverage_pct,
         },

@@ -83,6 +83,21 @@ class TestComputeVitals:
         assert vitals["substance"]["code_files"] == 100
         assert vitals["substance"]["test_files"] == 20
 
+    def test_vitals_substance_from_computed(self, registry):
+        """After migration, code_files/test_files live in computed, not manual."""
+        canonical = _make_canonical(registry)
+        # Simulate post-migration state: fields in computed, removed from manual
+        canonical["computed"]["code_files"] = 250
+        canonical["computed"]["test_files"] = 45
+        canonical["computed"]["repos_with_tests"] = 12
+        canonical["manual"].pop("code_files", None)
+        canonical["manual"].pop("test_files", None)
+        canonical["manual"].pop("repos_with_tests", None)
+        vitals = compute_vitals(canonical)
+        assert vitals["substance"]["code_files"] == 250
+        assert vitals["substance"]["test_files"] == 45
+        assert vitals["substance"]["automated_tests"] == 12
+
     def test_vitals_ci_coverage(self, registry):
         canonical = _make_canonical(registry)
         vitals = compute_vitals(canonical)

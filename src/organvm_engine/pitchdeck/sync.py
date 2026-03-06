@@ -51,12 +51,12 @@ def sync_pitchdecks(
         Summary dict with generated, skipped, bespoke, and error lists.
     """
     from organvm_engine.git.superproject import REGISTRY_KEY_MAP
-    from organvm_engine.registry.loader import DEFAULT_REGISTRY_PATH, load_registry
+    from organvm_engine.registry.loader import load_registry
     from organvm_engine.seed.discover import discover_seeds
     from organvm_engine.seed.reader import read_seed
 
     ws = Path(workspace) if workspace else Path.home() / "Workspace"
-    reg = load_registry(registry_path or DEFAULT_REGISTRY_PATH)
+    reg = load_registry(registry_path)
 
     # Discover seeds for edge data
     seed_paths = discover_seeds(ws)
@@ -188,11 +188,11 @@ def generate_single(
         {"repo": str, "action": str, "path": str, "html": str (if dry_run)}
     """
     from organvm_engine.git.superproject import REGISTRY_KEY_MAP
-    from organvm_engine.registry.loader import DEFAULT_REGISTRY_PATH, load_registry
+    from organvm_engine.registry.loader import load_registry
     from organvm_engine.registry.query import find_repo
 
     ws = Path(workspace) if workspace else Path.home() / "Workspace"
-    reg = load_registry(registry_path or DEFAULT_REGISTRY_PATH)
+    reg = load_registry(registry_path)
 
     result = find_repo(reg, repo_name)
     if not result:
