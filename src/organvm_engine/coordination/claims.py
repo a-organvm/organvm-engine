@@ -8,6 +8,12 @@ collisions. When work is done, the stream "punches out" to release its claims.
 Claims auto-expire after a configurable TTL (default: 4 hours) to prevent
 stale claims from blocking work indefinitely.
 
+Resource capacity tracking: each claim declares its resource weight (light,
+medium, heavy). The system tracks total load and warns when the machine
+(16GB M3) is approaching saturation. This prevents the "too many parallel
+AI dashes" problem where concurrent Claude/Gemini/Codex sessions compete
+for RAM, CPU, and disk I/O.
+
 The claim registry lives at ~/.organvm/claims.jsonl — a shared, append-only
 log. Active claims are computed by reading all entries and filtering by
 punch-in/punch-out pairs and TTL expiry.
@@ -26,6 +32,41 @@ from typing import Any
 # Default TTL for claims: 4 hours
 DEFAULT_CLAIM_TTL_SECONDS = 4 * 60 * 60
 
+# Resource weight categories and their cost units.
+# On a 16GB M3, we budget ~6 capacity units (leaving room for OS + background).
+# light=1 (read-only, search, planning), medium=2 (code gen, tests),
+# heavy=3 (full build, parallel subagents, large file generation).
+WEIGHT_COSTS = {"light": 1, "medium": 2, "heavy": 3}
+DEFAULT_CAPACITY = 6  # max concurrent weight units
+
+# Handle word pools — each agent type gets a thematic set.
+# Handles are "{agent}-{word}" (e.g. "claude-forge", "gemini-scout").
+_HANDLE_POOLS = {
+    "claude": [
+        "forge", "anvil", "helm", "loom", "quill",
+        "vault", "prism", "blade", "torch", "crown",
+        "reed", "stone", "tide", "crest", "glyph",
+    ],
+    "gemini": [
+        "scout", "lens", "spark", "drift", "echo",
+        "flare", "orbit", "pulse", "shard", "weave",
+        "comet", "frost", "haze", "nova", "rift",
+    ],
+    "codex": [
+        "bolt", "grid", "node", "wire", "rune",
+        "byte", "core", "link", "port", "stem",
+        "arc", "chip", "flux", "mesh", "vane",
+    ],
+    "human": [
+        "hand", "eye", "mind", "voice", "heart",
+        "pen", "key", "seal", "mark", "sign",
+    ],
+}
+_DEFAULT_POOL = [
+    "alpha", "bravo", "delta", "echo", "foxtrot",
+    "gamma", "kappa", "omega", "sigma", "theta",
+]
+
 _CLAIMS_DIR = Path.home() / ".organvm"
 _CLAIMS_FILE = _CLAIMS_DIR / "claims.jsonl"
 
@@ -38,6 +79,25 @@ def _claims_file() -> Path:
     return _CLAIMS_FILE
 
 
+def _generate_handle(agent: str, existing_handles: set[str]) -> str:
+    """Generate a unique, human-readable handle for an agent stream.
+
+    Format: "{agent}-{word}" (e.g. "claude-forge", "gemini-scout").
+    Avoids collisions with currently active handles.
+    """
+    pool = _HANDLE_POOLS.get(agent, _DEFAULT_POOL)
+    for word in pool:
+        handle = f"{agent}-{word}"
+        if handle not in existing_handles:
+            return handle
+    # Pool exhausted — fall back to numbered handle
+    for i in range(1, 100):
+        handle = f"{agent}-{i:02d}"
+        if handle not in existing_handles:
+            return handle
+    return f"{agent}-{int(time.time()) % 10000}"
+
+
 @dataclass
 class WorkClaim:
     """A claim on an area of influence by an AI stream."""
@@ -46,14 +106,22 @@ class WorkClaim:
     agent: str  # claude, gemini, codex, human
     session_id: str
     timestamp: float
+    handle: str = ""  # unique name tag (e.g. "claude-forge")
     organs: list[str] = field(default_factory=list)
     repos: list[str] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
     modules: list[str] = field(default_factory=list)
     scope: str = ""  # free-text description
+    resource_weight: str = "medium"  # light, medium, heavy
+    test_obligations: list[str] = field(default_factory=list)  # deferred test cmds
     ttl_seconds: int = DEFAULT_CLAIM_TTL_SECONDS
     released: bool = False
     release_timestamp: float = 0.0
+
+    @property
+    def cost(self) -> int:
+        """Resource cost units for this claim."""
+        return WEIGHT_COSTS.get(self.resource_weight, 2)
 
     @property
     def is_expired(self) -> bool:
@@ -80,6 +148,7 @@ class WorkClaim:
     def to_dict(self) -> dict[str, Any]:
         return {
             "claim_id": self.claim_id,
+            "handle": self.handle,
             "agent": self.agent,
             "session_id": self.session_id,
             "timestamp": self.timestamp,
@@ -88,6 +157,9 @@ class WorkClaim:
             "files": self.files,
             "modules": self.modules,
             "scope": self.scope,
+            "resource_weight": self.resource_weight,
+            "cost": self.cost,
+            "test_obligations": self.test_obligations,
             "ttl_seconds": self.ttl_seconds,
             "released": self.released,
             "release_timestamp": self.release_timestamp,
@@ -215,6 +287,28 @@ def check_conflicts(
     return conflicts
 
 
+def capacity_status(max_capacity: int = DEFAULT_CAPACITY) -> dict[str, Any]:
+    """Check current resource capacity utilization.
+
+    Returns load metrics so agents can decide whether to proceed or wait.
+    """
+    claims = active_claims()
+    current_load = sum(c.cost for c in claims)
+    return {
+        "current_load": current_load,
+        "max_capacity": max_capacity,
+        "available": max(0, max_capacity - current_load),
+        "utilization_pct": round(current_load / max_capacity * 100, 1) if max_capacity else 0,
+        "at_capacity": current_load >= max_capacity,
+        "active_streams": len(claims),
+        "by_weight": {
+            "light": sum(1 for c in claims if c.resource_weight == "light"),
+            "medium": sum(1 for c in claims if c.resource_weight == "medium"),
+            "heavy": sum(1 for c in claims if c.resource_weight == "heavy"),
+        },
+    }
+
+
 def punch_in(
     agent: str,
     session_id: str,
@@ -223,14 +317,27 @@ def punch_in(
     files: list[str] | None = None,
     modules: list[str] | None = None,
     scope: str = "",
+    resource_weight: str = "medium",
+    test_obligations: list[str] | None = None,
     ttl_seconds: int = DEFAULT_CLAIM_TTL_SECONDS,
 ) -> dict[str, Any]:
     """Punch in: declare areas of influence for this work session.
 
+    Args:
+        agent: Agent type (claude, gemini, codex, human).
+        session_id: Session identifier.
+        organs/repos/files/modules: Areas being claimed.
+        scope: Free-text description of the work.
+        resource_weight: light (1), medium (2), or heavy (3) cost units.
+        test_obligations: Test commands to defer to the prover session
+            (e.g. ["pytest organvm-engine/tests/ -v"]).
+        ttl_seconds: Claim expiry (default 4h).
+
     Returns a dict with:
+    - handle: unique name tag for this stream (e.g. "claude-forge")
     - claim_id: unique ID for this claim (use to punch out)
     - conflicts: any detected conflicts with existing claims
-    - active_claims: count of other active claims
+    - capacity: current resource utilization after this claim
     """
     import hashlib
 
@@ -242,13 +349,38 @@ def punch_in(
     repos = repos or []
     files = files or []
     modules = modules or []
+    test_obligations = test_obligations or []
 
-    # Check for conflicts first
+    if resource_weight not in WEIGHT_COSTS:
+        resource_weight = "medium"
+
+    # Generate a unique handle (name tag)
+    existing_handles = {c.handle for c in active_claims() if c.handle}
+    handle = _generate_handle(agent, existing_handles)
+
+    # Check for conflicts
     conflicts = check_conflicts(organs, repos, files, modules)
+
+    # Check capacity before claiming
+    cap = capacity_status()
+    proposed_cost = WEIGHT_COSTS.get(resource_weight, 2)
+    capacity_warning = None
+    if cap["at_capacity"]:
+        capacity_warning = (
+            f"Machine at capacity ({cap['current_load']}/{cap['max_capacity']} units). "
+            "This session may degrade performance. Consider waiting."
+        )
+    elif cap["current_load"] + proposed_cost > cap["max_capacity"]:
+        capacity_warning = (
+            f"This {resource_weight} session ({proposed_cost} units) would exceed capacity "
+            f"({cap['current_load']}+{proposed_cost} > {cap['max_capacity']}). "
+            "Consider using a lighter weight or waiting."
+        )
 
     event = {
         "event_type": "claim.punch_in",
         "claim_id": claim_id,
+        "handle": handle,
         "agent": agent,
         "session_id": session_id,
         "timestamp": now,
@@ -258,14 +390,18 @@ def punch_in(
         "files": files,
         "modules": modules,
         "scope": scope,
+        "resource_weight": resource_weight,
+        "test_obligations": test_obligations,
         "ttl_seconds": ttl_seconds,
     }
     _append_event(event)
 
-    return {
+    result: dict[str, Any] = {
+        "handle": handle,
         "claim_id": claim_id,
         "conflicts": [
             {
+                "with_handle": c.existing_claim.handle,
                 "with_agent": c.existing_claim.agent,
                 "with_session": c.existing_claim.session_id,
                 "overlap_type": c.overlap_type,
@@ -276,6 +412,9 @@ def punch_in(
         ],
         "conflict_count": len(conflicts),
         "active_claims": len(active_claims()),
+        "resource_weight": resource_weight,
+        "cost": proposed_cost,
+        "capacity": capacity_status(),
         "areas": [
             *[f"organ:{o}" for o in organs],
             *[f"repo:{r}" for r in repos],
@@ -283,6 +422,10 @@ def punch_in(
             *[f"module:{m}" for m in modules],
         ],
     }
+    if capacity_warning:
+        result["capacity_warning"] = capacity_warning
+
+    return result
 
 
 def punch_out(claim_id: str) -> dict[str, Any]:
@@ -322,18 +465,27 @@ def punch_out(claim_id: str) -> dict[str, Any]:
         "claim_id": claim_id,
         "timestamp": time.time(),
         "iso_time": datetime.now(timezone.utc).isoformat(),
+        "handle": found.handle,
         "agent": found.agent,
         "session_id": found.session_id,
     }
     _append_event(event)
 
-    return {
+    result: dict[str, Any] = {
         "released": True,
         "claim_id": claim_id,
+        "handle": found.handle,
         "agent": found.agent,
         "areas_released": found.areas,
         "remaining_active": len(active_claims()) - 1,
     }
+    if found.test_obligations:
+        result["test_obligations"] = found.test_obligations
+        result["note"] = (
+            f"{len(found.test_obligations)} test obligation(s) deferred. "
+            "Run organvm_prove_sweep to execute all pending tests."
+        )
+    return result
 
 
 def work_board() -> dict[str, Any]:
@@ -345,12 +497,15 @@ def work_board() -> dict[str, Any]:
     claims = active_claims()
 
     by_agent: dict[str, list[dict]] = {}
+    all_test_obligations: list[str] = []
     for c in claims:
         entry = {
+            "handle": c.handle,
             "claim_id": c.claim_id,
             "session_id": c.session_id,
             "scope": c.scope,
             "areas": c.areas,
+            "resource_weight": c.resource_weight,
             "since": datetime.fromtimestamp(c.timestamp, tz=timezone.utc).isoformat(),
             "minutes_active": int((time.time() - c.timestamp) / 60),
             "ttl_remaining_minutes": max(
@@ -358,11 +513,75 @@ def work_board() -> dict[str, Any]:
                 int((c.timestamp + c.ttl_seconds - time.time()) / 60),
             ),
         }
+        if c.test_obligations:
+            entry["test_obligations"] = c.test_obligations
         by_agent.setdefault(c.agent, []).append(entry)
+        all_test_obligations.extend(c.test_obligations)
+
+    # Also collect test obligations from recently released claims (last hour)
+    # so the prover sees what needs running even after agents punch out
+    events = _read_events()
+    now = time.time()
+    for evt in events:
+        if evt.get("event_type") == "claim.punch_in":
+            ts = evt.get("timestamp", 0)
+            if now - ts < 3600:  # last hour
+                for ob in evt.get("test_obligations", []):
+                    if ob not in all_test_obligations:
+                        all_test_obligations.append(ob)
 
     return {
         "active_claims": len(claims),
         "agents_working": len(by_agent),
+        "capacity": capacity_status(),
+        "pending_test_obligations": all_test_obligations,
+        "test_obligation_count": len(all_test_obligations),
         "by_agent": by_agent,
         "claims": [c.to_dict() for c in claims],
+    }
+
+
+def prove_sweep() -> dict[str, Any]:
+    """Collect all pending test obligations for a single prover session.
+
+    Scans all claims (active + recently released) and returns a deduplicated
+    list of test commands to run. This is the "one session runs all tests"
+    pattern — agents BUILD and declare obligations, the prover PROVES.
+    """
+    events = _read_events()
+    now = time.time()
+
+    obligations: list[str] = []
+    sources: list[dict] = []
+    seen: set[str] = set()
+
+    for evt in events:
+        if evt.get("event_type") != "claim.punch_in":
+            continue
+        ts = evt.get("timestamp", 0)
+        # Only consider claims from the last 8 hours
+        if now - ts > 8 * 3600:
+            continue
+        for ob in evt.get("test_obligations", []):
+            if ob not in seen:
+                seen.add(ob)
+                obligations.append(ob)
+                sources.append({
+                    "command": ob,
+                    "from_handle": evt.get("handle", ""),
+                    "from_agent": evt.get("agent", ""),
+                    "from_scope": evt.get("scope", ""),
+                })
+
+    return {
+        "obligations": obligations,
+        "total": len(obligations),
+        "sources": sources,
+        "active_claims": len(active_claims()),
+        "note": (
+            "Run these commands sequentially in one session to verify "
+            "all concurrent work integrates correctly."
+            if obligations
+            else "No pending test obligations."
+        ),
     }
