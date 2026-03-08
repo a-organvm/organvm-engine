@@ -19,6 +19,7 @@ class AuditResult:
     warnings: list[str] = field(default_factory=list)
     info: list[str] = field(default_factory=list)
     dependency_result: object = None
+    ci_mandate: object = None  # CIMandateReport when verify_ci=True
 
     @property
     def passed(self) -> bool:
@@ -47,6 +48,7 @@ class AuditResult:
 def run_audit(
     registry: dict,
     rules: dict | None = None,
+    verify_ci: bool = False,
 ) -> AuditResult:
     """Run a full governance audit.
 
@@ -58,10 +60,12 @@ def run_audit(
     - Stale repos (warning)
     - Missing changelogs / CI (warning)
     - Organ-specific requirements
+    - CI mandate filesystem verification (optional, when verify_ci=True)
 
     Args:
         registry: Loaded registry dict.
         rules: Governance rules dict. Loaded from default if None.
+        verify_ci: If True, verify CI workflows on filesystem (slower).
 
     Returns:
         AuditResult with all findings.
@@ -141,5 +145,33 @@ def run_audit(
                     result.warnings.append(
                         f"{organ_key}/{name}: malformed last_validated date '{last_validated}'",
                     )
+
+    # CI mandate: filesystem verification (optional, IO-heavy)
+    if verify_ci:
+        try:
+            from organvm_engine.ci.mandate import verify_ci_mandate
+
+            mandate = verify_ci_mandate(registry)
+            result.ci_mandate = mandate
+            result.info.append(
+                f"CI mandate: {mandate.has_ci}/{mandate.total} repos "
+                f"({mandate.adherence_rate:.0%} adherence)",
+            )
+
+            # Detect drift between registry and filesystem
+            drift = mandate.drift_from_registry(registry)
+            for d in drift:
+                if d["registry_says"] and not d["filesystem_says"]:
+                    result.warnings.append(
+                        f"{d['organ']}/{d['repo']}: registry claims CI but "
+                        "no workflow files found on disk",
+                    )
+                elif not d["registry_says"] and d["filesystem_says"]:
+                    result.info.append(
+                        f"{d['organ']}/{d['repo']}: has CI workflows on disk "
+                        "but registry ci_workflow=false",
+                    )
+        except Exception as exc:
+            result.info.append(f"CI mandate check skipped: {exc}")
 
     return result
