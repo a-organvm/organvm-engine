@@ -124,6 +124,11 @@ from organvm_engine.cli.session import (
     cmd_session_transcript,
 )
 from organvm_engine.cli.status import cmd_status
+from organvm_engine.cli.study import (
+    cmd_study_audit_report,
+    cmd_study_consilience,
+    cmd_study_feedback,
+)
 from organvm_engine.paths import registry_path as _default_registry_path
 from organvm_engine.paths import resolve_workspace as _resolve_workspace
 
@@ -1173,6 +1178,42 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sop_init.add_argument("--name", default=None, help="SOP name (default: new-procedure)")
 
+    # study
+    study = sub.add_parser(
+        "study",
+        help="Study Suite — feedback loops, consilience index, combined audit",
+    )
+    study_sub = study.add_subparsers(dest="subcommand")
+
+    study_feedback = study_sub.add_parser(
+        "feedback",
+        help="Show the feedback loop inventory (positive and negative)",
+    )
+    study_feedback.add_argument("--json", action="store_true", help="Output JSON")
+    study_feedback.add_argument(
+        "--polarity",
+        choices=["positive", "negative"],
+        default=None,
+        help="Filter by loop polarity",
+    )
+
+    study_consilience = study_sub.add_parser(
+        "consilience",
+        help="Compute and display the consilience index for derived principles",
+    )
+    study_consilience.add_argument("--json", action="store_true", help="Output JSON")
+
+    study_audit = study_sub.add_parser(
+        "audit",
+        help="Combined governance + feedback + consilience audit report",
+    )
+    study_audit.add_argument("--json", action="store_true", help="Output JSON")
+    study_audit.add_argument(
+        "--output",
+        default=None,
+        help="Write report to file instead of stdout",
+    )
+
     # atoms
     atoms = sub.add_parser("atoms", help="Cross-system atom linking")
     atoms_sub = atoms.add_subparsers(dest="subcommand")
@@ -1404,6 +1445,17 @@ def main() -> int:
         if handler:
             return handler(args)
         parser.parse_args(["plans", "--help"])
+        return 0
+    if args.command == "study":
+        study_dispatch = {
+            "feedback": cmd_study_feedback,
+            "consilience": cmd_study_consilience,
+            "audit": cmd_study_audit_report,
+        }
+        handler = study_dispatch.get(getattr(args, "subcommand", "") or "")
+        if handler:
+            return handler(args)
+        parser.parse_args(["study", "--help"])
         return 0
     if args.command == "sop":
         sop_dispatch = {
