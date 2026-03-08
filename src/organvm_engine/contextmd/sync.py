@@ -185,7 +185,10 @@ def sync_repo(
     sop_entries: list | None = None,
 ) -> dict[str, Any]:
     """Sync a single repo's context file."""
-    section = generate_repo_section(repo_name, org, registry, seed, sop_entries=sop_entries)
+    agent = filename.replace(".md", "").lower() if filename else None
+    section = generate_repo_section(
+        repo_name, org, registry, seed, sop_entries=sop_entries, agent=agent,
+    )
     file_path = repo_path / filename
     action = _inject_section(file_path, section, dry_run)
     return {"path": str(file_path), "action": action, "dry_run": dry_run}

@@ -7,11 +7,14 @@ Usage:
     organvm prompts clipboard [--db-path PATH] [--output-dir DIR]
                               [--dry-run] [--json-only] [--md-only]
     organvm prompts audit [--output FILE] [--json] [--noise-only]
+    organvm prompts distill [--input FILE] [--output-dir DIR]
+                            [--dry-run] [--json] [--scaffold] [--write]
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 
@@ -174,6 +177,141 @@ def cmd_prompts_audit(args: argparse.Namespace) -> int:
     print(f"\nWrote audit report to {output_path}")
 
     return 0
+
+
+def cmd_prompts_distill(args: argparse.Namespace) -> int:
+    """Distill clipboard prompts into operational patterns and SOP coverage."""
+    import json as json_mod
+
+    from organvm_engine.distill.coverage import analyze_coverage, coverage_summary
+    from organvm_engine.distill.matcher import match_batch
+    from organvm_engine.distill.scaffold import generate_scaffolds
+    from organvm_engine.distill.taxonomy import OPERATIONAL_PATTERNS
+
+    input_path_str = getattr(args, "input", None)
+    output_dir_str = getattr(args, "output_dir", None)
+    dry_run = getattr(args, "dry_run", True)
+    write = getattr(args, "write", False)
+    as_json = getattr(args, "json", False)
+    scaffold = getattr(args, "scaffold", False)
+
+    if write:
+        dry_run = False
+
+    # Load prompts from clipboard export JSON
+    if input_path_str:
+        input_path = Path(input_path_str)
+    else:
+        from organvm_engine.paths import atoms_dir
+        input_path = atoms_dir() / "clipboard-prompts.json"
+
+    if not input_path.exists():
+        print(f"Input file not found: {input_path}", file=sys.stderr)
+        print("Run `organvm prompts clipboard` first to generate clipboard prompts.")
+        return 1
+
+    prompts = _load_clipboard_prompts(input_path)
+    if not prompts:
+        print("No prompts loaded from input file.")
+        return 1
+
+    print(f"Loaded {len(prompts)} prompts from {input_path}")
+
+    # Match prompts against patterns
+    matched = match_batch(prompts, OPERATIONAL_PATTERNS)
+
+    # Print match summary
+    print(f"\nPattern matches ({len(matched)} patterns hit):")
+    for pid, matches in sorted(matched.items(), key=lambda x: -len(x[1])):
+        pattern = OPERATIONAL_PATTERNS[pid]
+        print(f"  {pattern.label:<45} {len(matches):>3} prompts")
+
+    # Coverage analysis
+    sop_entries: list = []
+    try:
+        from organvm_engine.sop.discover import discover_sops
+        sop_entries = discover_sops()
+    except Exception:
+        print("\nWarning: Could not discover SOPs (continuing without coverage analysis)")
+
+    coverage = analyze_coverage(matched, prompts, sop_entries, OPERATIONAL_PATTERNS)
+    summary = coverage_summary(coverage)
+
+    print(f"\nCoverage: {summary['covered']}/{summary['total_patterns']} covered, "
+          f"{summary['partial']} partial, {summary['uncovered']} uncovered")
+
+    if summary["uncovered_patterns"]:
+        print("\nUncovered patterns:")
+        for pid in summary["uncovered_patterns"]:
+            p = OPERATIONAL_PATTERNS.get(pid)
+            if p:
+                print(f"  [{p.tier}] {p.label} → SOP--{p.sop_name_hint}.md")
+
+    if as_json:
+        data = {
+            "summary": summary,
+            "coverage": [e.to_dict() for e in coverage],
+            "match_counts": {pid: len(ms) for pid, ms in matched.items()},
+        }
+        print(json_mod.dumps(data, indent=2))
+        return 0
+
+    # Scaffold generation
+    if scaffold:
+        out_dir = Path(output_dir_str) if output_dir_str else Path(".sops")
+
+        written = generate_scaffolds(coverage, out_dir, dry_run=dry_run)
+        if written:
+            verb = "Would write" if dry_run else "Wrote"
+            print(f"\n{verb} {len(written)} SOP scaffold(s):")
+            for p in written:
+                print(f"  {p}")
+            if dry_run:
+                print("\nUse --write to actually write files.")
+        else:
+            print("\nNo new SOP scaffolds needed.")
+
+    return 0
+
+
+def _load_clipboard_prompts(path: Path) -> list:
+    """Load ClipboardPrompt objects from a JSON export file."""
+    import json as json_mod
+
+    from organvm_engine.prompts.clipboard.schema import ClipboardPrompt
+
+    try:
+        data = json_mod.loads(path.read_text(encoding="utf-8"))
+    except (json_mod.JSONDecodeError, OSError) as exc:
+        print(f"Error reading {path}: {exc}", file=sys.stderr)
+        return []
+
+    # Handle both array-of-prompts and {prompts: [...]} formats
+    items = data if isinstance(data, list) else data.get("prompts", [])
+
+    prompts = []
+    for item in items:
+        if not isinstance(item, dict) or "text" not in item:
+            continue
+        prompts.append(ClipboardPrompt(
+            id=item.get("id", 0),
+            content_hash=item.get("content_hash", ""),
+            date=item.get("date", ""),
+            time=item.get("time", ""),
+            timestamp=item.get("timestamp", ""),
+            source_app=item.get("source_app", ""),
+            bundle_id=item.get("bundle_id", ""),
+            category=item.get("category", "General AI Usage"),
+            confidence=item.get("confidence", "low"),
+            signals=item.get("signals", []),
+            word_count=item.get("word_count", 0),
+            char_count=item.get("char_count", 0),
+            multi_turn=item.get("multi_turn", False),
+            file_refs=item.get("file_refs", []),
+            tech_mentions=item.get("tech_mentions", []),
+            text=item.get("text", ""),
+        ))
+    return prompts
 
 
 def cmd_prompts_clipboard(args: argparse.Namespace) -> int:

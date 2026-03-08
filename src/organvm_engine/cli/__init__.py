@@ -87,7 +87,12 @@ from organvm_engine.cli.plans import (
     cmd_plans_sweep,
     cmd_plans_tidy,
 )
-from organvm_engine.cli.prompts import cmd_prompts_audit, cmd_prompts_clipboard, cmd_prompts_narrate
+from organvm_engine.cli.prompts import (
+    cmd_prompts_audit,
+    cmd_prompts_clipboard,
+    cmd_prompts_distill,
+    cmd_prompts_narrate,
+)
 from organvm_engine.cli.refresh import cmd_refresh
 from organvm_engine.cli.registry import (
     cmd_registry_deps,
@@ -910,6 +915,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run only the noise analysis",
     )
 
+    prompts_distill = prompts_sub.add_parser(
+        "distill",
+        help="Distill clipboard prompts into operational patterns and SOP coverage",
+    )
+    prompts_distill.add_argument(
+        "--input",
+        default=None,
+        help="Input clipboard prompts JSON file (default: <atoms-dir>/clipboard-prompts.json)",
+    )
+    prompts_distill.add_argument(
+        "--output-dir",
+        default=None,
+        help="Output directory for generated SOP scaffolds (default: .sops/)",
+    )
+    prompts_distill.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Analyze but write nothing (default)",
+    )
+    prompts_distill.add_argument(
+        "--write",
+        action="store_true",
+        help="Actually write scaffold files",
+    )
+    prompts_distill.add_argument(
+        "--json",
+        action="store_true",
+        help="Output coverage report as JSON",
+    )
+    prompts_distill.add_argument(
+        "--scaffold",
+        action="store_true",
+        help="Generate SOP scaffold files for uncovered patterns",
+    )
+
     # plans
     plans = sub.add_parser("plans", help="Plan file analysis and atomization")
     plans_sub = plans.add_subparsers(dest="subcommand")
@@ -1343,6 +1384,7 @@ def main() -> int:
             "narrate": cmd_prompts_narrate,
             "clipboard": cmd_prompts_clipboard,
             "audit": cmd_prompts_audit,
+            "distill": cmd_prompts_distill,
         }
         handler = prompts_dispatch.get(getattr(args, "subcommand", "") or "")
         if handler:

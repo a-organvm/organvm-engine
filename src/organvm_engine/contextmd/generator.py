@@ -36,6 +36,7 @@ def generate_repo_section(
     seed: dict | None = None,
     plan_index: "PlanIndex | None" = None,
     sop_entries: list | None = None,
+    agent: str | None = None,
 ) -> str:
     """Generate the auto-generated section for a repo-level CLAUDE.md / GEMINI.md."""
 
@@ -104,9 +105,12 @@ def generate_repo_section(
         plan_section = _build_plan_context(repo_name, organ_key, plan_index)
         atoms_section = _build_atoms_context(repo_name, organ_key)
         sop_section = _build_sop_directives(sop_entries)
+        prompting_hint = _build_prompting_hint(agent)
         injected = SESSION_REVIEW_SECTION
         if sop_section:
             injected += "\n" + sop_section
+        if prompting_hint:
+            injected += "\n" + prompting_hint
         if plan_section:
             injected += "\n" + plan_section
         if atoms_section:
@@ -428,6 +432,20 @@ def _build_atoms_context(repo_name: str, organ_key: str) -> str:
         cross_link_count=len(cross_links),
         top_tags=top_tags,
     )
+
+
+def _build_prompting_hint(agent: str | None) -> str:
+    """Build a one-line prompting standards hint for the given agent."""
+    if not agent:
+        return ""
+    try:
+        from organvm_engine.prompting.loader import format_guidelines_hint, load_guidelines
+        guidelines = load_guidelines(agent)
+        if guidelines:
+            return "\n" + format_guidelines_hint(guidelines) + "\n"
+    except ImportError:
+        pass
+    return ""
 
 
 def _format_consumers(consumers: list | None) -> str:
