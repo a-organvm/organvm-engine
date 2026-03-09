@@ -8,6 +8,9 @@ from organvm_engine.paths import workspace_root
 # Known org directories — derived from canonical organ_config
 ORGAN_ORGS = organ_org_dirs()
 
+# For backward compatibility with git modules
+DEFAULT_WORKSPACE = workspace_root()
+
 
 def discover_seeds(
     workspace: Path | str | None = None,

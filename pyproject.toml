@@ -10,11 +10,12 @@ requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
     "pyyaml>=6.0",
+    "jsonschema>=4.20",
 ]
 
 [project.optional-dependencies]
-schema = ["jsonschema>=4.20"]
-dev = ["pytest>=8.0", "jsonschema>=4.20", "ruff>=0.4", "pyright>=1.1"]
+schema = []
+dev = ["pytest>=8.0", "ruff>=0.4", "pyright>=1.1"]
 
 [project.scripts]
 organvm = "organvm_engine.cli:main"
