@@ -704,8 +704,8 @@ class PlanParser:
             code_block_lines=self.code_block_lines,
         )
         task.agent = self.agent
-        setattr(task, "_organ", self.organ)
-        setattr(task, "_repo", self.repo)
+        task._organ = self.organ
+        task._repo = self.repo
         task.actionable = is_actionable(title, body, self.archetype)
         task.phase_order = phase_index
         task.compute_id()
