@@ -144,13 +144,19 @@ def validate_epistemic_membranes(
     registry: dict,
     workspace: Path | None = None,
 ) -> list[DictumViolation]:
-    """AX-2: Check that cross-organ edges are declared in seed.yaml."""
+    """AX-2: Check that cross-organ edges are declared in seed.yaml.
+
+    Two checks:
+    1. Repos with cross-organ deps must have a seed.yaml
+    2. seed.yaml produces/consumes edges should cover registry dependencies
+    """
     violations: list[DictumViolation] = []
 
     if workspace is None:
         return violations
 
     from organvm_engine.registry.query import all_repos
+    from organvm_engine.seed.reader import read_seed
 
     for organ_key, repo in all_repos(registry):
         if repo.get("implementation_status") == "ARCHIVED":
@@ -158,25 +164,62 @@ def validate_epistemic_membranes(
         deps = repo.get("dependencies", [])
         if not deps:
             continue
-        # Check if repo has a seed.yaml
+
         org = repo.get("org", "")
         name = repo.get("name", "")
+
+        # Identify cross-organ deps
+        cross_organ_deps = []
+        for dep in deps:
+            dep_org = dep.split("/")[0] if "/" in dep else ""
+            if dep_org and dep_org != org:
+                cross_organ_deps.append(dep)
+
+        if not cross_organ_deps:
+            continue
+
         seed_path = workspace / org / name / "seed.yaml"
         if not seed_path.exists():
-            # Cross-organ deps without seed.yaml = undeclared coupling
-            cross_organ_deps = []
-            for dep in deps:
-                dep_org = dep.split("/")[0] if "/" in dep else ""
-                if dep_org and dep_org != org:
-                    cross_organ_deps.append(dep)
-            if cross_organ_deps:
+            violations.append(DictumViolation(
+                dictum_id="AX-2",
+                dictum_name="Epistemic Membranes",
+                severity="critical",
+                message=(
+                    f"Cross-organ dependencies {cross_organ_deps} "
+                    "not declared — no seed.yaml found"
+                ),
+                organ=organ_key,
+                repo=name,
+            ))
+            continue
+
+        # Check seed.yaml consumes edges cover the cross-organ deps
+        try:
+            seed = read_seed(seed_path)
+        except Exception:
+            continue
+
+        consumes = seed.get("consumes", []) or []
+        # Normalize consumes to org names for comparison
+        declared_sources: set[str] = set()
+        for entry in consumes:
+            if isinstance(entry, str):
+                declared_sources.add(entry)
+            elif isinstance(entry, dict):
+                src = entry.get("source", entry.get("from", ""))
+                if src:
+                    declared_sources.add(src)
+
+        for dep in cross_organ_deps:
+            dep_org = dep.split("/")[0]
+            # Check if the dep org is mentioned in any consumes entry
+            if not any(dep_org in s for s in declared_sources):
                 violations.append(DictumViolation(
                     dictum_id="AX-2",
                     dictum_name="Epistemic Membranes",
                     severity="critical",
                     message=(
-                        f"Cross-organ dependencies {cross_organ_deps} "
-                        "not declared — no seed.yaml found"
+                        f"Dependency on {dep} not declared in seed.yaml consumes"
                     ),
                     organ=organ_key,
                     repo=name,
@@ -352,6 +395,209 @@ def validate_event_handshake(
     return violations
 
 
+def validate_registry_coherence(registry: dict) -> list[DictumViolation]:
+    """AX-4: Validate registry internal consistency.
+
+    Checks:
+    - No repo appears in multiple organs
+    - repository_count matches actual array length
+    - No empty name fields
+    """
+    violations: list[DictumViolation] = []
+
+    from organvm_engine.registry.query import all_repos
+
+    seen_repos: dict[str, str] = {}  # "org/name" -> organ_key
+    for organ_key, repo in all_repos(registry):
+        org = repo.get("org", "")
+        name = repo.get("name", "")
+
+        if not name:
+            violations.append(DictumViolation(
+                dictum_id="AX-4",
+                dictum_name="Registry Coherence",
+                severity="critical",
+                message="Repo entry with empty name",
+                organ=organ_key,
+            ))
+            continue
+
+        key = f"{org}/{name}"
+        if key in seen_repos:
+            violations.append(DictumViolation(
+                dictum_id="AX-4",
+                dictum_name="Registry Coherence",
+                severity="critical",
+                message=f"Duplicate repo: also in {seen_repos[key]}",
+                organ=organ_key,
+                repo=name,
+            ))
+        else:
+            seen_repos[key] = organ_key
+
+    # Check repository_count accuracy
+    for organ_key, organ_data in registry.get("organs", {}).items():
+        declared = organ_data.get("repository_count")
+        actual = len(organ_data.get("repositories", []))
+        if declared is not None and declared != actual:
+            violations.append(DictumViolation(
+                dictum_id="AX-4",
+                dictum_name="Registry Coherence",
+                severity="warning",
+                message=(
+                    f"repository_count={declared} but actual count={actual}"
+                ),
+                organ=organ_key,
+            ))
+
+    return violations
+
+
+def validate_readme_mandate(registry: dict) -> list[DictumViolation]:
+    """RR-4: Every non-archived repo must have documentation (README)."""
+    violations: list[DictumViolation] = []
+
+    from organvm_engine.registry.query import all_repos
+
+    for organ_key, repo in all_repos(registry):
+        if repo.get("implementation_status") == "ARCHIVED":
+            continue
+        name = repo.get("name", "?")
+        doc_status = repo.get("documentation_status", "")
+        if not doc_status or doc_status == "EMPTY":
+            violations.append(DictumViolation(
+                dictum_id="RR-4",
+                dictum_name="README Mandate",
+                severity="warning",
+                message="Missing or empty documentation_status",
+                organ=organ_key,
+                repo=name,
+            ))
+
+    return violations
+
+
+def validate_promotion_integrity(registry: dict) -> list[DictumViolation]:
+    """RR-5: All repos must have a valid promotion_status (no state skipping)."""
+    violations: list[DictumViolation] = []
+
+    from organvm_engine.registry.query import all_repos
+
+    valid_states = {
+        "INCUBATOR", "LOCAL", "CANDIDATE",
+        "PUBLIC_PROCESS", "GRADUATED", "ARCHIVED",
+    }
+
+    for organ_key, repo in all_repos(registry):
+        name = repo.get("name", "?")
+        status = repo.get("promotion_status", "")
+        if status and status not in valid_states:
+            violations.append(DictumViolation(
+                dictum_id="RR-5",
+                dictum_name="Promotion Integrity",
+                severity="warning",
+                message=f"Invalid promotion_status: '{status}'",
+                organ=organ_key,
+                repo=name,
+            ))
+
+    return violations
+
+
+def validate_logos_write_scope(
+    registry: dict,
+    workspace: Path | None = None,
+) -> list[DictumViolation]:
+    """OD-V: ORGAN-V repos should only produce to their own domain."""
+    violations: list[DictumViolation] = []
+
+    if workspace is None:
+        return violations
+
+    from organvm_engine.seed.reader import read_seed
+
+    organ_data = registry.get("organs", {}).get("ORGAN-V", {})
+    for repo in organ_data.get("repositories", []):
+        if repo.get("implementation_status") == "ARCHIVED":
+            continue
+        org = repo.get("org", "")
+        name = repo.get("name", "")
+        seed_path = workspace / org / name / "seed.yaml"
+        if not seed_path.exists():
+            continue
+
+        try:
+            seed = read_seed(seed_path)
+        except Exception:
+            continue
+
+        produces = seed.get("produces", []) or []
+        for entry in produces:
+            targets: list[str] = []
+            if isinstance(entry, str):
+                targets.append(entry)
+            elif isinstance(entry, dict):
+                for t in entry.get("targets", []):
+                    targets.append(t)
+
+            for target in targets:
+                if target and "ORGAN-V" not in target and "organvm-v-logos" not in target:
+                    violations.append(DictumViolation(
+                        dictum_id="OD-V",
+                        dictum_name="Logos Write Scope",
+                        severity="warning",
+                        message=f"Produces to external target: {target}",
+                        organ="ORGAN-V",
+                        repo=name,
+                    ))
+
+    return violations
+
+
+def validate_kerygma_consumer(
+    registry: dict,
+    workspace: Path | None = None,
+) -> list[DictumViolation]:
+    """OD-VII: ORGAN-VII repos must not produce original domain content."""
+    violations: list[DictumViolation] = []
+
+    if workspace is None:
+        return violations
+
+    from organvm_engine.seed.reader import read_seed
+
+    organ_data = registry.get("organs", {}).get("ORGAN-VII", {})
+    for repo in organ_data.get("repositories", []):
+        if repo.get("implementation_status") == "ARCHIVED":
+            continue
+        org = repo.get("org", "")
+        name = repo.get("name", "")
+        seed_path = workspace / org / name / "seed.yaml"
+        if not seed_path.exists():
+            continue
+
+        try:
+            seed = read_seed(seed_path)
+        except Exception:
+            continue
+
+        produces = seed.get("produces", []) or []
+        if produces:
+            violations.append(DictumViolation(
+                dictum_id="OD-VII",
+                dictum_name="Kerygma Consumer",
+                severity="warning",
+                message=(
+                    f"Has {len(produces)} produces edge(s) — "
+                    "ORGAN-VII should be a pure consumer"
+                ),
+                organ="ORGAN-VII",
+                repo=name,
+            ))
+
+    return violations
+
+
 # ── Master runner ────────────────────────────────────────────────
 
 # Maps validator names to functions
@@ -362,6 +608,11 @@ _VALIDATORS: dict[str, callable] = {
     "validate_organ_iii_factory": lambda reg, rules, ws: validate_organ_iii_factory(reg),
     "validate_seed_mandate": lambda reg, rules, ws: validate_seed_mandate(reg, ws),
     "validate_event_handshake": lambda reg, rules, ws: validate_event_handshake(reg, ws),
+    "validate_registry_coherence": lambda reg, rules, ws: validate_registry_coherence(reg),
+    "validate_readme_mandate": lambda reg, rules, ws: validate_readme_mandate(reg),
+    "validate_promotion_integrity": lambda reg, rules, ws: validate_promotion_integrity(reg),
+    "validate_logos_write_scope": lambda reg, rules, ws: validate_logos_write_scope(reg, ws),
+    "validate_kerygma_consumer": lambda reg, rules, ws: validate_kerygma_consumer(reg, ws),
 }
 
 

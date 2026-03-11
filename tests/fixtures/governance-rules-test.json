@@ -73,6 +73,15 @@
         "validator": "validate_ttl_eviction",
         "references": ["governance/audit.py"],
         "severity": "warning"
+      },
+      {
+        "id": "AX-4",
+        "name": "Registry Coherence",
+        "statement": "No duplicates, counts match, no empty names.",
+        "enforcement": "automated",
+        "validator": "validate_registry_coherence",
+        "references": ["constitution.md Article I"],
+        "severity": "critical"
       }
     ],
     "organ_dictums": {
@@ -96,6 +105,28 @@
           "enforcement": "manual",
           "validator": null,
           "severity": "info"
+        }
+      ],
+      "ORGAN-V": [
+        {
+          "id": "OD-V",
+          "name": "Logos Write Scope",
+          "statement": "Produces only to ORGAN-V.",
+          "constraints": { "write_scope": "self_only" },
+          "enforcement": "audit",
+          "validator": "validate_logos_write_scope",
+          "severity": "warning"
+        }
+      ],
+      "ORGAN-VII": [
+        {
+          "id": "OD-VII",
+          "name": "Kerygma Consumer",
+          "statement": "No produces edges.",
+          "constraints": { "no_produces": true },
+          "enforcement": "audit",
+          "validator": "validate_kerygma_consumer",
+          "severity": "warning"
         }
       ]
     },
@@ -129,6 +160,26 @@
         "references": ["seed/graph.py"],
         "severity": "warning",
         "applies_to": "repos with event edges"
+      },
+      {
+        "id": "RR-4",
+        "name": "README Mandate",
+        "statement": "Every non-archived repo must have documentation.",
+        "enforcement": "automated",
+        "validator": "validate_readme_mandate",
+        "references": ["constitution.md Article V"],
+        "severity": "warning",
+        "applies_to": "all non-archived repos"
+      },
+      {
+        "id": "RR-5",
+        "name": "Promotion Integrity",
+        "statement": "Valid promotion_status from state machine.",
+        "enforcement": "automated",
+        "validator": "validate_promotion_integrity",
+        "references": ["constitution.md Article VI"],
+        "severity": "warning",
+        "applies_to": "all repos"
       }
     ]
   }

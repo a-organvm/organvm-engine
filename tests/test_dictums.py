@@ -17,7 +17,12 @@ from organvm_engine.governance.dictums import (
     list_all_dictums,
     validate_dag_invariant,
     validate_epistemic_membranes,
+    validate_kerygma_consumer,
+    validate_logos_write_scope,
     validate_organ_iii_factory,
+    validate_promotion_integrity,
+    validate_readme_mandate,
+    validate_registry_coherence,
     validate_seed_mandate,
     validate_ttl_eviction,
 )
@@ -52,11 +57,12 @@ class TestDictumLoading:
 
     def test_get_axioms(self, rules):
         axioms = get_axioms(rules)
-        assert len(axioms) == 3
+        assert len(axioms) == 4
         ids = [a["id"] for a in axioms]
         assert "AX-1" in ids
         assert "AX-2" in ids
         assert "AX-3" in ids
+        assert "AX-4" in ids
 
     def test_get_axioms_missing(self):
         assert get_axioms({}) == []
@@ -71,11 +77,13 @@ class TestDictumLoading:
 
     def test_get_repo_rules(self, rules):
         rr = get_repo_rules(rules)
-        assert len(rr) == 3
+        assert len(rr) == 5
         ids = [r["id"] for r in rr]
         assert "RR-1" in ids
         assert "RR-2" in ids
         assert "RR-3" in ids
+        assert "RR-4" in ids
+        assert "RR-5" in ids
 
     def test_get_repo_rules_missing(self):
         assert get_repo_rules({}) == []
@@ -84,8 +92,8 @@ class TestDictumLoading:
 class TestListAllDictums:
     def test_list_all(self, rules):
         all_d = list_all_dictums(rules)
-        # 3 axioms + 2 organ dictums (OD-III, OD-IV) + 3 repo rules = 8
-        assert len(all_d) == 8
+        # 4 axioms + 4 organ dictums (OD-III, OD-IV, OD-V, OD-VII) + 5 repo rules = 13
+        assert len(all_d) == 13
 
     def test_list_has_level_tags(self, rules):
         all_d = list_all_dictums(rules)
@@ -139,15 +147,31 @@ class TestAxiomValidators:
         ax2 = [v for v in violations if v.dictum_id == "AX-2"]
         assert len(ax2) >= 1
 
-    def test_epistemic_membranes_with_seed(self, registry, tmp_path):
-        """Cross-organ dep with seed.yaml present = no violation."""
+    def test_epistemic_membranes_with_seed_and_consumes(self, registry, tmp_path):
+        """Cross-organ dep with seed.yaml declaring consumes = no violation."""
+        org_dir = tmp_path / "organvm-ii-poiesis" / "metasystem-master"
+        org_dir.mkdir(parents=True)
+        (org_dir / "seed.yaml").write_text(
+            "organ: ORGAN-II\n"
+            "consumes:\n"
+            "  - source: organvm-i-theoria/recursive-engine\n"
+        )
+
+        violations = validate_epistemic_membranes(registry, workspace=tmp_path)
+        ax2 = [v for v in violations if v.dictum_id == "AX-2"]
+        assert ax2 == []
+
+    def test_epistemic_membranes_seed_without_consumes(self, registry, tmp_path):
+        """Cross-organ dep with seed.yaml but no consumes declaration = violation."""
         org_dir = tmp_path / "organvm-ii-poiesis" / "metasystem-master"
         org_dir.mkdir(parents=True)
         (org_dir / "seed.yaml").write_text("organ: ORGAN-II\n")
 
         violations = validate_epistemic_membranes(registry, workspace=tmp_path)
         ax2 = [v for v in violations if v.dictum_id == "AX-2"]
-        assert ax2 == []
+        # Should flag the undeclared cross-organ dependency
+        assert len(ax2) >= 1
+        assert "not declared in seed.yaml consumes" in ax2[0].message
 
     def test_ttl_fresh(self, registry, rules):
         """Fresh repos have no TTL violations."""
@@ -296,6 +320,199 @@ class TestDictumReport:
         d = v.to_dict()
         assert "organ" not in d
         assert "repo" not in d
+
+
+# ── AX-4: Registry Coherence ──────────────────────────────────────
+
+
+class TestRegistryCoherence:
+    def test_clean_registry(self, registry):
+        violations = validate_registry_coherence(registry)
+        # May have count mismatches in minimal fixture but no duplicates
+        dupes = [v for v in violations if "Duplicate" in v.message]
+        assert dupes == []
+
+    def test_duplicate_repo(self, registry):
+        """Same repo in two organs triggers AX-4."""
+        dup = dict(registry["organs"]["ORGAN-I"]["repositories"][0])
+        registry["organs"]["ORGAN-III"]["repositories"].append(dup)
+        violations = validate_registry_coherence(registry)
+        dupes = [v for v in violations if "Duplicate" in v.message]
+        assert len(dupes) == 1
+        assert dupes[0].severity == "critical"
+
+    def test_empty_name(self, registry):
+        registry["organs"]["ORGAN-I"]["repositories"].append(
+            {"name": "", "org": "organvm-i-theoria"}
+        )
+        violations = validate_registry_coherence(registry)
+        empty = [v for v in violations if "empty name" in v.message]
+        assert len(empty) == 1
+
+    def test_count_mismatch(self, registry):
+        registry["organs"]["ORGAN-I"]["repository_count"] = 999
+        violations = validate_registry_coherence(registry)
+        count_v = [v for v in violations if "repository_count" in v.message]
+        assert len(count_v) == 1
+        assert count_v[0].severity == "warning"
+
+
+# ── RR-4: README Mandate ─────────────────────────────────────────
+
+
+class TestReadmeMandate:
+    def test_with_docs(self, registry):
+        """Repos with documentation_status pass."""
+        violations = validate_readme_mandate(registry)
+        # Only repos without doc_status should fail
+        for v in violations:
+            assert v.dictum_id == "RR-4"
+
+    def test_empty_doc_status(self, registry):
+        registry["organs"]["ORGAN-I"]["repositories"][0]["documentation_status"] = "EMPTY"
+        violations = validate_readme_mandate(registry)
+        rr4 = [v for v in violations if v.repo == "recursive-engine"]
+        assert len(rr4) == 1
+
+    def test_missing_doc_status(self, registry):
+        del registry["organs"]["ORGAN-I"]["repositories"][0]["documentation_status"]
+        violations = validate_readme_mandate(registry)
+        rr4 = [v for v in violations if v.repo == "recursive-engine"]
+        assert len(rr4) == 1
+
+    def test_archived_skipped(self, registry):
+        registry["organs"]["ORGAN-I"]["repositories"][0]["implementation_status"] = "ARCHIVED"
+        registry["organs"]["ORGAN-I"]["repositories"][0]["documentation_status"] = "EMPTY"
+        violations = validate_readme_mandate(registry)
+        rr4 = [v for v in violations if v.repo == "recursive-engine"]
+        assert rr4 == []
+
+
+# ── RR-5: Promotion Integrity ────────────────────────────────────
+
+
+class TestPromotionIntegrity:
+    def test_valid_states(self, registry):
+        violations = validate_promotion_integrity(registry)
+        assert violations == []
+
+    def test_invalid_state(self, registry):
+        registry["organs"]["ORGAN-I"]["repositories"][0]["promotion_status"] = "BOGUS"
+        violations = validate_promotion_integrity(registry)
+        assert len(violations) == 1
+        assert violations[0].dictum_id == "RR-5"
+        assert "BOGUS" in violations[0].message
+
+
+# ── OD-V: Logos Write Scope ──────────────────────────────────────
+
+
+class TestLogosWriteScope:
+    def test_no_workspace(self, registry):
+        violations = validate_logos_write_scope(registry)
+        assert violations == []
+
+    def test_no_organ_v(self, registry, tmp_path):
+        """Registry without ORGAN-V returns no violations."""
+        violations = validate_logos_write_scope(registry, workspace=tmp_path)
+        assert violations == []
+
+    def test_produces_to_external(self, registry, tmp_path):
+        """ORGAN-V repo producing to ORGAN-III triggers OD-V."""
+        registry["organs"]["ORGAN-V"] = {
+            "name": "Logos",
+            "repositories": [{
+                "name": "public-process",
+                "org": "organvm-v-logos",
+                "implementation_status": "ACTIVE",
+            }],
+        }
+        d = tmp_path / "organvm-v-logos" / "public-process"
+        d.mkdir(parents=True)
+        (d / "seed.yaml").write_text(
+            "organ: ORGAN-V\n"
+            "produces:\n"
+            "  - type: essay\n"
+            "    targets:\n"
+            "      - ORGAN-III\n"
+        )
+        violations = validate_logos_write_scope(registry, workspace=tmp_path)
+        assert len(violations) == 1
+        assert violations[0].dictum_id == "OD-V"
+
+    def test_produces_to_self(self, registry, tmp_path):
+        """ORGAN-V repo producing to ORGAN-V is fine."""
+        registry["organs"]["ORGAN-V"] = {
+            "name": "Logos",
+            "repositories": [{
+                "name": "public-process",
+                "org": "organvm-v-logos",
+                "implementation_status": "ACTIVE",
+            }],
+        }
+        d = tmp_path / "organvm-v-logos" / "public-process"
+        d.mkdir(parents=True)
+        (d / "seed.yaml").write_text(
+            "organ: ORGAN-V\n"
+            "produces:\n"
+            "  - type: essay\n"
+            "    targets:\n"
+            "      - ORGAN-V\n"
+        )
+        violations = validate_logos_write_scope(registry, workspace=tmp_path)
+        assert violations == []
+
+
+# ── OD-VII: Kerygma Consumer ─────────────────────────────────────
+
+
+class TestKerygmaConsumer:
+    def test_no_workspace(self, registry):
+        violations = validate_kerygma_consumer(registry)
+        assert violations == []
+
+    def test_pure_consumer_pass(self, registry, tmp_path):
+        """ORGAN-VII repo with no produces edges passes."""
+        registry["organs"]["ORGAN-VII"] = {
+            "name": "Kerygma",
+            "repositories": [{
+                "name": "posse-pipeline",
+                "org": "organvm-vii-kerygma",
+                "implementation_status": "ACTIVE",
+            }],
+        }
+        d = tmp_path / "organvm-vii-kerygma" / "posse-pipeline"
+        d.mkdir(parents=True)
+        (d / "seed.yaml").write_text(
+            "organ: ORGAN-VII\n"
+            "consumes:\n"
+            "  - source: ORGAN-III\n"
+        )
+        violations = validate_kerygma_consumer(registry, workspace=tmp_path)
+        assert violations == []
+
+    def test_produces_violation(self, registry, tmp_path):
+        """ORGAN-VII repo with produces edges triggers OD-VII."""
+        registry["organs"]["ORGAN-VII"] = {
+            "name": "Kerygma",
+            "repositories": [{
+                "name": "posse-pipeline",
+                "org": "organvm-vii-kerygma",
+                "implementation_status": "ACTIVE",
+            }],
+        }
+        d = tmp_path / "organvm-vii-kerygma" / "posse-pipeline"
+        d.mkdir(parents=True)
+        (d / "seed.yaml").write_text(
+            "organ: ORGAN-VII\n"
+            "produces:\n"
+            "  - type: original-content\n"
+            "    targets:\n"
+            "      - ORGAN-III\n"
+        )
+        violations = validate_kerygma_consumer(registry, workspace=tmp_path)
+        assert len(violations) == 1
+        assert violations[0].dictum_id == "OD-VII"
 
 
 # ── check_all_dictums ────────────────────────────────────────────
