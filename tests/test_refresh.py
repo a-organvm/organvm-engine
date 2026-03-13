@@ -9,8 +9,13 @@ from organvm_engine.cli.refresh import cmd_refresh
 
 
 @pytest.fixture
-def workspace(tmp_path):
+def workspace(tmp_path, monkeypatch):
     """Create a minimal workspace with registry and metrics."""
+    # Prevent resolve_workspace from falling through to the real ~/Workspace
+    # via the ORGANVM_WORKSPACE_DIR env var.
+    monkeypatch.delenv("ORGANVM_WORKSPACE_DIR", raising=False)
+    monkeypatch.delenv("ORGANVM_CORPUS_DIR", raising=False)
+
     corpus = tmp_path / "corpus"
     corpus.mkdir()
 
@@ -47,6 +52,8 @@ def _make_args(reg_path, dry_run=True, **kwargs):
         "skip_organism": True,
         "skip_legacy": True,
         "skip_plans": True,
+        "skip_sop": True,
+        "skip_atoms": True,
     }
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)

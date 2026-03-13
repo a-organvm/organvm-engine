@@ -47,6 +47,7 @@ from organvm_engine.cli.atoms import (
     cmd_atoms_pipeline,
     cmd_atoms_reconcile,
 )
+from organvm_engine.cli.ci import cmd_ci_triage
 from organvm_engine.cli.cmd_audit import (
     cmd_audit_absorption,
     cmd_audit_full,
@@ -54,7 +55,18 @@ from organvm_engine.cli.cmd_audit import (
     cmd_audit_organ,
     cmd_audit_repo,
 )
-from organvm_engine.cli.ci import cmd_ci_triage
+from organvm_engine.cli.cmd_pulse import (
+    cmd_pulse_briefing,
+    cmd_pulse_density,
+    cmd_pulse_ecosystem,
+    cmd_pulse_emit,
+    cmd_pulse_events,
+    cmd_pulse_flow,
+    cmd_pulse_memory,
+    cmd_pulse_mood,
+    cmd_pulse_nerve,
+    cmd_pulse_show,
+)
 from organvm_engine.cli.context import cmd_context_sync
 from organvm_engine.cli.deadlines import cmd_deadlines
 from organvm_engine.cli.dispatch import cmd_dispatch_validate
@@ -1562,6 +1574,135 @@ def build_parser() -> argparse.ArgumentParser:
         help="Workspace root directory",
     )
 
+    # pulse — system nervous system and self-awareness
+    pulse = sub.add_parser(
+        "pulse",
+        help="System pulse: mood, density, events, nervous system",
+    )
+    pulse_sub = pulse.add_subparsers(dest="subcommand")
+
+    pulse_show = pulse_sub.add_parser(
+        "show",
+        help="Current pulse — mood + density + recent events (default)",
+    )
+    pulse_show.add_argument("--json", action="store_true", help="Output JSON")
+
+    pulse_density = pulse_sub.add_parser(
+        "density",
+        help="Interconnection density profile",
+    )
+    pulse_density.add_argument("--json", action="store_true", help="Output JSON")
+
+    pulse_mood = pulse_sub.add_parser(
+        "mood",
+        help="System mood with reasoning",
+    )
+    pulse_mood.add_argument("--json", action="store_true", help="Output JSON")
+
+    pulse_events = pulse_sub.add_parser(
+        "events",
+        help="Event log",
+    )
+    pulse_events.add_argument(
+        "--type",
+        default=None,
+        help="Filter by event type",
+    )
+    pulse_events.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Max events (default 20)",
+    )
+    pulse_events.add_argument(
+        "--since-days",
+        type=int,
+        default=None,
+        help="Only events from last N days",
+    )
+    pulse_events.add_argument("--json", action="store_true", help="Output JSON")
+
+    pulse_nerve = pulse_sub.add_parser(
+        "nerve",
+        help="Subscription wiring map from seed.yaml declarations",
+    )
+    pulse_nerve.add_argument("--json", action="store_true", help="Output JSON")
+
+    pulse_emit = pulse_sub.add_parser(
+        "emit",
+        help="Manually emit an event",
+    )
+    pulse_emit.add_argument("event_type", help="Event type to emit")
+    pulse_emit.add_argument(
+        "--source",
+        default="cli",
+        help="Event source (default: cli)",
+    )
+    pulse_emit.add_argument(
+        "--payload",
+        default=None,
+        help="JSON payload string",
+    )
+    pulse_emit.add_argument("--json", action="store_true", help="Output JSON")
+
+    pulse_briefing = pulse_sub.add_parser(
+        "briefing",
+        help="Session briefing — recent activity summary",
+    )
+    pulse_briefing.add_argument(
+        "--hours",
+        type=int,
+        default=24,
+        help="Lookback window in hours (default 24)",
+    )
+    pulse_briefing.add_argument("--json", action="store_true", help="Output JSON")
+
+    pulse_memory = pulse_sub.add_parser(
+        "memory",
+        help="Cross-agent shared memory store",
+    )
+    pulse_memory.add_argument(
+        "--summary",
+        action="store_true",
+        help="Show aggregate summary instead of listing insights",
+    )
+    pulse_memory.add_argument(
+        "--category",
+        default=None,
+        help="Filter by category (decision/finding/pattern/warning/todo)",
+    )
+    pulse_memory.add_argument(
+        "--agent",
+        default=None,
+        help="Filter by recording agent",
+    )
+    pulse_memory.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Max insights to show (default 20)",
+    )
+    pulse_memory.add_argument("--json", action="store_true", help="Output JSON")
+
+    pulse_flow = pulse_sub.add_parser(
+        "flow",
+        help="Dependency flow — active/warm/dormant edge visualization",
+    )
+    pulse_flow.add_argument(
+        "--hours",
+        type=int,
+        default=168,
+        help="Lookback window in hours (default 168 = 7 days)",
+    )
+    pulse_flow.add_argument("--json", action="store_true", help="Output JSON")
+
+    pulse_ecosystem = pulse_sub.add_parser(
+        "ecosystem",
+        help="Ecosystem universality — archetype coverage across all organs",
+    )
+    pulse_ecosystem.add_argument("--organ", help="Filter by organ key")
+    pulse_ecosystem.add_argument("--json", action="store_true", help="Output JSON")
+
     return parser
 
 
@@ -1751,6 +1892,28 @@ def main() -> int:
         if handler:
             return handler(args)
         parser.parse_args(["session", "--help"])
+        return 0
+    if args.command == "pulse":
+        pulse_dispatch = {
+            "show": cmd_pulse_show,
+            "density": cmd_pulse_density,
+            "mood": cmd_pulse_mood,
+            "events": cmd_pulse_events,
+            "nerve": cmd_pulse_nerve,
+            "emit": cmd_pulse_emit,
+            "briefing": cmd_pulse_briefing,
+            "memory": cmd_pulse_memory,
+            "flow": cmd_pulse_flow,
+            "ecosystem": cmd_pulse_ecosystem,
+        }
+        sub_cmd = getattr(args, "subcommand", "") or ""
+        handler = pulse_dispatch.get(sub_cmd)
+        if handler:
+            return handler(args)
+        # Default to "show" when no subcommand given
+        if not sub_cmd:
+            return cmd_pulse_show(args)
+        parser.parse_args(["pulse", "--help"])
         return 0
 
     subcommand: str | None = getattr(args, "subcommand", None)

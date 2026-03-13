@@ -1,0 +1,20 @@
+date: '2026-03-11'
+snapshot_type: landscape
+competitors:
+  - name: Nx (monorepo orchestration)
+    relevance: Multi-project workspace orchestration with dependency graph and caching
+  - name: Turborepo
+    relevance: Monorepo build system with task graph, relevant as workspace orchestration pattern
+  - name: Pants Build
+    relevance: Python-native multi-project build system with fine-grained dependency tracking
+market_context: >-
+  Core Python engine for the 8-organ creative-institutional system.
+  Provides registry, governance, seed discovery, metrics, dispatch, and
+  git superproject management across 100+ repos. Comparable to internal
+  platform engineering tools — workspace-scale orchestration with
+  promotion state machines and cross-repo dependency validation.
+trends:
+  - Internal developer platforms (IDPs) consolidating around Backstage-style catalogs
+  - AI-assisted code generation driving need for multi-repo governance tooling
+  - Python CLI frameworks (Click, Typer) maturing for complex workspace management
+notes: "Initial snapshot — baseline for staleness tracking"

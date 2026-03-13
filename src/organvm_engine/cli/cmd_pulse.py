@@ -1,0 +1,675 @@
+"""CLI handler for the pulse command group."""
+
+from __future__ import annotations
+
+import json
+import sys
+from argparse import Namespace
+from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
+
+
+def _resolve_workspace_path(args: Namespace):
+    """Resolve workspace from args/env/default."""
+    from pathlib import Path
+
+    raw = getattr(args, "workspace", None)
+    if raw:
+        return Path(raw).expanduser().resolve()
+    import os
+
+    env = os.environ.get("ORGANVM_WORKSPACE_DIR")
+    if env:
+        return Path(env).expanduser().resolve()
+    default = Path.home() / "Workspace"
+    return default if default.is_dir() else None
+
+
+def _compute_pulse_data(args: Namespace):
+    """Shared computation: organism + seed graph + density + mood + events.
+
+    Returns (organism, graph, unresolved, density_point, mood_result, recent_events)
+    or raises on failure.
+    """
+    from organvm_engine.metrics.organism import get_organism
+    from organvm_engine.pulse.affective import MoodFactors, compute_mood
+    from organvm_engine.pulse.density import compute_density
+    from organvm_engine.pulse.events import recent
+    from organvm_engine.seed.graph import build_seed_graph, validate_edge_resolution
+
+    organism = get_organism(include_omega=False)
+
+    workspace = _resolve_workspace_path(args)
+    graph = build_seed_graph(workspace)
+    unresolved = validate_edge_resolution(graph)
+
+    dp = compute_density(graph, organism, len(unresolved))
+
+    # Mood factors from organism + density
+    total = organism.total_repos or 1
+    total_stale = organism.total_stale
+    gate_stats = organism.gate_stats()
+    avg_gate_rate = (
+        sum(g.rate for g in gate_stats) / len(gate_stats) if gate_stats else 0.0
+    )
+
+    factors = MoodFactors(
+        health_pct=organism.sys_pct,
+        health_velocity=0.0,
+        stale_ratio=total_stale / total,
+        stale_velocity=0.0,
+        density_score=dp.interconnection_score,
+        gate_pass_rate=avg_gate_rate,
+        promo_ready_ratio=organism.total_promo_ready / total,
+        session_frequency=0.0,
+    )
+
+    mood_result = compute_mood(factors)
+    recent_events = recent(10)
+
+    return organism, graph, unresolved, dp, mood_result, recent_events, factors
+
+
+# ---------------------------------------------------------------------------
+# Bar chart helper
+# ---------------------------------------------------------------------------
+
+_BAR_FILLED = "\u2588"
+_BAR_EMPTY = "\u2591"
+
+
+def _bar(pct: float, width: int = 20) -> str:
+    """Render a percentage as a filled bar."""
+    clamped = max(0.0, min(100.0, pct))
+    filled = int(width * clamped / 100)
+    return _BAR_FILLED * filled + _BAR_EMPTY * (width - filled)
+
+
+# ---------------------------------------------------------------------------
+# cmd_pulse_show
+# ---------------------------------------------------------------------------
+
+def cmd_pulse_show(args: Namespace) -> int:
+    """Default pulse view — mood, density, recent events."""
+    try:
+        organism, graph, unresolved, dp, mood_result, recent_events, factors = (
+            _compute_pulse_data(args)
+        )
+    except Exception as exc:
+        print(f"Error computing pulse: {exc}", file=sys.stderr)
+        return 1
+
+    use_json = getattr(args, "json", False)
+
+    if use_json:
+        data = {
+            "mood": mood_result.to_dict(),
+            "density": dp.to_dict(),
+            "organism": {
+                "total_repos": organism.total_repos,
+                "sys_pct": organism.sys_pct,
+                "total_promo_ready": organism.total_promo_ready,
+                "total_stale": organism.total_stale,
+            },
+            "recent_events": [asdict(e) for e in recent_events],
+        }
+        json.dump(data, sys.stdout, indent=2, default=str)
+        sys.stdout.write("\n")
+        return 0
+
+    # Human-readable output
+    print()
+    print(f"  {mood_result.mood.glyph}  System Mood: {mood_result.mood.value.upper()}")
+    print(f"     {mood_result.mood.description}")
+    print()
+    for line in mood_result.reasoning:
+        print(f"     \u2022 {line}")
+
+    print()
+    print(f"  Density: {dp.interconnection_score}/100")
+
+    total_possible = len(graph.nodes) * (len(graph.nodes) - 1) if len(graph.nodes) > 1 else 1
+    edge_pct = len(graph.edges) / total_possible * 100 if total_possible else 0.0
+
+    print(f"     Edges: {len(graph.edges)} declared / {total_possible} possible"
+          f" ({edge_pct:.1f}%)")
+
+    # Cross-organ edge count
+    cross_organ = 0
+    outbound_organs: set[str] = set()
+    for src, tgt, _ in graph.edges:
+        src_org = src.split("/")[0] if "/" in src else src
+        tgt_org = tgt.split("/")[0] if "/" in tgt else tgt
+        if src_org != tgt_org:
+            cross_organ += 1
+            outbound_organs.add(src_org)
+            outbound_organs.add(tgt_org)
+
+    print(f"     Cross-organ: {cross_organ} edges, {len(outbound_organs)} organs")
+
+    seed_count = len(graph.nodes)
+    ci_count = sum(1 for r in organism.all_repos if any(
+        g.name == "ci" and g.passed for g in r.gates
+    ))
+    test_count = sum(1 for r in organism.all_repos if any(
+        g.name == "tests" and g.passed for g in r.gates
+    ))
+    total = organism.total_repos
+    print(f"     Coverage: seeds {seed_count}/{total}, CI {ci_count}/{total},"
+          f" tests {test_count}/{total}")
+
+    if recent_events:
+        print()
+        print("  Recent Events:")
+        for evt in recent_events:
+            ts = evt.timestamp[:19] if len(evt.timestamp) >= 19 else evt.timestamp
+            print(f"     [{ts}] {evt.event_type} \u2190 {evt.source}")
+
+    print()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# cmd_pulse_density
+# ---------------------------------------------------------------------------
+
+def cmd_pulse_density(args: Namespace) -> int:
+    """Show interconnection density metrics with per-organ breakdowns."""
+    try:
+        from organvm_engine.metrics.organism import get_organism
+        from organvm_engine.pulse.density import compute_density
+        from organvm_engine.seed.graph import build_seed_graph, validate_edge_resolution
+
+        organism = get_organism(include_omega=False)
+        workspace = _resolve_workspace_path(args)
+        graph = build_seed_graph(workspace)
+        unresolved = validate_edge_resolution(graph)
+        dp = compute_density(graph, organism, len(unresolved))
+    except Exception as exc:
+        print(f"Error computing density: {exc}", file=sys.stderr)
+        return 1
+
+    use_json = getattr(args, "json", False)
+
+    if use_json:
+        json.dump(dp.to_dict(), sys.stdout, indent=2, default=str)
+        sys.stdout.write("\n")
+        return 0
+
+    # Human-readable with per-organ bars
+    print()
+    print(f"  Interconnection Density: {dp.interconnection_score}/100")
+    print(f"  {'─' * 50}")
+    print(f"  Edges:      {dp.declared_edges} declared")
+    print(f"  Unresolved: {dp.unresolved_edges}")
+    print(f"  Seed nodes: {dp.repos_with_seeds}")
+    print()
+
+    # Per-organ bar charts
+    organ_edges: dict[str, int] = {}
+    organ_nodes: dict[str, int] = {}
+    for node in graph.nodes:
+        org = node.split("/")[0] if "/" in node else node
+        organ_nodes[org] = organ_nodes.get(org, 0) + 1
+    for src, _tgt, _ in graph.edges:
+        org = src.split("/")[0] if "/" in src else src
+        organ_edges[org] = organ_edges.get(org, 0) + 1
+
+    max_edges = max(organ_edges.values()) if organ_edges else 1
+    print(f"  {'Organ':<20} {'Edges':>6}  Bar")
+    print(f"  {'─' * 20} {'─' * 6}  {'─' * 20}")
+    for org in sorted(organ_nodes.keys()):
+        count = organ_edges.get(org, 0)
+        pct = count / max_edges * 100 if max_edges else 0.0
+        print(f"  {org:<20} {count:>6}  {_bar(pct)}")
+
+    print()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# cmd_pulse_mood
+# ---------------------------------------------------------------------------
+
+def cmd_pulse_mood(args: Namespace) -> int:
+    """Show the system's affective state with reasoning."""
+    try:
+        organism, _graph, _unresolved, dp, mood_result, _events, factors = (
+            _compute_pulse_data(args)
+        )
+    except Exception as exc:
+        print(f"Error computing mood: {exc}", file=sys.stderr)
+        return 1
+
+    use_json = getattr(args, "json", False)
+
+    if use_json:
+        data = mood_result.to_dict()
+        data["inputs"] = factors.to_dict()
+        json.dump(data, sys.stdout, indent=2, default=str)
+        sys.stdout.write("\n")
+        return 0
+
+    print()
+    print(f"  {mood_result.mood.glyph}  Mood: {mood_result.mood.value.upper()}")
+    print(f"     {mood_result.mood.description}")
+    print()
+    print("  Reasoning:")
+    for line in mood_result.reasoning:
+        print(f"     \u2022 {line}")
+    print()
+    print("  Inputs:")
+    print(f"     Health:           {factors.health_pct}%")
+    print(f"     Health velocity:  {factors.health_velocity:.2f}")
+    print(f"     Stale ratio:     {factors.stale_ratio:.2f}")
+    print(f"     Stale velocity:  {factors.stale_velocity:.2f}")
+    print(f"     Density score:   {factors.density_score}/100")
+    print(f"     Gate pass rate:  {factors.gate_pass_rate:.1f}%")
+    print(f"     Promo ready:     {factors.promo_ready_ratio:.2f}")
+    print(f"     Session freq:    {factors.session_frequency:.2f}")
+    print()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# cmd_pulse_events
+# ---------------------------------------------------------------------------
+
+def cmd_pulse_events(args: Namespace) -> int:
+    """Show the event log, optionally filtered by type and time."""
+    from organvm_engine.pulse.events import replay
+
+    event_type = getattr(args, "type", None)
+    limit = getattr(args, "limit", 20)
+    since_days = getattr(args, "since_days", None)
+
+    since: str | None = None
+    if since_days is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=int(since_days))
+        since = cutoff.isoformat()
+
+    try:
+        events = replay(since=since, event_type=event_type, limit=limit)
+    except Exception as exc:
+        print(f"Error reading events: {exc}", file=sys.stderr)
+        return 1
+
+    use_json = getattr(args, "json", False)
+
+    if use_json:
+        json.dump([asdict(e) for e in events], sys.stdout, indent=2, default=str)
+        sys.stdout.write("\n")
+        return 0
+
+    if not events:
+        print("  No events found.")
+        return 0
+
+    print()
+    print(f"  {'Timestamp':<22} {'Type':<25} {'Source':<12} Payload")
+    print(f"  {'─' * 22} {'─' * 25} {'─' * 12} {'─' * 20}")
+    for evt in events:
+        ts = evt.timestamp[:19] if len(evt.timestamp) >= 19 else evt.timestamp
+        payload_str = json.dumps(evt.payload, separators=(",", ":")) if evt.payload else ""
+        if len(payload_str) > 40:
+            payload_str = payload_str[:37] + "..."
+        print(f"  {ts:<22} {evt.event_type:<25} {evt.source:<12} {payload_str}")
+    print()
+    print(f"  {len(events)} event(s) shown")
+    print()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# cmd_pulse_nerve
+# ---------------------------------------------------------------------------
+
+def cmd_pulse_nerve(args: Namespace) -> int:
+    """Show subscription wiring from seed.yaml event declarations."""
+    try:
+        from organvm_engine.pulse.nerve import resolve_subscriptions
+    except ImportError as exc:
+        print(f"Error: nerve module not available: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        workspace = _resolve_workspace_path(args)
+        bundle = resolve_subscriptions(workspace)
+    except Exception as exc:
+        print(f"Error resolving subscriptions: {exc}", file=sys.stderr)
+        return 1
+
+    use_json = getattr(args, "json", False)
+
+    if use_json:
+        json.dump(bundle.to_dict(), sys.stdout, indent=2, default=str)
+        sys.stdout.write("\n")
+        return 0
+
+    if not bundle.subscriptions:
+        print("  No subscriptions found.")
+        return 0
+
+    total = len(bundle.subscriptions)
+    by_event = bundle.by_event
+
+    print()
+    print(f"  Subscription Wiring: {total} total, {len(by_event)} event types")
+    print(f"  {'─' * 50}")
+    for etype in sorted(by_event.keys()):
+        subs = by_event[etype]
+        print(f"\n  {etype} ({len(subs)} subscriber(s)):")
+        for sub in subs:
+            if sub.action:
+                print(f"     \u2192 {sub.subscriber}  [{sub.action}]")
+            else:
+                print(f"     \u2192 {sub.subscriber}")
+
+    print()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# cmd_pulse_emit
+# ---------------------------------------------------------------------------
+
+def cmd_pulse_emit(args: Namespace) -> int:
+    """Manually emit an event and show who would be notified."""
+    from organvm_engine.pulse.events import emit
+
+    event_type = args.event_type
+    source = getattr(args, "source", "cli") or "cli"
+    payload_str = getattr(args, "payload", None)
+
+    payload: dict = {}
+    if payload_str:
+        try:
+            payload = json.loads(payload_str)
+        except json.JSONDecodeError as exc:
+            print(f"Error: invalid JSON payload: {exc}", file=sys.stderr)
+            return 1
+
+    try:
+        event = emit(event_type, source, payload)
+    except Exception as exc:
+        print(f"Error emitting event: {exc}", file=sys.stderr)
+        return 1
+
+    use_json = getattr(args, "json", False)
+
+    # Resolve subscriptions to show who gets notified
+    notified: list[dict] = []
+    try:
+        from organvm_engine.pulse.nerve import propagate, resolve_subscriptions
+
+        workspace = _resolve_workspace_path(args)
+        bundle = resolve_subscriptions(workspace)
+        notified = propagate(event, bundle)
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    if use_json:
+        data = {
+            "emitted": asdict(event),
+            "notified": notified,
+        }
+        json.dump(data, sys.stdout, indent=2, default=str)
+        sys.stdout.write("\n")
+        return 0
+
+    ts = event.timestamp[:19] if len(event.timestamp) >= 19 else event.timestamp
+    print()
+    print(f"  Emitted: {event.event_type}")
+    print(f"     Source:    {event.source}")
+    print(f"     Time:      {ts}")
+    if event.payload:
+        print(f"     Payload:   {json.dumps(event.payload, separators=(',', ':'))}")
+
+    if notified:
+        print()
+        print(f"  Notified ({len(notified)} subscriber(s)):")
+        for n in notified:
+            subscriber = n.get("subscriber", "?")
+            action = n.get("action", "")
+            if action:
+                print(f"     \u2192 {subscriber}  [{action}]")
+            else:
+                print(f"     \u2192 {subscriber}")
+    else:
+        print()
+        print("  No subscribers matched this event type.")
+
+    print()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# cmd_pulse_briefing
+# ---------------------------------------------------------------------------
+
+def cmd_pulse_briefing(args: Namespace) -> int:
+    """Show a session briefing — recent activity summary for onboarding."""
+    from organvm_engine.pulse.continuity import briefing_to_markdown, build_briefing
+
+    hours = getattr(args, "hours", 24)
+
+    try:
+        briefing = build_briefing(hours=hours)
+    except Exception as exc:
+        print(f"Error building briefing: {exc}", file=sys.stderr)
+        return 1
+
+    use_json = getattr(args, "json", False)
+
+    if use_json:
+        json.dump(briefing.to_dict(), sys.stdout, indent=2, default=str)
+        sys.stdout.write("\n")
+        return 0
+
+    md = briefing_to_markdown(briefing)
+    print(md)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# cmd_pulse_memory
+# ---------------------------------------------------------------------------
+
+def cmd_pulse_memory(args: Namespace) -> int:
+    """Query the cross-agent shared memory store."""
+    from organvm_engine.pulse.shared_memory import (
+        insight_summary,
+        query_insights,
+    )
+
+    use_json = getattr(args, "json", False)
+    show_summary = getattr(args, "summary", False)
+
+    if show_summary:
+        summary = insight_summary()
+        if use_json:
+            json.dump(summary, sys.stdout, indent=2, default=str)
+            sys.stdout.write("\n")
+        else:
+            total = summary.get("total", 0)
+            print()
+            print(f"  Shared Memory: {total} insight(s)")
+            by_cat = summary.get("by_category", {})
+            if by_cat:
+                print("  By category:")
+                for cat, count in sorted(by_cat.items()):
+                    print(f"     {cat}: {count}")
+            by_agent = summary.get("by_agent", {})
+            if by_agent:
+                print("  By agent:")
+                for agent, count in sorted(by_agent.items()):
+                    print(f"     {agent}: {count}")
+            print()
+        return 0
+
+    category = getattr(args, "category", None)
+    agent_filter = getattr(args, "agent", None)
+    limit = getattr(args, "limit", 20)
+
+    try:
+        insights = query_insights(
+            category=category,
+            agent=agent_filter,
+            limit=limit,
+        )
+    except Exception as exc:
+        print(f"Error querying memory: {exc}", file=sys.stderr)
+        return 1
+
+    if use_json:
+        json.dump(
+            [i.to_dict() for i in insights], sys.stdout, indent=2, default=str,
+        )
+        sys.stdout.write("\n")
+        return 0
+
+    if not insights:
+        print("  No insights found.")
+        return 0
+
+    print()
+    for ins in insights:
+        ts = ins.timestamp[:19] if len(ins.timestamp) >= 19 else ins.timestamp
+        scope = ""
+        if ins.organ:
+            scope = f" [{ins.organ}"
+            if ins.repo:
+                scope += f"/{ins.repo}"
+            scope += "]"
+        tags_str = ""
+        if ins.tags:
+            tags_str = f" ({', '.join(ins.tags)})"
+        print(f"  [{ts}] {ins.category} ({ins.agent}){scope}{tags_str}")
+        print(f"     {ins.content}")
+        print()
+
+    print(f"  {len(insights)} insight(s) shown")
+    print()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# cmd_pulse_flow
+# ---------------------------------------------------------------------------
+
+def cmd_pulse_flow(args: Namespace) -> int:
+    """Show dependency flow — which edges are active, warm, or dormant."""
+    from organvm_engine.pulse.flow import compute_flow
+
+    workspace = _resolve_workspace_path(args)
+    hours = getattr(args, "hours", 168)
+
+    try:
+        from organvm_engine.seed.graph import build_seed_graph
+
+        graph = build_seed_graph(workspace)
+        profile = compute_flow(graph, hours=hours)
+    except Exception as exc:
+        print(f"Error computing flow: {exc}", file=sys.stderr)
+        return 1
+
+    use_json = getattr(args, "json", False)
+
+    if use_json:
+        json.dump(profile.to_dict(), sys.stdout, indent=2, default=str)
+        sys.stdout.write("\n")
+        return 0
+
+    print()
+    print(f"  Flow Score: {profile.flow_score}/100")
+    print(f"  Active: {profile.active_count}  "
+          f"Warm: {profile.warm_count}  "
+          f"Dormant: {profile.dormant_count}")
+    print()
+
+    if profile.hotspots:
+        print("  Hotspots (most active edges):")
+        for node in profile.hotspots:
+            print(f"     {node}")
+        print()
+
+    if profile.edges:
+        # Show a compact table of edge activity
+        print(f"  {'Source':<30} {'Target':<30} {'Type':<15} Level")
+        print(f"  {'─' * 30} {'─' * 30} {'─' * 15} {'─' * 10}")
+        for ea in profile.edges:
+            src = ea.source[:29]
+            tgt = ea.target[:29]
+            print(f"  {src:<30} {tgt:<30} {ea.edge_type:<15} {ea.activity_level}")
+        print()
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# cmd_pulse_ecosystem
+# ---------------------------------------------------------------------------
+
+def cmd_pulse_ecosystem(args: Namespace) -> int:
+    """Show ecosystem universality — archetype coverage across all organs."""
+    from organvm_engine.pulse.ecosystem_bridge import ORGAN_ARCHETYPES
+
+    use_json = getattr(args, "json", False)
+    organ_filter = getattr(args, "organ", None)
+
+    try:
+        from organvm_engine.pulse.ecosystem_bridge import compute_ecosystem_coverage
+
+        coverage = compute_ecosystem_coverage(_resolve_workspace_path(args))
+    except Exception as exc:
+        print(f"Error computing ecosystem coverage: {exc}", file=sys.stderr)
+        return 1
+
+    if use_json:
+        json.dump(coverage.to_dict(), sys.stdout, indent=2, default=str)
+        sys.stdout.write("\n")
+        return 0
+
+    d = coverage.to_dict()
+    print()
+    print("  Ecosystem Coverage")
+    print(f"  {'─' * 50}")
+    print(f"  Total repos:          {d['total_repos']}")
+    print(f"  With ecosystem.yaml:  {d['repos_with_ecosystem_yaml']}")
+    print(f"  With inferred context: {d['repos_with_context']}")
+    print(f"  Explicit coverage:    {d['coverage_pct']}%")
+    print(f"  Universal coverage:   {d['universal_coverage_pct']}%")
+    print()
+
+    by_arch = d.get("by_archetype", {})
+    if by_arch:
+        print(f"  {'Archetype':<20} Count")
+        print(f"  {'─' * 20} {'─' * 6}")
+        for arch in sorted(by_arch.keys()):
+            print(f"  {arch:<20} {by_arch[arch]:>5}")
+        print()
+
+    by_organ = d.get("by_organ", {})
+    if by_organ:
+        print(f"  {'Organ':<20} {'Total':>6} {'Ecosystem':>10}")
+        print(f"  {'─' * 20} {'─' * 6} {'─' * 10}")
+        for organ_key in sorted(by_organ.keys()):
+            if organ_filter and organ_key != organ_filter:
+                continue
+            info = by_organ[organ_key]
+            total = info.get("total", 0)
+            eco = info.get("with_ecosystem_yaml", 0)
+            print(f"  {organ_key:<20} {total:>6} {eco:>10}")
+        print()
+
+    # Show archetypes reference
+    print("  Organ Archetypes:")
+    for organ_key, info in sorted(ORGAN_ARCHETYPES.items()):
+        if organ_filter and organ_key != organ_filter:
+            continue
+        print(f"    {organ_key}: {info['archetype']} — {info['pillars']}")
+    print()
+
+    return 0

@@ -1,9 +1,35 @@
 schema_version: '1.0'
 repo: organvm-engine
 organ: META
-display_name: "Core Python package \u2014 governance, registry, seed discovery, metrics,\
-  \ dispatch, and unified CLI for the eight-organ system. Consolidates ~30 standalone\
-  \ scripts into a proper installable package."
+display_name: "Core Python package — governance, registry, seed discovery, metrics, and unified CLI"
+
 delivery:
-- platform: web_app
+- platform: python_library
+  status: live
+  priority: critical
+  notes: "21 domain modules, 590+ tests, installable package"
+  next_action: "Maintain and extend as new domain modules are added"
+- platform: cli_tool
+  status: live
+  priority: critical
+  notes: "organvm CLI with 23 command groups"
+  next_action: "Keep CLI aligned with domain module capabilities"
+
+content:
+- platform: docs_site
+  status: planned
+  priority: high
+  notes: "CLI reference, module architecture, API docs"
+  next_action: "Generate CLI reference from argparse help"
+- platform: blog
   status: not_started
+  priority: low
+  notes: "Technical posts on system engine architecture"
+  next_action: "Write introductory architecture overview"
+
+community:
+- platform: github_discussions
+  status: live
+  priority: medium
+  notes: "Enabled on repo for contributor discussions"
+  next_action: "Monitor and respond to community questions"
