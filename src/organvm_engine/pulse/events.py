@@ -79,6 +79,8 @@ def emit(event_type: str, source: str, payload: dict[str, Any] | None = None) ->
     """Append an event to the JSONL log and return it.
 
     Creates the events directory if it does not exist.
+    Also forwards to the ontologia event bus if available, so that
+    ontologia subscribers see pulse events.
     """
     event = Event(
         event_type=event_type,
@@ -89,6 +91,18 @@ def emit(event_type: str, source: str, payload: dict[str, Any] | None = None) ->
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as f:
         f.write(event.to_json() + "\n")
+
+    # Forward to ontologia bus (best-effort)
+    try:
+        from ontologia.events import bus as ontologia_bus
+        ontologia_bus.emit(
+            event_type=event_type,
+            source=f"pulse:{source}",
+            payload=payload or {},
+        )
+    except ImportError:
+        pass
+
     return event
 
 

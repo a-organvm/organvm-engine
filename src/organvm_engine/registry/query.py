@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter, deque
 from dataclasses import dataclass
-from typing import Iterable, Iterator
+from typing import Any, Iterable, Iterator
 
 from organvm_engine.organ_config import organ_aliases
 
@@ -122,6 +122,70 @@ def find_repo(registry: dict, name: str) -> tuple[str, dict] | None:
     for organ_key, repo in all_repos(registry):
         if repo.get("name") == name:
             return organ_key, repo
+    return None
+
+
+def resolve_entity(
+    name_or_id: str,
+    registry: dict | None = None,
+) -> dict[str, Any] | None:
+    """Resolve an entity by name or UID using ontologia if available.
+
+    Checks the ontologia structural registry first (UID, name, slug, alias),
+    then falls back to the name-based registry lookup.
+
+    Args:
+        name_or_id: Entity UID, display name, slug, or alias.
+        registry: Loaded registry dict (for fallback). If None, only ontologia is checked.
+
+    Returns:
+        Dict with uid, entity_type, display_name, matched_by, and optional
+        registry_entry. Returns None if not found anywhere.
+    """
+    # Try ontologia first
+    try:
+        from ontologia.registry.store import open_store
+
+        store = open_store()
+        resolver = store.resolver()
+        resolved = resolver.resolve(name_or_id)
+        if resolved is not None:
+            name = store.current_name(resolved.identity.uid)
+            result: dict[str, Any] = {
+                "uid": resolved.identity.uid,
+                "entity_type": resolved.identity.entity_type.value,
+                "lifecycle_status": resolved.identity.lifecycle_status.value,
+                "display_name": name.display_name if name else None,
+                "matched_by": resolved.matched_by,
+                "source": "ontologia",
+            }
+            # Enrich with registry data if available
+            if registry and name:
+                reg_match = find_repo(registry, name.display_name)
+                if reg_match:
+                    result["organ_key"] = reg_match[0]
+                    result["registry_entry"] = reg_match[1]
+            return result
+    except ImportError:
+        pass
+    except Exception:
+        pass  # ontologia store might not exist yet
+
+    # Fallback to name-based lookup
+    if registry is not None:
+        match = find_repo(registry, name_or_id)
+        if match:
+            return {
+                "uid": None,
+                "entity_type": "repo",
+                "lifecycle_status": "active",
+                "display_name": name_or_id,
+                "matched_by": "name",
+                "source": "registry",
+                "organ_key": match[0],
+                "registry_entry": match[1],
+            }
+
     return None
 
 

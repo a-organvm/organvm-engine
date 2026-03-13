@@ -111,6 +111,14 @@ from organvm_engine.cli.metrics import (
     cmd_metrics_refresh,
 )
 from organvm_engine.cli.omega import cmd_omega_check, cmd_omega_status, cmd_omega_update
+from organvm_engine.cli.ontologia import (
+    cmd_ontologia_bootstrap,
+    cmd_ontologia_events,
+    cmd_ontologia_history,
+    cmd_ontologia_list,
+    cmd_ontologia_resolve,
+    cmd_ontologia_status,
+)
 from organvm_engine.cli.organism import cmd_organism, cmd_organism_snapshot
 from organvm_engine.cli.pitch import cmd_pitch_generate, cmd_pitch_sync
 from organvm_engine.cli.plans import (
@@ -1574,6 +1582,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Workspace root directory",
     )
 
+    # ontologia — structural registry and entity identity
+    ont = sub.add_parser(
+        "ontologia",
+        help="Structural registry: entity identity, naming, governance",
+    )
+    ont_sub = ont.add_subparsers(dest="subcommand")
+
+    ont_resolve = ont_sub.add_parser("resolve", help="Resolve an entity by name or UID")
+    ont_resolve.add_argument("query", help="Entity name, UID, slug, or alias")
+    ont_resolve.add_argument("--json", action="store_true", help="JSON output")
+
+    ont_list = ont_sub.add_parser("list", help="List entities")
+    ont_list.add_argument("--type", default=None, help="Filter by entity type")
+    ont_list.add_argument("--json", action="store_true", help="JSON output")
+
+    ont_bootstrap = ont_sub.add_parser("bootstrap", help="Bootstrap from registry-v2.json")
+    ont_bootstrap.add_argument("--store-dir", default=None, help="Store directory override")
+
+    ont_history = ont_sub.add_parser("history", help="Show entity name history")
+    ont_history.add_argument("entity", help="Entity name or UID")
+
+    ont_events = ont_sub.add_parser("events", help="Show recent ontologia events")
+    ont_events.add_argument("--limit", type=int, default=20, help="Max events to show")
+
+    ont_sub.add_parser("status", help="Show ontologia store status")
+
     # pulse — system nervous system and self-awareness
     pulse = sub.add_parser(
         "pulse",
@@ -1892,6 +1926,23 @@ def main() -> int:
         if handler:
             return handler(args)
         parser.parse_args(["session", "--help"])
+        return 0
+    if args.command == "ontologia":
+        ontologia_dispatch = {
+            "resolve": cmd_ontologia_resolve,
+            "list": cmd_ontologia_list,
+            "bootstrap": cmd_ontologia_bootstrap,
+            "history": cmd_ontologia_history,
+            "events": cmd_ontologia_events,
+            "status": cmd_ontologia_status,
+        }
+        handler = ontologia_dispatch.get(getattr(args, "subcommand", "") or "")
+        if handler:
+            return handler(args)
+        # Default to status when no subcommand given
+        if not (getattr(args, "subcommand", "") or ""):
+            return cmd_ontologia_status(args)
+        parser.parse_args(["ontologia", "--help"])
         return 0
     if args.command == "pulse":
         pulse_dispatch = {
