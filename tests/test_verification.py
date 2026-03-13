@@ -165,7 +165,7 @@ class TestContractRegistry:
                 )
 
     def test_eight_contracts_registered(self):
-        assert len(CONTRACTS) == 8
+        assert len(CONTRACTS) == 10
 
     def test_theory_published_contract(self):
         c = CONTRACTS["theory.published"]

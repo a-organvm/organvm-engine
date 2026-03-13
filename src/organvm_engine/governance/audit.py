@@ -135,7 +135,7 @@ def run_audit(
                     if days_in_incubation > 14:
                         result.critical.append(
                             f"{organ_key}/{name}: incubation expired ({days_in_incubation} days, max 14). "
-                            "Graduate or Archive immediately."
+                            "Graduate or Archive immediately.",
                         )
                 except ValueError:
                     pass  # Handled by staleness check below

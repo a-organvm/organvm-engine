@@ -82,10 +82,7 @@ def cmd_governance_dictums(args: argparse.Namespace) -> int:
     from organvm_engine.governance.rules import load_governance_rules
 
     rules_path = args.rules if hasattr(args, "rules") and args.rules else None
-    if rules_path:
-        rules = load_governance_rules(rules_path)
-    else:
-        rules = load_governance_rules()
+    rules = load_governance_rules(rules_path) if rules_path else load_governance_rules()
 
     dictums_data = get_dictums(rules)
     if not dictums_data:

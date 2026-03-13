@@ -1,7 +1,7 @@
 """Taxis Dispatch Receiver — secure, idempotent orchestration entry point.
 
 Governed by: SOP--formal-methods-applied-protocols.md
-Strata: 
+Strata:
 - Stratum I (Hoare Logic): Contract verification via contracts.py
 - Stratum I (Linear Logic): Idempotency via idempotency.py
 """
@@ -32,7 +32,7 @@ class WebhookReceiver:
 
     def receive(self, envelope: dict[str, Any]) -> dict[str, Any]:
         """Process an incoming dispatch envelope with formal proofs.
-        
+
         Invariant: {P} C {Q}
         P: Contract validation matches schema.
         C: Logic execution.
@@ -52,15 +52,16 @@ class WebhookReceiver:
         if not contract_result.passed:
             # Manually record as rejected if it's not already in there
             if not self.ledger.is_known(dispatch_id):
-                from organvm_engine.verification.idempotency import LedgerEntry
                 import time
+
+                from organvm_engine.verification.idempotency import LedgerEntry
                 entry = LedgerEntry(
                     dispatch_id=dispatch_id,
                     event=event_type,
                     source=source,
                     target=target,
                     timestamp=time.time(),
-                    status="rejected"
+                    status="rejected",
                 )
                 self.ledger._ensure_loaded()[dispatch_id] = entry
                 self.ledger._append(entry)
@@ -68,7 +69,7 @@ class WebhookReceiver:
                 self.ledger.reject(dispatch_id)
 
             raise FormalVerificationError(
-                f"Contract pre-condition failed for {event_type}: {', '.join(contract_result.errors)}"
+                f"Contract pre-condition failed for {event_type}: {', '.join(contract_result.errors)}",
             )
 
         # 2. Stratum I: Linear Logic (Resource Consumption / Idempotency)
@@ -77,7 +78,7 @@ class WebhookReceiver:
             dispatch_id=dispatch_id,
             event=event_type,
             source=source,
-            target=target
+            target=target,
         )
 
         if not recorded:
@@ -85,13 +86,12 @@ class WebhookReceiver:
             if status == "consumed":
                 logger.info(f"Ignoring duplicate dispatch {dispatch_id} (already consumed).")
                 return {"status": "ignored", "reason": "duplicate", "dispatch_id": dispatch_id}
-            else:
-                logger.warning(f"Re-processing pending/rejected dispatch {dispatch_id}.")
+            logger.warning(f"Re-processing pending/rejected dispatch {dispatch_id}.")
 
         # 3. Stratum II: Command {C} (Simulation of orchestration routing)
         # In a real scenario, this would trigger sub-agents or specific organ webhooks.
         logger.info(f"Orchestrating {event_type} from {source} to {target} [{dispatch_id}]")
-        
+
         # 4. Stratum I: Post-condition {Q}
         consumed = self.ledger.consume(dispatch_id)
         if not consumed:
@@ -101,7 +101,7 @@ class WebhookReceiver:
             "status": "success",
             "dispatch_id": dispatch_id,
             "event": event_type,
-            "verification": "formal_contract_pass"
+            "verification": "formal_contract_pass",
         }
 
 def handle_webhook(payload: dict[str, Any]) -> dict[str, Any]:

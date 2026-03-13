@@ -146,7 +146,10 @@ def generate_agents_section(
     subs = []
     if seed:
         for s in seed.get("subscriptions", []) or []:
-            subs.append(f"- Event: `{s.get('event')}` → Action: {s.get('action')}")
+            if isinstance(s, dict):
+                subs.append(f"- Event: `{s.get('event')}` → Action: {s.get('action')}")
+            else:
+                subs.append(f"- Event: `{s}`")
     subs_block = "\n".join(subs) if subs else "- *No active event subscriptions*"
 
     # Format produces/consumes for agents
