@@ -425,6 +425,24 @@ def punch_in(
     if capacity_warning:
         result["capacity_warning"] = capacity_warning
 
+    # Emit coordination event
+    try:
+        from organvm_engine.pulse.emitter import emit_engine_event
+        from organvm_engine.pulse.types import AGENT_PUNCHED_IN
+
+        emit_engine_event(
+            event_type=AGENT_PUNCHED_IN,
+            source="coordination",
+            payload={
+                "handle": handle,
+                "agent": agent,
+                "resource_weight": resource_weight,
+                "areas": result["areas"],
+            },
+        )
+    except Exception:
+        pass
+
     return result
 
 
@@ -485,6 +503,24 @@ def punch_out(claim_id: str) -> dict[str, Any]:
             f"{len(found.test_obligations)} test obligation(s) deferred. "
             "Run organvm_prove_sweep to execute all pending tests."
         )
+
+    # Emit punch-out event
+    try:
+        from organvm_engine.pulse.emitter import emit_engine_event
+        from organvm_engine.pulse.types import AGENT_PUNCHED_OUT
+
+        emit_engine_event(
+            event_type=AGENT_PUNCHED_OUT,
+            source="coordination",
+            payload={
+                "handle": found.handle,
+                "agent": found.agent,
+                "claim_id": claim_id,
+            },
+        )
+    except Exception:
+        pass
+
     return result
 
 

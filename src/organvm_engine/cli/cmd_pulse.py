@@ -673,3 +673,165 @@ def cmd_pulse_ecosystem(args: Namespace) -> int:
     print()
 
     return 0
+
+
+# ---------------------------------------------------------------------------
+# cmd_pulse_scan
+# ---------------------------------------------------------------------------
+
+def cmd_pulse_scan(args: Namespace) -> int:
+    """Run all sensors, compute AMMOI, store snapshot."""
+    from organvm_engine.pulse.rhythm import pulse_once
+
+    workspace = _resolve_workspace_path(args)
+    run_sensors = not getattr(args, "no_sensors", False)
+    use_json = getattr(args, "json", False)
+
+    try:
+        ammoi = pulse_once(workspace=workspace, run_sensors=run_sensors)
+    except Exception as exc:
+        print(f"Error during pulse scan: {exc}", file=sys.stderr)
+        return 1
+
+    if use_json:
+        json.dump(ammoi.to_dict(), sys.stdout, indent=2, default=str)
+        sys.stdout.write("\n")
+        return 0
+
+    print()
+    print(f"  Pulse #{ammoi.pulse_count + 1} complete")
+    print(f"  System density: {ammoi.system_density:.1%}")
+    print(f"  Entities: {ammoi.total_entities}")
+    print(f"  Active edges: {ammoi.active_edges}")
+    print(f"  Events (24h): {ammoi.event_frequency_24h}")
+
+    if ammoi.density_delta_24h:
+        sign = "+" if ammoi.density_delta_24h > 0 else ""
+        print(f"  Delta (24h): {sign}{ammoi.density_delta_24h:.1%}")
+
+    print()
+    print(f"  {ammoi.compressed_text}")
+    print()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# cmd_pulse_ammoi
+# ---------------------------------------------------------------------------
+
+def cmd_pulse_ammoi(args: Namespace) -> int:
+    """Show AMMOI density snapshot at system, organ, or repo scale."""
+    from organvm_engine.pulse.ammoi import compute_ammoi
+
+    workspace = _resolve_workspace_path(args)
+    organ_filter = getattr(args, "organ", None)
+    repo_filter = getattr(args, "repo", None)
+    use_json = getattr(args, "json", False)
+
+    try:
+        ammoi = compute_ammoi(workspace=workspace)
+    except Exception as exc:
+        print(f"Error computing AMMOI: {exc}", file=sys.stderr)
+        return 1
+
+    if use_json:
+        if organ_filter and organ_filter in ammoi.organs:
+            json.dump(ammoi.organs[organ_filter].to_dict(), sys.stdout, indent=2)
+        else:
+            json.dump(ammoi.to_dict(), sys.stdout, indent=2, default=str)
+        sys.stdout.write("\n")
+        return 0
+
+    # Human-readable
+    print()
+    print(f"  AMMOI — System Density: {ammoi.system_density:.1%}")
+    print(f"  {'─' * 50}")
+    print(f"  Entities:  {ammoi.total_entities}")
+    print(f"  Edges:     {ammoi.active_edges}")
+    print(f"  Events:    {ammoi.event_frequency_24h} (24h)")
+
+    if ammoi.density_delta_24h or ammoi.density_delta_7d:
+        print()
+        print("  Temporal:")
+        if ammoi.density_delta_24h:
+            s = "+" if ammoi.density_delta_24h > 0 else ""
+            print(f"     Δ24h: {s}{ammoi.density_delta_24h:.1%}")
+        if ammoi.density_delta_7d:
+            s = "+" if ammoi.density_delta_7d > 0 else ""
+            print(f"     Δ7d:  {s}{ammoi.density_delta_7d:.1%}")
+        if ammoi.density_delta_30d:
+            s = "+" if ammoi.density_delta_30d > 0 else ""
+            print(f"     Δ30d: {s}{ammoi.density_delta_30d:.1%}")
+
+    print()
+    if ammoi.organs:
+        print(f"  {'Organ':<20} {'Repos':>6} {'Edges':>8} {'Gate%':>6} {'Density':>8}")
+        print(f"  {'─' * 20} {'─' * 6} {'─' * 8} {'─' * 6} {'─' * 8}")
+        for oid in sorted(ammoi.organs.keys()):
+            od = ammoi.organs[oid]
+            if organ_filter and oid != organ_filter:
+                continue
+            total_edges = od.internal_edges + od.cross_edges
+            print(
+                f"  {oid:<20} {od.repo_count:>6} {total_edges:>8} "
+                f"{od.avg_gate_pct:>5}% {od.density:>7.1%}"
+            )
+        print()
+
+    print(f"  {ammoi.compressed_text}")
+    print()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# cmd_pulse_history
+# ---------------------------------------------------------------------------
+
+def cmd_pulse_history(args: Namespace) -> int:
+    """Show AMMOI history for temporal analysis."""
+    from organvm_engine.pulse.rhythm import pulse_history
+
+    days = getattr(args, "days", 30)
+    use_json = getattr(args, "json", False)
+
+    try:
+        snapshots = pulse_history(days=days)
+    except Exception as exc:
+        print(f"Error reading history: {exc}", file=sys.stderr)
+        return 1
+
+    if use_json:
+        json.dump(snapshots, sys.stdout, indent=2, default=str)
+        sys.stdout.write("\n")
+        return 0
+
+    if not snapshots:
+        print("  No AMMOI history found. Run `organvm pulse scan` to start.")
+        return 0
+
+    print()
+    print(f"  AMMOI History — last {days} days ({len(snapshots)} snapshots)")
+    print(f"  {'─' * 60}")
+    print(f"  {'Timestamp':<22} {'Density':>8} {'Entities':>9} {'Edges':>7} {'Ev24h':>6}")
+    print(f"  {'─' * 22} {'─' * 8} {'─' * 9} {'─' * 7} {'─' * 6}")
+
+    for snap in snapshots:
+        ts = snap.get("timestamp", "")[:19]
+        density = snap.get("system_density", 0.0)
+        entities = snap.get("total_entities", 0)
+        edges = snap.get("active_edges", 0)
+        ev24h = snap.get("event_frequency_24h", 0)
+        print(f"  {ts:<22} {density:>7.1%} {entities:>9} {edges:>7} {ev24h:>6}")
+
+    # Trend summary
+    if len(snapshots) >= 2:
+        first = snapshots[0].get("system_density", 0.0)
+        last = snapshots[-1].get("system_density", 0.0)
+        delta = last - first
+        direction = "↑" if delta > 0 else "↓" if delta < 0 else "→"
+        sign = "+" if delta > 0 else ""
+        print()
+        print(f"  Trend: {direction} {sign}{delta:.1%} over {len(snapshots)} snapshots")
+
+    print()
+    return 0

@@ -205,6 +205,15 @@ ATOMS_NOT_RUN_HINT = """\
 Run `organvm atoms pipeline --write && organvm atoms fanout --write` to generate task queue.
 """
 
+AMMOI_SECTION = """\
+
+## System Density (auto-generated)
+
+AMMOI: {density_pct} | Edges: {edges} | Tensions: {tensions} | Events(24h): {events_24h}
+Organ density: {organ_density_line}
+Last pulse: {last_pulse} | Δ24h: {delta_24h} | Δ7d: {delta_7d}
+"""
+
 ONTOLOGIA_STATUS_SECTION = """\
 
 ## Entity Identity (Ontologia)

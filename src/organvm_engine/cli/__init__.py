@@ -56,15 +56,18 @@ from organvm_engine.cli.cmd_audit import (
     cmd_audit_repo,
 )
 from organvm_engine.cli.cmd_pulse import (
+    cmd_pulse_ammoi,
     cmd_pulse_briefing,
     cmd_pulse_density,
     cmd_pulse_ecosystem,
     cmd_pulse_emit,
     cmd_pulse_events,
     cmd_pulse_flow,
+    cmd_pulse_history,
     cmd_pulse_memory,
     cmd_pulse_mood,
     cmd_pulse_nerve,
+    cmd_pulse_scan,
     cmd_pulse_show,
 )
 from organvm_engine.cli.context import cmd_context_sync
@@ -1774,6 +1777,37 @@ def build_parser() -> argparse.ArgumentParser:
     pulse_ecosystem.add_argument("--organ", help="Filter by organ key")
     pulse_ecosystem.add_argument("--json", action="store_true", help="Output JSON")
 
+    pulse_scan = pulse_sub.add_parser(
+        "scan",
+        help="Run all sensors, emit events, compute AMMOI",
+    )
+    pulse_scan.add_argument("--json", action="store_true", help="Output JSON")
+    pulse_scan.add_argument(
+        "--no-sensors",
+        action="store_true",
+        help="Skip sensor scan, only compute AMMOI",
+    )
+
+    pulse_ammoi = pulse_sub.add_parser(
+        "ammoi",
+        help="Show AMMOI density snapshot (system/organ/repo scale)",
+    )
+    pulse_ammoi.add_argument("--organ", help="Show organ-level density")
+    pulse_ammoi.add_argument("--repo", help="Show entity-level density")
+    pulse_ammoi.add_argument("--json", action="store_true", help="Output JSON")
+
+    pulse_history = pulse_sub.add_parser(
+        "history",
+        help="Temporal AMMOI density trend",
+    )
+    pulse_history.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        help="Lookback window in days (default 30)",
+    )
+    pulse_history.add_argument("--json", action="store_true", help="Output JSON")
+
     return parser
 
 
@@ -2000,6 +2034,9 @@ def main() -> int:
             "memory": cmd_pulse_memory,
             "flow": cmd_pulse_flow,
             "ecosystem": cmd_pulse_ecosystem,
+            "scan": cmd_pulse_scan,
+            "ammoi": cmd_pulse_ammoi,
+            "history": cmd_pulse_history,
         }
         sub_cmd = getattr(args, "subcommand", "") or ""
         handler = pulse_dispatch.get(sub_cmd)

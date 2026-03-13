@@ -50,4 +50,23 @@ def update_repo(
 
     old_value = repo.get(field, "<unset>")
     repo[field] = value
+
+    # Emit registry update event
+    try:
+        from organvm_engine.pulse.emitter import emit_engine_event
+        from organvm_engine.pulse.types import REGISTRY_UPDATED
+
+        emit_engine_event(
+            event_type=REGISTRY_UPDATED,
+            source="registry",
+            subject_entity=repo_name,
+            payload={
+                "field": field,
+                "old_value": str(old_value),
+                "new_value": str(value),
+            },
+        )
+    except Exception:
+        pass
+
     return True, f"{repo_name}.{field}: {old_value} -> {value}"

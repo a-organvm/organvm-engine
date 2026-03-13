@@ -576,6 +576,22 @@ def evaluate_all(
         organ_name = organ_data.get("name", organ_id)
         for entry in organ_data.get("repositories", []):
             results.append(evaluate_repo(entry, organ_id, organ_name, workspace))
+
+    # Emit batch gate evaluation event
+    try:
+        from organvm_engine.pulse.emitter import emit_engine_event
+        from organvm_engine.pulse.types import GATE_EVALUATED
+
+        total = len(results)
+        avg_pct = int(sum(r.pct for r in results) / total) if total else 0
+        emit_engine_event(
+            event_type=GATE_EVALUATED,
+            source="metrics",
+            payload={"total_repos": total, "avg_pct": avg_pct},
+        )
+    except Exception:
+        pass
+
     return results
 
 

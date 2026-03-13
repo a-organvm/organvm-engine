@@ -255,11 +255,31 @@ def compute_organism(
         scorecard = eval_omega(registry=registry)
         omega = scorecard.to_dict()
 
-    return SystemOrganism(
+    organism = SystemOrganism(
         organs=organs,
         generated=datetime.now(timezone.utc).isoformat(),
         omega=omega,
     )
+
+    # Emit organism computed event
+    try:
+        from organvm_engine.pulse.emitter import emit_engine_event
+        from organvm_engine.pulse.types import ORGANISM_COMPUTED
+
+        emit_engine_event(
+            event_type=ORGANISM_COMPUTED,
+            source="metrics",
+            payload={
+                "sys_pct": organism.sys_pct,
+                "total_repos": organism.total_repos,
+                "total_stale": organism.total_stale,
+                "total_promo_ready": organism.total_promo_ready,
+            },
+        )
+    except Exception:
+        pass
+
+    return organism
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ from organvm_engine.contextmd.generator import (
     generate_organ_section,
     generate_repo_section,
     generate_workspace_section,
+    precompute_ammoi,
 )
 
 
@@ -64,6 +65,9 @@ def sync_all(
     from organvm_engine.sop.resolver import resolve_all as resolve_all_sops
 
     all_sops = discover_sops(workspace=ws)
+
+    # Pre-compute AMMOI once for all context files
+    precompute_ammoi()
 
     updated = []
     created = []
@@ -165,13 +169,33 @@ def sync_all(
         except Exception as e:
             errors.append({"path": str(ws / filename), "error": str(e)})
 
-    return {
+    result = {
         "updated": updated,
         "created": created,
         "skipped": skipped,
         "errors": errors,
         "dry_run": dry_run,
     }
+
+    # Emit context sync event
+    if not dry_run:
+        try:
+            from organvm_engine.pulse.emitter import emit_engine_event
+            from organvm_engine.pulse.types import CONTEXT_SYNCED
+
+            emit_engine_event(
+                event_type=CONTEXT_SYNCED,
+                source="contextmd",
+                payload={
+                    "updated_count": len(updated),
+                    "created_count": len(created),
+                    "error_count": len(errors),
+                },
+            )
+        except Exception:
+            pass
+
+    return result
 
 
 def sync_repo(

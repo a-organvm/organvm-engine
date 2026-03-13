@@ -1,11 +1,15 @@
 """Pulse module — the system's nervous system and self-awareness layer.
 
-Nine sub-layers:
+Twelve sub-layers:
     events      File-based event bus (append-only JSONL)
+    types       Engine-specific event type constants
+    emitter     Unified bridge to ontologia's event bus
     heartbeat   Organism diffing (what changed between snapshots)
     temporal    Time awareness (velocity, acceleration, trend detection)
     affective   System mood (qualitative health summary)
     density     Interconnectedness measurement (edge saturation, coverage)
+    ammoi       Adaptive Macro-Micro Ontological Index (multi-scale density)
+    rhythm      Pulse cycle orchestration (scan → compute → store → emit)
     nerve       Subscription wiring (seed-declared event subscriptions)
     continuity  Session briefing (what happened recently)
     shared_memory  Cross-agent knowledge store
@@ -27,6 +31,8 @@ from organvm_engine.pulse.density import (
     DensityProfile,
     compute_density,
 )
+from organvm_engine.pulse.emitter import emit_engine_event
+from organvm_engine.pulse.types import ALL_ENGINE_EVENT_TYPES
 from organvm_engine.pulse.ecosystem_bridge import (
     ORGAN_ARCHETYPES,
     EcosystemCoverage,
@@ -144,6 +150,9 @@ __all__ = [
     "query_insights",
     "recent_insights",
     "record_insight",
+    # emitter
+    "ALL_ENGINE_EVENT_TYPES",
+    "emit_engine_event",
     # ecosystem_bridge
     "EcosystemCoverage",
     "ORGAN_ARCHETYPES",

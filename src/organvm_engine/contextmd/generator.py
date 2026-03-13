@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 from organvm_engine.contextmd.templates import (
     AGENTS_SECTION,
+    AMMOI_SECTION,
     ATOMS_NOT_RUN_HINT,
     ATOMS_REPO_QUEUE_SECTION,
     ECOSYSTEM_STATUS_SECTION,
@@ -126,6 +127,9 @@ def generate_repo_section(
             injected += "\n" + atoms_section
         if ontologia_section:
             injected += "\n" + ontologia_section
+        ammoi_section = _build_ammoi_context()
+        if ammoi_section:
+            injected += "\n" + ammoi_section
         section = section.replace(
             end_marker,
             injected + "\n" + end_marker,
@@ -513,6 +517,52 @@ def _build_ontologia_context(repo_name: str) -> str:
         )
     except Exception:
         return ""
+
+
+# Module-level AMMOI cache for context sync (computed once per sync_all)
+_ammoi_cache: dict = {"ammoi": None}
+
+
+def precompute_ammoi() -> None:
+    """Pre-compute AMMOI for context injection. Called once per sync_all."""
+    try:
+        from organvm_engine.pulse.ammoi import compute_ammoi
+
+        _ammoi_cache["ammoi"] = compute_ammoi(include_events=True)
+    except Exception:
+        _ammoi_cache["ammoi"] = None
+
+
+def _build_ammoi_context() -> str:
+    """Build the AMMOI density line for context injection."""
+    ammoi = _ammoi_cache.get("ammoi")
+    if ammoi is None:
+        return ""
+
+    organ_parts = []
+    for oid in sorted(ammoi.organs.keys()):
+        od = ammoi.organs[oid]
+        organ_parts.append(f"{oid}:{od.density:.0%}")
+    organ_line = ", ".join(organ_parts[:4])
+    if len(organ_parts) > 4:
+        organ_line += f" +{len(organ_parts) - 4} more"
+
+    d24h = ammoi.density_delta_24h
+    d7d = ammoi.density_delta_7d
+    d24h_str = f"{'+' if d24h > 0 else ''}{d24h:.1%}" if d24h else "n/a"
+    d7d_str = f"{'+' if d7d > 0 else ''}{d7d:.1%}" if d7d else "n/a"
+    ts = ammoi.timestamp[:19] if len(ammoi.timestamp) >= 19 else ammoi.timestamp
+
+    return AMMOI_SECTION.format(
+        density_pct=f"{ammoi.system_density:.0%}",
+        edges=ammoi.active_edges,
+        tensions=ammoi.tension_count,
+        events_24h=ammoi.event_frequency_24h,
+        organ_density_line=organ_line,
+        last_pulse=ts,
+        delta_24h=d24h_str,
+        delta_7d=d7d_str,
+    )
 
 
 def _build_prompting_hint(agent: str | None) -> str:

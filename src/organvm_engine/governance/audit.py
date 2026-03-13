@@ -221,4 +221,21 @@ def run_audit(
         except Exception as exc:
             result.info.append(f"CI mandate check skipped: {exc}")
 
+    # Emit audit event
+    try:
+        from organvm_engine.pulse.emitter import emit_engine_event
+        from organvm_engine.pulse.types import AUDIT_COMPLETED
+
+        emit_engine_event(
+            event_type=AUDIT_COMPLETED,
+            source="governance",
+            payload={
+                "passed": result.passed,
+                "critical_count": len(result.critical),
+                "warning_count": len(result.warnings),
+            },
+        )
+    except Exception:
+        pass
+
     return result

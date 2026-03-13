@@ -44,3 +44,26 @@ def check_transition(current_state: str, target_state: str) -> tuple[bool, str]:
         f"Cannot transition {current_state} -> {target_state}. "
         f"Valid targets: {', '.join(valid) if valid else 'none (terminal state)'}"
     )
+
+
+def emit_promotion_event(
+    repo_name: str,
+    previous_state: str,
+    new_state: str,
+) -> None:
+    """Emit a promotion change event to the unified bus."""
+    try:
+        from organvm_engine.pulse.emitter import emit_engine_event
+        from organvm_engine.pulse.types import PROMOTION_CHANGED
+
+        emit_engine_event(
+            event_type=PROMOTION_CHANGED,
+            source="governance",
+            subject_entity=repo_name,
+            payload={
+                "previous_state": previous_state,
+                "new_state": new_state,
+            },
+        )
+    except Exception:
+        pass

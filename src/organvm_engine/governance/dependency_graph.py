@@ -142,4 +142,23 @@ def validate_dependencies(registry: dict) -> DependencyResult:
             cross[f"{from_org} -> {to_org}"] += 1
     result.cross_organ = dict(cross)
 
+    # Emit violation events if any found
+    if not result.passed:
+        try:
+            from organvm_engine.pulse.emitter import emit_engine_event
+            from organvm_engine.pulse.types import DEPENDENCY_VIOLATION
+
+            emit_engine_event(
+                event_type=DEPENDENCY_VIOLATION,
+                source="governance",
+                payload={
+                    "back_edges": len(result.back_edges),
+                    "cycles": len(result.cycles),
+                    "missing_targets": len(result.missing_targets),
+                    "violations": result.violations[:10],
+                },
+            )
+        except Exception:
+            pass
+
     return result

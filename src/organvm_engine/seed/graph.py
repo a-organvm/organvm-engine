@@ -144,4 +144,21 @@ def validate_edge_resolution(graph: SeedGraph | None = None) -> list[dict]:
                     entry["source"] = source
                 unresolved.append(entry)
 
+    # Emit unresolved consumer events
+    if unresolved:
+        try:
+            from organvm_engine.pulse.emitter import emit_engine_event
+            from organvm_engine.pulse.types import SEED_UNRESOLVED
+
+            emit_engine_event(
+                event_type=SEED_UNRESOLVED,
+                source="seed",
+                payload={
+                    "unresolved_count": len(unresolved),
+                    "consumers": [u["consumer"] for u in unresolved[:10]],
+                },
+            )
+        except Exception:
+            pass
+
     return unresolved
