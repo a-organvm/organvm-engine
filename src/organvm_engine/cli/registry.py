@@ -10,6 +10,7 @@ from organvm_engine.registry.query import (
     get_repo_dependencies,
     get_repo_dependents,
     list_repos,
+    resolve_entity,
     search_repos,
     sort_repo_results,
     summarize_registry,
@@ -20,12 +21,15 @@ from organvm_engine.registry.validator import validate_registry
 
 def cmd_registry_show(args: argparse.Namespace) -> int:
     registry = load_registry(args.registry)
-    result = find_repo(registry, args.repo)
-    if not result:
-        print(f"ERROR: Repo '{args.repo}' not found in registry")
-        return 1
-
-    organ_key, repo = result
+    resolved = resolve_entity(args.repo, registry=registry)
+    if resolved and resolved.get("registry_entry"):
+        organ_key, repo = resolved["organ_key"], resolved["registry_entry"]
+    else:
+        result = find_repo(registry, args.repo)
+        if not result:
+            print(f"ERROR: Repo '{args.repo}' not found in registry")
+            return 1
+        organ_key, repo = result
     print(f"\n  {repo['name']}")
     print(f"  {'─' * max(len(repo['name']), 40)}")
     print(f"  Organ:       {organ_key}")

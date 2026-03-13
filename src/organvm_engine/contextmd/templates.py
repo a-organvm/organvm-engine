@@ -204,3 +204,12 @@ ATOMS_NOT_RUN_HINT = """\
 
 Run `organvm atoms pipeline --write && organvm atoms fanout --write` to generate task queue.
 """
+
+ONTOLOGIA_STATUS_SECTION = """\
+
+## Entity Identity (Ontologia)
+
+**UID:** `{entity_uid}` | **Matched by:** {matched_by}
+
+Resolve: `organvm ontologia resolve {repo_name}` | History: `organvm ontologia history {entity_uid}`
+"""

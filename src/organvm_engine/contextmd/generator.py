@@ -17,6 +17,7 @@ from organvm_engine.contextmd.templates import (
     ATOMS_NOT_RUN_HINT,
     ATOMS_REPO_QUEUE_SECTION,
     ECOSYSTEM_STATUS_SECTION,
+    ONTOLOGIA_STATUS_SECTION,
     ORGAN_SECTION,
     PLAN_CONTEXT_SECTION,
     REPO_SECTION,
@@ -27,7 +28,7 @@ from organvm_engine.contextmd.templates import (
     format_no_edges,
     format_produces_edge,
 )
-from organvm_engine.registry.query import find_repo
+from organvm_engine.registry.query import find_repo, resolve_entity
 
 
 def generate_repo_section(
@@ -41,11 +42,14 @@ def generate_repo_section(
 ) -> str:
     """Generate the auto-generated section for a repo-level CLAUDE.md / GEMINI.md."""
 
-    result = find_repo(registry, repo_name)
-    if not result:
-        return f"<!-- ERROR: Repo '{repo_name}' not found -->"
-
-    organ_key, repo_data = result
+    resolved = resolve_entity(repo_name, registry=registry)
+    if resolved and resolved.get("registry_entry"):
+        organ_key, repo_data = resolved["organ_key"], resolved["registry_entry"]
+    else:
+        result = find_repo(registry, repo_name)
+        if not result:
+            return f"<!-- ERROR: Repo '{repo_name}' not found -->"
+        organ_key, repo_data = result
     organ_data = registry.get("organs", {}).get(organ_key, {})
 
     # Format edges
@@ -108,6 +112,7 @@ def generate_repo_section(
         sop_section = _build_sop_directives(sop_entries)
         prompting_hint = _build_prompting_hint(agent)
         ecosystem_section = _build_ecosystem_context(repo_name, organ_key)
+        ontologia_section = _build_ontologia_context(repo_name)
         injected = SESSION_REVIEW_SECTION
         if sop_section:
             injected += "\n" + sop_section
@@ -119,6 +124,8 @@ def generate_repo_section(
             injected += "\n" + plan_section
         if atoms_section:
             injected += "\n" + atoms_section
+        if ontologia_section:
+            injected += "\n" + ontologia_section
         section = section.replace(
             end_marker,
             injected + "\n" + end_marker,
@@ -484,6 +491,28 @@ def _build_ecosystem_context(repo_name: str, organ_key: str) -> str:
         repo_name=repo_name,
         organ_short=organ_short,
     )
+
+
+def _build_ontologia_context(repo_name: str) -> str:
+    """Resolve repo's ontologia UID and return a short status snippet."""
+    try:
+        from ontologia.registry.store import open_store
+    except ImportError:
+        return ""
+
+    try:
+        store = open_store()
+        resolver = store.resolver()
+        result = resolver.resolve(repo_name)
+        if not result:
+            return ""
+        return ONTOLOGIA_STATUS_SECTION.format(
+            entity_uid=result.identity.uid,
+            matched_by=result.matched_by,
+            repo_name=repo_name,
+        )
+    except Exception:
+        return ""
 
 
 def _build_prompting_hint(agent: str | None) -> str:

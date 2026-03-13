@@ -3,7 +3,7 @@
 import argparse
 
 from organvm_engine.registry.loader import load_registry
-from organvm_engine.registry.query import find_repo
+from organvm_engine.registry.query import find_repo, resolve_entity
 
 
 def cmd_governance_audit(args: argparse.Namespace) -> int:
@@ -56,12 +56,15 @@ def cmd_governance_promote(args: argparse.Namespace) -> int:
     from organvm_engine.governance.state_machine import check_transition
 
     registry = load_registry(args.registry)
-    result = find_repo(registry, args.repo)
-    if not result:
-        print(f"ERROR: Repo '{args.repo}' not found")
-        return 1
-
-    organ_key, repo = result
+    resolved = resolve_entity(args.repo, registry=registry)
+    if resolved and resolved.get("registry_entry"):
+        organ_key, repo = resolved["organ_key"], resolved["registry_entry"]
+    else:
+        result = find_repo(registry, args.repo)
+        if not result:
+            print(f"ERROR: Repo '{args.repo}' not found")
+            return 1
+        organ_key, repo = result
     current = repo.get("promotion_status", "LOCAL")
     ok, msg = check_transition(current, args.target)
     print(f"  {msg}")
