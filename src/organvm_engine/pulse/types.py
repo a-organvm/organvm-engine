@@ -44,8 +44,14 @@ AMMOI_COMPUTED = "pulse.ammoi_computed"
 INFERENCE_COMPLETED = "pulse.inference_completed"
 ADVISORY_GENERATED = "pulse.advisory_generated"
 
+# Heartbeat
+HEARTBEAT_DIFF = "pulse.heartbeat_diff"
+
 # Edge sync
 EDGES_SYNCED = "pulse.edges_synced"
+
+# Variable bridge
+VARIABLES_SYNCED = "pulse.variables_synced"
 
 ALL_ENGINE_EVENT_TYPES: list[str] = [
     PROMOTION_CHANGED,
@@ -70,5 +76,7 @@ ALL_ENGINE_EVENT_TYPES: list[str] = [
     AMMOI_COMPUTED,
     INFERENCE_COMPLETED,
     ADVISORY_GENERATED,
+    HEARTBEAT_DIFF,
     EDGES_SYNCED,
+    VARIABLES_SYNCED,
 ]

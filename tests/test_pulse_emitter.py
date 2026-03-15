@@ -53,8 +53,8 @@ def _disable_ontologia(monkeypatch):
 
 class TestEventTypeConstants:
     def test_all_engine_event_types_count(self):
-        """ALL_ENGINE_EVENT_TYPES contains exactly 23 entries."""
-        assert len(ALL_ENGINE_EVENT_TYPES) == 23
+        """ALL_ENGINE_EVENT_TYPES contains exactly 25 entries."""
+        assert len(ALL_ENGINE_EVENT_TYPES) == 25
 
     def test_no_duplicates(self):
         """No duplicate event type strings."""

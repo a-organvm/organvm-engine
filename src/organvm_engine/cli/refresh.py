@@ -53,6 +53,56 @@ def cmd_refresh(args: argparse.Namespace) -> int:
 
     print(f"{prefix}[2/10] Variables manifest -> {vars_path} ({len(variables)} vars)")
 
+    # Step 2.5: Sync variables + metrics into ontologia (best-effort)
+    try:
+        from ontologia.entity.identity import EntityType
+        from ontologia.registry.store import open_store
+
+        from organvm_engine.pulse.variable_bridge import sync_all as _var_sync
+
+        _store = open_store()
+        _name_to_rkey: dict[str, str] = {}
+        for _rk, _od in registry.get("organs", {}).items():
+            _on = _od.get("name", "")
+            if _on:
+                _name_to_rkey[_on.lower()] = _rk
+
+        _omap: dict[str, str] = {}
+        for _ent in _store.list_entities(entity_type=EntityType.ORGAN):
+            _nr = _store.current_name(_ent.uid)
+            if _nr:
+                _rk2 = _name_to_rkey.get(_nr.display_name.lower())
+                if _rk2:
+                    _omap[_rk2] = _ent.uid
+
+        _vr = _var_sync(_store, variables, organ_entity_map=_omap or None)
+        if not dry_run:
+            _store.save()
+        print(
+            f"{prefix}[2½/10] Ontologia sync: "
+            f"{_vr.variables_set} vars, {_vr.metrics_registered} metrics, "
+            f"{_vr.observations_recorded} observations",
+        )
+    except ImportError:
+        print(f"{prefix}[2½/10] Ontologia sync skipped (not installed)")
+    except Exception as e:
+        print(f"{prefix}[2½/10] Ontologia sync error: {e}", file=sys.stderr)
+
+    # Step 2.75: Build system snapshot for portal consumption
+    try:
+        from organvm_engine.metrics.snapshot import build_system_snapshot, write_system_snapshot
+        snapshot = build_system_snapshot(registry, computed, workspace=workspace)
+        snapshot_path = corpus_root / "system-snapshot.json"
+        if not dry_run:
+            write_system_snapshot(snapshot, snapshot_path)
+        print(
+            f"{prefix}[2¾/10] System snapshot -> {snapshot_path} "
+            f"({len(snapshot.get('organs', []))} organs, "
+            f"{snapshot.get('system', {}).get('total_repos', 0)} repos)",
+        )
+    except Exception as e:
+        print(f"{prefix}[2¾/10] Snapshot error: {e}", file=sys.stderr)
+
     # Step 3: Resolve variable bindings
     vars_targets_path = corpus_root / "vars-targets.yaml"
     if vars_targets_path.exists():

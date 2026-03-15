@@ -444,6 +444,130 @@ def cmd_ontologia_runbooks(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Mutation commands — relocate, reclassify, merge, split
+# ---------------------------------------------------------------------------
+
+def cmd_ontologia_relocate(args: argparse.Namespace) -> int:
+    """Move an entity to a new parent."""
+    if not _check_available():
+        return 1
+
+    from ontologia.registry.mutations import relocate_entity
+
+    store = open_store()
+    result = relocate_entity(store, args.entity, args.new_parent)
+
+    if not result.success:
+        for err in result.errors:
+            print(f"Error: {err}", file=sys.stderr)
+        return 1
+
+    store.save()
+
+    if getattr(args, "json", False):
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print(f"  Relocated: {args.entity} → parent {args.new_parent}")
+        print(f"  Edges closed:  {result.edges_closed}")
+        print(f"  Edges created: {result.edges_created}")
+        print(f"  Modified:      {', '.join(result.entities_modified)}")
+    return 0
+
+
+def cmd_ontologia_reclassify(args: argparse.Namespace) -> int:
+    """Change an entity's type classification."""
+    if not _check_available():
+        return 1
+
+    from ontologia.registry.mutations import reclassify_entity
+
+    try:
+        new_type = EntityType(args.new_type)
+    except ValueError:
+        valid = ", ".join(t.value for t in EntityType)
+        print(f"Invalid entity type: {args.new_type}. Valid: {valid}", file=sys.stderr)
+        return 1
+
+    store = open_store()
+    result = reclassify_entity(store, args.entity, new_type)
+
+    if not result.success:
+        for err in result.errors:
+            print(f"Error: {err}", file=sys.stderr)
+        return 1
+
+    store.save()
+
+    if getattr(args, "json", False):
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print(f"  Reclassified: {args.entity} → type {args.new_type}")
+        print(f"  Modified:     {', '.join(result.entities_modified)}")
+    return 0
+
+
+def cmd_ontologia_merge(args: argparse.Namespace) -> int:
+    """Merge multiple entities into a single successor."""
+    if not _check_available():
+        return 1
+
+    from ontologia.registry.mutations import merge_entities
+
+    store = open_store()
+    result = merge_entities(store, args.sources, args.name)
+
+    if not result.success:
+        for err in result.errors:
+            print(f"Error: {err}", file=sys.stderr)
+        return 1
+
+    store.save()
+
+    if getattr(args, "json", False):
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print(f"  Merged {len(args.sources)} entities into: {args.name}")
+        print(f"  Created:         {', '.join(result.entities_created)}")
+        print(f"  Modified:        {', '.join(result.entities_modified)}")
+        print(f"  Lineage records: {result.lineage_records}")
+        print(f"  Edges created:   {result.edges_created}")
+        print(f"  Edges closed:    {result.edges_closed}")
+    return 0
+
+
+def cmd_ontologia_split(args: argparse.Namespace) -> int:
+    """Split one entity into multiple descendants."""
+    if not _check_available():
+        return 1
+
+    from ontologia.registry.mutations import split_entity
+
+    specs = [{"name": n} for n in args.descendants]
+    store = open_store()
+    result = split_entity(store, args.source, specs, deprecate_source=args.deprecate)
+
+    if not result.success:
+        for err in result.errors:
+            print(f"Error: {err}", file=sys.stderr)
+        return 1
+
+    store.save()
+
+    if getattr(args, "json", False):
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print(f"  Split {args.source} into {len(result.entities_created)} descendants")
+        print(f"  Created:         {', '.join(result.entities_created)}")
+        if result.entities_modified:
+            print(f"  Modified:        {', '.join(result.entities_modified)}")
+        print(f"  Lineage records: {result.lineage_records}")
+        print(f"  Edges created:   {result.edges_created}")
+        if result.edges_closed:
+            print(f"  Edges closed:    {result.edges_closed}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 

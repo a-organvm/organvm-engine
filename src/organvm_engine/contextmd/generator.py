@@ -24,6 +24,7 @@ from organvm_engine.contextmd.templates import (
     REPO_SECTION,
     SESSION_REVIEW_SECTION,
     SOP_DIRECTIVES_SECTION,
+    VARIABLE_STATUS_SECTION,
     WORKSPACE_SECTION,
     format_consumes_edge,
     format_no_edges,
@@ -127,6 +128,9 @@ def generate_repo_section(
             injected += "\n" + atoms_section
         if ontologia_section:
             injected += "\n" + ontologia_section
+        variable_section = _build_variable_context()
+        if variable_section:
+            injected += "\n" + variable_section
         ammoi_section = _build_ammoi_context()
         if ammoi_section:
             injected += "\n" + ammoi_section
@@ -519,6 +523,44 @@ def _build_ontologia_context(repo_name: str) -> str:
         return ""
 
 
+def _build_variable_context() -> str:
+    """Render live system variables from ontologia's VariableStore into a markdown table.
+
+    Completely fault-tolerant — returns empty string on any failure,
+    including ontologia not being installed or having no variables.
+    """
+    try:
+        from ontologia.registry.store import open_store
+        from ontologia.variables.variable import Scope
+    except ImportError:
+        return ""
+
+    try:
+        store = open_store()
+        vs = store.variable_store
+        variables = vs.list_at_scope(Scope.GLOBAL)
+
+        if not variables:
+            return ""
+
+        rows = []
+        for var in sorted(variables, key=lambda v: v.key):
+            updated = var.updated_at[:10] if var.updated_at else "unknown"
+            value_str = str(var.value) if var.value is not None else ""
+            rows.append(f"| `{var.key}` | {value_str} | {var.scope.value} | {updated} |")
+
+        metric_count = len(store.list_metrics())
+        observation_count = store.observation_store.count
+
+        return VARIABLE_STATUS_SECTION.format(
+            variable_rows="\n".join(rows),
+            metric_count=metric_count,
+            observation_count=observation_count,
+        )
+    except Exception:
+        return ""
+
+
 # Module-level AMMOI cache for context sync (computed once per sync_all)
 _ammoi_cache: dict = {"ammoi": None}
 
@@ -562,6 +604,14 @@ def _build_ammoi_context() -> str:
     except Exception:
         pass
 
+    # Scale line: organs / repos / components
+    if ammoi.total_components:
+        scale_line = f"8 organs / {ammoi.total_entities} repos / {ammoi.total_components} components"
+    else:
+        scale_line = f"8 organs / {ammoi.total_entities} repos"
+    if ammoi.hierarchy_depth > 2:
+        scale_line += f" (depth {ammoi.hierarchy_depth})"
+
     return AMMOI_SECTION.format(
         density_pct=f"{ammoi.system_density:.0%}",
         edges=ammoi.active_edges,
@@ -570,6 +620,7 @@ def _build_ammoi_context() -> str:
         advisories=adv_count,
         events_24h=ammoi.event_frequency_24h,
         inference_score=f"{ammoi.inference_score:.0%}",
+        scale_line=scale_line,
         organ_density_line=organ_line,
         last_pulse=ts,
         delta_24h=d24h_str,

@@ -10,13 +10,181 @@ One pulse cycle:
 
 from __future__ import annotations
 
+import json
+import logging
 import signal
 import sys
 import time
+from dataclasses import asdict, dataclass
+from dataclasses import field as dc_field
 from pathlib import Path
 from typing import Any
 
 from organvm_engine.pulse.ammoi import AMMOI, _append_history, compute_ammoi
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# HeartbeatState — lightweight state for cross-pulse diffing
+# ---------------------------------------------------------------------------
+
+def _heartbeat_path() -> Path:
+    return Path.home() / ".organvm" / "pulse" / "last-heartbeat.json"
+
+
+@dataclass
+class HeartbeatState:
+    """Minimal organism state snapshot for heartbeat diffing."""
+
+    sys_pct: int = 0
+    gate_rates: dict[str, int] = dc_field(default_factory=dict)
+    repo_states: dict[str, dict] = dc_field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> HeartbeatState:
+        return cls(
+            sys_pct=data.get("sys_pct", 0),
+            gate_rates=data.get("gate_rates", {}),
+            repo_states=data.get("repo_states", {}),
+        )
+
+    @classmethod
+    def from_ammoi(cls, ammoi: AMMOI) -> HeartbeatState:
+        """Build a HeartbeatState from an AMMOI snapshot."""
+        gate_rates: dict[str, int] = {}
+        repo_states: dict[str, dict] = {}
+        for oid, organ in ammoi.organs.items():
+            gate_rates[oid] = organ.avg_gate_pct
+            # Per-organ density acts as a proxy for repo-level tracking
+            repo_states[oid] = {
+                "pct": organ.avg_gate_pct,
+                "density": organ.density,
+                "repo_count": organ.repo_count,
+            }
+        return cls(
+            sys_pct=int(ammoi.system_density * 100),
+            gate_rates=gate_rates,
+            repo_states=repo_states,
+        )
+
+
+def _save_heartbeat(state: HeartbeatState) -> None:
+    path = _heartbeat_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state.to_dict(), separators=(",", ":")))
+
+
+def _load_heartbeat() -> HeartbeatState | None:
+    path = _heartbeat_path()
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text())
+        return HeartbeatState.from_dict(data)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _compute_heartbeat_diff(
+    prev: HeartbeatState,
+    curr: HeartbeatState,
+) -> dict | None:
+    """Compute differences between two heartbeat states.
+
+    Returns None if no significant changes detected.
+    """
+    changes: dict = {}
+
+    # System-level change
+    pct_delta = curr.sys_pct - prev.sys_pct
+    if abs(pct_delta) > 0:
+        changes["sys_pct_delta"] = pct_delta
+
+    # Gate rate changes
+    gate_deltas = {}
+    all_gates = set(prev.gate_rates) | set(curr.gate_rates)
+    for gate in all_gates:
+        old = prev.gate_rates.get(gate, 0)
+        new = curr.gate_rates.get(gate, 0)
+        if old != new:
+            gate_deltas[gate] = new - old
+    if gate_deltas:
+        changes["gate_deltas"] = gate_deltas
+
+    # New/removed organs
+    prev_organs = set(prev.repo_states)
+    curr_organs = set(curr.repo_states)
+    if curr_organs - prev_organs:
+        changes["new_organs"] = list(curr_organs - prev_organs)
+    if prev_organs - curr_organs:
+        changes["removed_organs"] = list(prev_organs - curr_organs)
+
+    return changes if changes else None
+
+
+def _record_pulse_insights(
+    ammoi: AMMOI,
+    prev_ammoi: AMMOI | None,
+    heartbeat_diff: dict | None,
+) -> int:
+    """Record auto-generated insights from the pulse cycle.
+
+    Records insights for:
+    - Trend shifts (temporal profile shows non-stable dominant trend)
+    - Tension count increases
+    - Heartbeat significant changes
+
+    Returns the number of insights recorded.
+    """
+    from organvm_engine.pulse.shared_memory import record_insight
+
+    count = 0
+
+    # Temporal trend shift
+    if ammoi.temporal:
+        dominant = ammoi.temporal.get("dominant_trend", "stable")
+        if dominant != "stable":
+            record_insight(
+                agent="pulse-daemon",
+                category="finding",
+                content=f"System dominant trend: {dominant} "
+                f"(density={ammoi.system_density:.1%}, "
+                f"momentum={ammoi.temporal.get('total_momentum', 0):.3f})",
+                tags=["temporal", "trend", dominant],
+            )
+            count += 1
+
+    # Tension change
+    if prev_ammoi and ammoi.tension_count != prev_ammoi.tension_count:
+        delta = ammoi.tension_count - prev_ammoi.tension_count
+        direction = "increased" if delta > 0 else "decreased"
+        record_insight(
+            agent="pulse-daemon",
+            category="warning" if delta > 0 else "finding",
+            content=f"Tension count {direction} by {abs(delta)} "
+            f"({prev_ammoi.tension_count} → {ammoi.tension_count})",
+            tags=["tension", direction],
+        )
+        count += 1
+
+    # Heartbeat diff significant changes
+    if heartbeat_diff:
+        pct_delta = heartbeat_diff.get("sys_pct_delta", 0)
+        if abs(pct_delta) >= 2:
+            direction = "improved" if pct_delta > 0 else "regressed"
+            record_insight(
+                agent="pulse-daemon",
+                category="finding",
+                content=f"System gate pass rate {direction} by {abs(pct_delta)}pp",
+                tags=["heartbeat", "gate-rate", direction],
+            )
+            count += 1
+
+    return count
 
 
 def pulse_once(
@@ -64,6 +232,7 @@ def pulse_once(
                 and not _store.edge_index.all_relation_edges()
             ):
                 from ontologia.bootstrap import bootstrap_from_registry
+
                 from organvm_engine.paths import registry_path as _reg_path
 
                 rp = _reg_path()
@@ -74,6 +243,60 @@ def pulse_once(
             pass
 
         edge_sync_result = sync_seed_edges(ws)
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    # 1c. Sync engine variables + metrics into ontologia (best-effort)
+    var_sync_result = None
+    try:
+        from organvm_engine.metrics.vars import build_vars as _build_vars
+        from organvm_engine.pulse.variable_bridge import sync_all as _sync_vars
+        from organvm_engine.registry.loader import load_registry as _load_reg
+
+        _reg = registry or _load_reg()
+        _metrics_path = Path.home() / "Workspace" / "meta-organvm" / (
+            "organvm-corpvs-testamentvm/system-metrics.json"
+        )
+        _metrics_data: dict = {}
+        if _metrics_path.is_file():
+            _metrics_data = json.loads(_metrics_path.read_text())
+
+        _engine_vars = _build_vars(_metrics_data, _reg)
+
+        # Build organ→entity_uid map from ontologia
+        _organ_map: dict[str, str] = {}
+        _st = None
+        try:
+            from ontologia.entity.identity import EntityType as _ET
+            from ontologia.registry.store import open_store as _os
+
+            _st = _os()
+            # Build reverse map: registry organ name → registry key
+            _name_to_rkey: dict[str, str] = {}
+            for rkey, odata in _reg.get("organs", {}).items():
+                oname = odata.get("name", "")
+                if oname:
+                    _name_to_rkey[oname.lower()] = rkey
+
+            for ent in _st.list_entities(entity_type=_ET.ORGAN):
+                name_rec = _st.current_name(ent.uid)
+                if name_rec:
+                    rkey = _name_to_rkey.get(name_rec.display_name.lower())
+                    if rkey:
+                        _organ_map[rkey] = ent.uid
+        except ImportError:
+            pass
+
+        if _st is not None:
+            var_sync_result = _sync_vars(
+                _st,
+                _engine_vars,
+                organ_entity_map=_organ_map or None,
+            )
+            if var_sync_result:
+                _st.save()
     except ImportError:
         pass
     except Exception:
@@ -93,6 +316,7 @@ def pulse_once(
             EDGES_SYNCED,
             INFERENCE_COMPLETED,
             PULSE_HEARTBEAT,
+            VARIABLES_SYNCED,
         )
 
         emit_engine_event(
@@ -133,10 +357,81 @@ def pulse_once(
                     "unresolved": edge_sync_result.unresolved,
                 },
             )
+        if var_sync_result and var_sync_result.variables_set > 0:
+            emit_engine_event(
+                event_type=VARIABLES_SYNCED,
+                source="pulse",
+                payload=var_sync_result.to_dict(),
+            )
     except Exception:
         pass
 
-    # 5. Evaluate governance policies and store advisories (best-effort)
+    # 4.5. Write to Neon (best-effort)
+    try:
+        from organvm_engine.pulse.neon_sink import sync_to_neon
+        _neon_obs: list = []
+        try:
+            from ontologia.registry.store import open_store as _neon_os
+            _neon_st = _neon_os()
+            _neon_obs = _neon_st.observation_store.query(limit=20)
+        except Exception:
+            pass
+        sync_to_neon(ammoi, _neon_obs)
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    # 5. Heartbeat diffing (best-effort)
+    heartbeat_diff: dict | None = None
+    try:
+        from organvm_engine.pulse.emitter import emit_engine_event as _emit
+        from organvm_engine.pulse.types import HEARTBEAT_DIFF
+
+        prev_hb = _load_heartbeat()
+        curr_hb = HeartbeatState.from_ammoi(ammoi)
+        if prev_hb is not None:
+            heartbeat_diff = _compute_heartbeat_diff(prev_hb, curr_hb)
+            if heartbeat_diff:
+                _emit(
+                    event_type=HEARTBEAT_DIFF,
+                    source="pulse",
+                    payload=heartbeat_diff,
+                )
+        _save_heartbeat(curr_hb)
+    except Exception:
+        pass
+
+    # 6. Auto-insight recording (best-effort)
+    try:
+        from organvm_engine.pulse.ammoi import _read_history
+
+        prev_snapshots = _read_history(limit=2)
+        prev_ammoi = prev_snapshots[-2] if len(prev_snapshots) >= 2 else None
+
+        # On first pulse (no previous), seed a baseline insight (once only)
+        if prev_ammoi is None:
+            from organvm_engine.pulse.shared_memory import query_insights, record_insight
+
+            existing_baselines = query_insights(agent="pulse-daemon", limit=100)
+            has_baseline = any("baseline" in i.tags for i in existing_baselines)
+            if not has_baseline:
+                record_insight(
+                    agent="pulse-daemon",
+                    category="finding",
+                    content=(
+                        f"System baseline: density={ammoi.system_density:.1%}, "
+                        f"entities={ammoi.total_entities}, edges={ammoi.active_edges}, "
+                        f"tensions={ammoi.tension_count}, clusters={ammoi.cluster_count}"
+                    ),
+                    tags=["baseline", "system-state"],
+                )
+
+        _record_pulse_insights(ammoi, prev_ammoi, heartbeat_diff)
+    except Exception:
+        pass
+
+    # 7. Evaluate governance policies and store advisories (best-effort)
     try:
         from organvm_engine.pulse.advisories import evaluate_all_policies, store_advisories
         from organvm_engine.pulse.types import ADVISORY_GENERATED

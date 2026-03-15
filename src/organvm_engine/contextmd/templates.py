@@ -210,7 +210,7 @@ AMMOI_SECTION = """\
 ## System Density (auto-generated)
 
 AMMOI: {density_pct} | Edges: {edges} | Tensions: {tensions} | Clusters: {clusters} | Adv: {advisories} | Events(24h): {events_24h}
-Inference score: {inference_score} | Organ density: {organ_density_line}
+Structure: {scale_line} | Inference: {inference_score} | Organs: {organ_density_line}
 Last pulse: {last_pulse} | Δ24h: {delta_24h} | Δ7d: {delta_7d}
 """
 
@@ -221,4 +221,16 @@ ONTOLOGIA_STATUS_SECTION = """\
 **UID:** `{entity_uid}` | **Matched by:** {matched_by}
 
 Resolve: `organvm ontologia resolve {repo_name}` | History: `organvm ontologia history {entity_uid}`
+"""
+
+VARIABLE_STATUS_SECTION = """\
+
+## Live System Variables (Ontologia)
+
+| Variable | Value | Scope | Updated |
+|----------|-------|-------|---------|
+{variable_rows}
+
+Metrics: {metric_count} registered | Observations: {observation_count} recorded
+Resolve: `organvm ontologia status` | Refresh: `organvm refresh`
 """

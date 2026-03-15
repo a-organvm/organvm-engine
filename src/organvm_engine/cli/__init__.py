@@ -65,17 +65,20 @@ from organvm_engine.cli.cmd_pulse import (
     cmd_pulse_ecosystem,
     cmd_pulse_edges,
     cmd_pulse_emit,
+    cmd_pulse_entity_memory,
     cmd_pulse_events,
     cmd_pulse_flow,
     cmd_pulse_history,
     cmd_pulse_memory,
     cmd_pulse_mood,
     cmd_pulse_nerve,
+    cmd_pulse_relations,
     cmd_pulse_scan,
     cmd_pulse_show,
     cmd_pulse_start,
     cmd_pulse_status,
     cmd_pulse_stop,
+    cmd_pulse_temporal,
     cmd_pulse_tensions,
 )
 from organvm_engine.cli.context import cmd_context_sync
@@ -111,8 +114,16 @@ from organvm_engine.cli.governance import (
     cmd_governance_audit,
     cmd_governance_checkdeps,
     cmd_governance_dictums,
+    cmd_governance_excavate,
     cmd_governance_impact,
+    cmd_governance_placement,
     cmd_governance_promote,
+)
+from organvm_engine.cli.indexer import (
+    cmd_index_bridge,
+    cmd_index_scan,
+    cmd_index_show,
+    cmd_index_stats,
 )
 from organvm_engine.cli.lint_vars import cmd_lint_vars
 from organvm_engine.cli.metrics import (
@@ -128,12 +139,16 @@ from organvm_engine.cli.ontologia import (
     cmd_ontologia_health,
     cmd_ontologia_history,
     cmd_ontologia_list,
+    cmd_ontologia_merge,
     cmd_ontologia_policies,
+    cmd_ontologia_reclassify,
+    cmd_ontologia_relocate,
     cmd_ontologia_resolve,
     cmd_ontologia_revisions,
     cmd_ontologia_runbooks,
     cmd_ontologia_sense,
     cmd_ontologia_snapshot,
+    cmd_ontologia_split,
     cmd_ontologia_status,
     cmd_ontologia_tensions,
 )
@@ -316,6 +331,37 @@ def build_parser() -> argparse.ArgumentParser:
         "--workspace",
         default=None,
         help="Workspace root for filesystem checks",
+    )
+
+    place_p = gov_sub.add_parser(
+        "placement",
+        help="Audit repo-to-organ placement affinity",
+    )
+    place_p.add_argument("--repo", default=None, help="Single repo to check")
+    place_p.add_argument("--json", action="store_true", help="JSON output")
+    place_p.add_argument(
+        "--audit",
+        action="store_true",
+        help="Only show flagged repos",
+    )
+
+    exc_p = gov_sub.add_parser(
+        "excavate",
+        help="Scan for buried entities in repos",
+    )
+    exc_p.add_argument(
+        "--type",
+        default=None,
+        choices=["sub_package", "cross_organ_family", "extractable_module", "misplaced_governance"],
+        help="Filter by entity type",
+    )
+    exc_p.add_argument("--severity", default=None, choices=["info", "warning", "critical"])
+    exc_p.add_argument("--json", action="store_true", help="JSON output")
+    exc_p.add_argument("--families", action="store_true", help="Only show cross-organ families")
+    exc_p.add_argument("--workspace", default=None, help="Workspace root directory")
+    exc_p.add_argument(
+        "--register", action="store_true",
+        help="Register sub-packages as ontologia MODULE entities",
     )
 
     # seed
@@ -1656,6 +1702,60 @@ def build_parser() -> argparse.ArgumentParser:
     ont_runbooks.add_argument("--output", default=None, help="Output directory")
     ont_runbooks.add_argument("--json", action="store_true", help="JSON output")
 
+    ont_relocate = ont_sub.add_parser("relocate", help="Move an entity to a new parent")
+    ont_relocate.add_argument("entity", help="Entity UID to relocate")
+    ont_relocate.add_argument("new_parent", help="New parent entity UID")
+    ont_relocate.add_argument("--json", action="store_true", help="JSON output")
+
+    ont_reclassify = ont_sub.add_parser("reclassify", help="Change an entity's type")
+    ont_reclassify.add_argument("entity", help="Entity UID to reclassify")
+    ont_reclassify.add_argument("new_type", help="New entity type value")
+    ont_reclassify.add_argument("--json", action="store_true", help="JSON output")
+
+    ont_merge = ont_sub.add_parser("merge", help="Merge multiple entities into one")
+    ont_merge.add_argument("sources", nargs="+", help="Source entity UIDs to merge")
+    ont_merge.add_argument("--name", required=True, help="Display name for the successor entity")
+    ont_merge.add_argument("--json", action="store_true", help="JSON output")
+
+    ont_split = ont_sub.add_parser("split", help="Split one entity into multiple descendants")
+    ont_split.add_argument("source", help="Source entity UID to split")
+    ont_split.add_argument(
+        "--descendants", nargs="+", required=True, help="Display names for descendant entities",
+    )
+    ont_split.add_argument(
+        "--deprecate", action="store_true", help="Deprecate the source entity after split",
+    )
+    ont_split.add_argument("--json", action="store_true", help="JSON output")
+
+    # index — deep structural indexer
+    idx = sub.add_parser(
+        "index",
+        help="Deep structural indexer — drill to atomic components",
+    )
+    idx.add_argument("--workspace", default=None, help="Workspace root directory")
+    idx_sub = idx.add_subparsers(dest="subcommand")
+
+    idx_scan = idx_sub.add_parser("scan", help="Scan repos for atomic components")
+    idx_scan.add_argument("--repo", default=None, help="Single repo to scan")
+    idx_scan.add_argument("--organ", default=None, help="Filter to specific organ")
+    idx_scan.add_argument("--json", action="store_true", help="Output JSON")
+    idx_scan.add_argument(
+        "--write", action="store_true",
+        help="Write deep-index.json to corpus",
+    )
+
+    idx_show = idx_sub.add_parser("show", help="Show component tree for a repo")
+    idx_show.add_argument("repo", help="Repository name")
+    idx_show.add_argument("--json", action="store_true", help="Output JSON")
+    idx_show.add_argument("--workspace", default=None, help="Workspace root directory")
+
+    idx_sub.add_parser("stats", help="Show cached scan statistics")
+
+    idx_bridge = idx_sub.add_parser("bridge", help="Register components in ontologia")
+    idx_bridge.add_argument("--repo", default=None, help="Single repo to bridge")
+    idx_bridge.add_argument("--organ", default=None, help="Filter to specific organ")
+    idx_bridge.add_argument("--json", action="store_true", help="Output JSON")
+
     # pulse — system nervous system and self-awareness
     pulse = sub.add_parser(
         "pulse",
@@ -1894,6 +1994,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pulse_edges_sync.add_argument("--json", action="store_true", help="Output JSON")
 
+    pulse_temporal = pulse_sub.add_parser(
+        "temporal",
+        help="Show temporal profile — velocity, acceleration, and trends",
+    )
+    pulse_temporal.add_argument("--json", action="store_true", help="Output JSON")
+    pulse_temporal.add_argument(
+        "--window", type=int, default=7, help="Lookback window for derivatives",
+    )
+    pulse_temporal.add_argument(
+        "--limit", type=int, default=50, help="Max history snapshots to read",
+    )
+
+    pulse_relations = pulse_sub.add_parser(
+        "relations",
+        help="Multi-scale relation query — seed + indexer + ontologia edges",
+    )
+    pulse_relations.add_argument("entity", help="Entity name, component path, or UID")
+    pulse_relations.add_argument("--json", action="store_true", help="Output JSON")
+    pulse_relations.add_argument("--no-seed", action="store_true", help="Skip seed graph")
+    pulse_relations.add_argument("--no-indexer", action="store_true", help="Skip import edges")
+    pulse_relations.add_argument("--no-ontologia", action="store_true", help="Skip ontologia")
+
+    pulse_entity_mem = pulse_sub.add_parser(
+        "entity-memory",
+        help="Aggregate all signals about an entity from every data source",
+    )
+    pulse_entity_mem.add_argument("entity", help="Entity name, component path, or UID")
+    pulse_entity_mem.add_argument("--json", action="store_true", help="Output JSON")
+    pulse_entity_mem.add_argument("--limit", type=int, default=50, help="Max signals per source")
+    pulse_entity_mem.add_argument("--no-pulse", action="store_true")
+    pulse_entity_mem.add_argument("--no-insights", action="store_true")
+    pulse_entity_mem.add_argument("--no-ontologia", action="store_true")
+    pulse_entity_mem.add_argument("--no-continuity", action="store_true")
+    pulse_entity_mem.add_argument("--no-metrics", action="store_true")
+
     return parser
 
 
@@ -1918,6 +2053,8 @@ def main() -> int:
         ("governance", "promote"): cmd_governance_promote,
         ("governance", "impact"): cmd_governance_impact,
         ("governance", "dictums"): cmd_governance_dictums,
+        ("governance", "placement"): cmd_governance_placement,
+        ("governance", "excavate"): cmd_governance_excavate,
         ("seed", "discover"): cmd_seed_discover,
         ("seed", "validate"): cmd_seed_validate,
         ("seed", "graph"): cmd_seed_graph,
@@ -2099,6 +2236,10 @@ def main() -> int:
             "revisions": cmd_ontologia_revisions,
             "health": cmd_ontologia_health,
             "runbooks": cmd_ontologia_runbooks,
+            "relocate": cmd_ontologia_relocate,
+            "reclassify": cmd_ontologia_reclassify,
+            "merge": cmd_ontologia_merge,
+            "split": cmd_ontologia_split,
         }
         handler = ontologia_dispatch.get(getattr(args, "subcommand", "") or "")
         if handler:
@@ -2107,6 +2248,18 @@ def main() -> int:
         if not (getattr(args, "subcommand", "") or ""):
             return cmd_ontologia_status(args)
         parser.parse_args(["ontologia", "--help"])
+        return 0
+    if args.command == "index":
+        index_dispatch = {
+            "scan": cmd_index_scan,
+            "show": cmd_index_show,
+            "stats": cmd_index_stats,
+            "bridge": cmd_index_bridge,
+        }
+        handler = index_dispatch.get(getattr(args, "subcommand", "") or "")
+        if handler:
+            return handler(args)
+        parser.parse_args(["index", "--help"])
         return 0
     if args.command == "pulse":
         pulse_dispatch = {
@@ -2131,6 +2284,9 @@ def main() -> int:
             "advisories": cmd_pulse_advisories,
             "blast": cmd_pulse_blast,
             "edges": cmd_pulse_edges,
+            "temporal": cmd_pulse_temporal,
+            "relations": cmd_pulse_relations,
+            "entity-memory": cmd_pulse_entity_memory,
         }
         sub_cmd = getattr(args, "subcommand", "") or ""
         handler = pulse_dispatch.get(sub_cmd)
