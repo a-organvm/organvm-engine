@@ -1,0 +1,237 @@
+name: Spec Compliance
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  spec-compliance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Traceability audit
+        id: traceability
+        run: |
+          python -c "
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          VALID_SPECS = {
+              'SPEC-000', 'SPEC-001', 'SPEC-002', 'SPEC-003', 'SPEC-004', 'SPEC-005',
+              'SPEC-006', 'SPEC-007', 'SPEC-008', 'SPEC-009', 'SPEC-010', 'SPEC-011',
+              'SPEC-012', 'SPEC-013', 'SPEC-014', 'SPEC-015', 'SPEC-016', 'SPEC-017',
+              'INST-EVENT-SPINE', 'INST-TEMPORAL-METRICS', 'INST-VARIABLE-RESOLUTION',
+              'INST-HEARTBEAT', 'INST-AMMOI', 'INST-GRAPH-INDICES',
+              'INST-FORMATION', 'INST-TAXONOMY', 'INST-ERA',
+          }
+
+          VALID_PREFIXES = {
+              'AX': 'SPEC-000', 'INV': 'SPEC-000/003', 'ONT': 'SPEC-001',
+              'PRIM': 'SPEC-002', 'LOG': 'SPEC-004', 'TEMP': 'SPEC-004',
+              'TIMED': 'SPEC-004', 'RULE': 'SPEC-005', 'VIOL': 'SPEC-005',
+              'ARCH': 'SPEC-006', 'SIG': 'SPEC-007', 'INTF': 'SPEC-007',
+              'EVOL': 'SPEC-008', 'FUSE': 'SPEC-012', 'FORM': 'INST-FORMATION',
+              'TAXON': 'INST-TAXONOMY', 'ERA': 'INST-ERA', 'EVT': 'INST-EVENT-SPINE',
+              'MET': 'INST-TEMPORAL-METRICS', 'VAR': 'INST-VARIABLE-RESOLUTION',
+              'BEAT': 'INST-HEARTBEAT', 'DIAG': 'SPEC-009', 'PHASE': 'SPEC-010',
+              'META': 'SPEC-011', 'AMMOI': 'INST-AMMOI', 'IDX': 'INST-GRAPH-INDICES',
+              'SWARM': 'SPEC-013', 'RSRC': 'SPEC-014', 'ESCL': 'SPEC-015',
+              'EPIS': 'SPEC-016', 'AUTH': 'SPEC-017',
+          }
+
+          IMPLEMENTS_RE = re.compile(r'(?:#\s*)?Implements:\s*(.+)')
+          SPEC_REF_RE = re.compile(r'(SPEC-\d{3}|INST-[A-Z-]+)')
+          ID_RE = re.compile(r'([A-Z]+)-(\d{3})')
+
+          engine_dir = Path('.')
+          src_dir = engine_dir / 'src'
+          findings = []
+          for py_file in src_dir.rglob('*.py'):
+              for i, line in enumerate(py_file.read_text().splitlines(), 1):
+                  m = IMPLEMENTS_RE.search(line)
+                  if m:
+                      findings.append({
+                          'file': str(py_file.relative_to(engine_dir)),
+                          'line': i,
+                          'header': m.group(1).strip(),
+                          'specs': SPEC_REF_RE.findall(m.group(1)),
+                          'ids': ID_RE.findall(m.group(1)),
+                      })
+
+          errors = []
+          warnings = []
+          for f in findings:
+              for spec in f['specs']:
+                  if spec not in VALID_SPECS:
+                      errors.append(f\"{f['file']}:{f['line']}: unknown spec '{spec}'\")
+              for prefix, num in f['ids']:
+                  if prefix not in VALID_PREFIXES:
+                      warnings.append(f\"{f['file']}:{f['line']}: unknown prefix '{prefix}-{num}'\")
+
+          covered = set()
+          for f in findings:
+              covered.update(f['specs'])
+          uncovered = sorted(VALID_SPECS - covered)
+          coverage_pct = len(covered) / len(VALID_SPECS) * 100 if VALID_SPECS else 0
+
+          print(f'Traceability: {len(findings)} headers, {len(covered)}/{len(VALID_SPECS)} specs covered ({coverage_pct:.0f}%)')
+          if errors:
+              print(f'ERRORS: {len(errors)}')
+              for e in errors:
+                  print(f'  {e}')
+          if warnings:
+              print(f'WARNINGS: {len(warnings)}')
+
+          # Write summary for PR comment
+          with open('traceability-summary.txt', 'w') as out:
+              out.write(f'### Traceability Audit\n\n')
+              out.write(f'- **Headers found:** {len(findings)}\n')
+              out.write(f'- **Specs covered:** {len(covered)}/{len(VALID_SPECS)} ({coverage_pct:.0f}%)\n')
+              out.write(f'- **Errors:** {len(errors)}\n')
+              out.write(f'- **Warnings:** {len(warnings)}\n')
+              if uncovered:
+                  out.write(f'- **Uncovered:** {\", \".join(uncovered[:10])}')
+                  if len(uncovered) > 10:
+                      out.write(f' (+{len(uncovered) - 10} more)')
+                  out.write('\n')
+
+          sys.exit(1 if errors else 0)
+          "
+
+      - name: Invariant validators
+        id: invariants
+        if: always()
+        run: |
+          python -c "
+          import json
+          import sys
+          from pathlib import Path
+
+          from organvm_engine.governance.invariants import run_all_invariants
+          from organvm_engine.organ_config import ORGANS
+
+          # Build a minimal registry for CI (no production data dependency)
+          registry_path = Path('tests/fixtures/registry.json')
+          if registry_path.exists():
+              registry = json.loads(registry_path.read_text())
+          else:
+              # Fall back to structural validation only
+              registry = {'version': '2.0', 'organs': {}}
+
+          result = run_all_invariants(
+              registry=registry,
+              organ_config=ORGANS,
+          )
+
+          print(result.summary())
+
+          with open('invariant-summary.txt', 'w') as out:
+              out.write('### Invariant Validators\n\n')
+              for name, (ok, errs) in result.results.items():
+                  status = ':white_check_mark:' if ok else ':x:'
+                  out.write(f'- {status} **{name}**\n')
+                  for e in errs[:5]:
+                      out.write(f'  - {e}\n')
+
+          sys.exit(0 if result.passed else 1)
+          "
+
+      - name: Ruff lint
+        id: ruff
+        if: always()
+        run: |
+          ruff check src/ tests/ 2>&1 | tee ruff-output.txt
+          echo "ruff_exit=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+
+      - name: Run tests with coverage
+        id: tests
+        if: always()
+        run: |
+          pip install pytest-cov
+          pytest tests/ -v --tb=short --cov=organvm_engine --cov-report=term-missing 2>&1 | tee pytest-output.txt
+          echo "pytest_exit=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+
+      - name: Extract coverage percentage
+        id: coverage
+        if: always()
+        run: |
+          COVERAGE=$(grep -oP 'TOTAL\s+\d+\s+\d+\s+\K\d+' pytest-output.txt || echo "0")
+          echo "coverage_pct=${COVERAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Post PR comment
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            let body = '## Spec Compliance Report\n\n';
+
+            // Traceability
+            try {
+              body += fs.readFileSync('traceability-summary.txt', 'utf8') + '\n';
+            } catch {
+              body += '### Traceability Audit\n\n_Skipped or failed_\n\n';
+            }
+
+            // Invariants
+            try {
+              body += fs.readFileSync('invariant-summary.txt', 'utf8') + '\n';
+            } catch {
+              body += '### Invariant Validators\n\n_Skipped or failed_\n\n';
+            }
+
+            // Ruff
+            const ruffExit = process.env.ruff_exit || '0';
+            const ruffStatus = ruffExit === '0' ? ':white_check_mark:' : ':x:';
+            body += `### Ruff Lint\n\n${ruffStatus} Exit code: ${ruffExit}\n\n`;
+
+            // Coverage
+            const coveragePct = '${{ steps.coverage.outputs.coverage_pct }}' || '?';
+            const pytestExit = process.env.pytest_exit || '0';
+            const testStatus = pytestExit === '0' ? ':white_check_mark:' : ':x:';
+            body += `### Tests & Coverage\n\n`;
+            body += `${testStatus} Tests exit code: ${pytestExit}\n`;
+            body += `- **Coverage:** ${coveragePct}%\n`;
+
+            // Find existing comment to update
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('## Spec Compliance Report')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
