@@ -1,5 +1,7 @@
 """Tool checkout line — prevent concurrent agents from closing all the streets.
 
+Implements: SPEC-014, RSRC-003 (resource constraints and tool checkout)
+
 Before running a heavy command (pytest, npm test, build), an agent checks out
 the tool. If another agent already has it checked out, the requesting agent
 must wait. Light commands (git status, ls) can run concurrently.

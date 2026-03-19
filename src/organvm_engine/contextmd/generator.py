@@ -1,5 +1,7 @@
 """CLAUDE.md section generator.
 
+Implements: SPEC-016, EPIS-003 (context injection and epistemic routing)
+
 Takes registry data + seed data and produces the markdown content
 for auto-generated sections at each level (repo, organ, workspace).
 """

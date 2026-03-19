@@ -1,5 +1,7 @@
 """Session debrief — tiered task extraction and session analysis.
 
+Implements: SPEC-015, ESCL-005 (session debrief and escalation)
+
 Produces a structured close-out deliverable at session end:
 - Session analysis (what happened, areas touched, accomplishments)
 - Tiered to-dos: Big (multi-session), Medium (single-session), Small (quick fixes)

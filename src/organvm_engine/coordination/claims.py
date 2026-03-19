@@ -1,5 +1,7 @@
 """Punch-in/punch-out claim registry for multi-agent coordination.
 
+Implements: SPEC-013, SWARM-014 (agent session lifecycle)
+
 When an AI stream starts working on a set of files, modules, or organs,
 it "punches in" by writing a claim to the shared registry. Other streams
 can query the registry to see what areas are currently claimed, and avoid
