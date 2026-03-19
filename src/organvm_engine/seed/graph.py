@@ -60,6 +60,19 @@ def build_seed_graph(
         except Exception as e:
             graph.errors.append(f"{path}: {e}")
 
+    # Build registry_key → dir lookup for source matching
+    # e.g. "META-ORGANVM" → "meta-organvm", "ORGAN-I" → "organvm-i-theoria"
+    try:
+        from organvm_engine.organ_config import ORGANS
+
+        _rkey_to_dir = {
+            meta.get("registry_key", ""): meta["dir"]
+            for meta in ORGANS.values()
+            if meta.get("registry_key")
+        }
+    except Exception:
+        _rkey_to_dir = {}
+
     # Index producers by type
     producers_by_type: dict[str, list[str]] = defaultdict(list)
     for identity, seed in seeds_by_identity.items():
@@ -84,11 +97,15 @@ def build_seed_graph(
                 if producer == identity:
                     continue
                 if source:
-                    # Match on org prefix or full identity
                     producer_org = producer.split("/")[0] if "/" in producer else ""
-                    if source not in (producer, producer_org):
+                    # Match on org prefix, full identity, or registry key → dir alias
+                    source_dir = _rkey_to_dir.get(source, "") if isinstance(source, str) else ""
+                    if source not in (producer, producer_org) and source_dir != producer_org:
                         continue
                 graph.edges.append((producer, identity, ctype))
+
+    # Deduplicate edges (same pair can appear via multiple seed.yaml declarations)
+    graph.edges = list(dict.fromkeys(graph.edges))
 
     return graph
 
@@ -104,6 +121,18 @@ def validate_edge_resolution(graph: SeedGraph | None = None) -> list[dict]:
     """
     if graph is None:
         graph = build_seed_graph()
+
+    # Build registry_key → dir lookup for source matching
+    try:
+        from organvm_engine.organ_config import ORGANS
+
+        _rkey_to_dir = {
+            meta.get("registry_key", ""): meta["dir"]
+            for meta in ORGANS.values()
+            if meta.get("registry_key")
+        }
+    except Exception:
+        _rkey_to_dir = {}
 
     # Index all produced types by (type, identity)
     produced: set[tuple[str, str]] = set()
@@ -133,7 +162,8 @@ def validate_edge_resolution(graph: SeedGraph | None = None) -> list[dict]:
                     continue
                 if source:
                     prod_org = prod_identity.split("/")[0] if "/" in prod_identity else ""
-                    if source not in (prod_identity, prod_org):
+                    source_dir = _rkey_to_dir.get(source, "") if isinstance(source, str) else ""
+                    if source not in (prod_identity, prod_org) and source_dir != prod_org:
                         continue
                 matched = True
                 break

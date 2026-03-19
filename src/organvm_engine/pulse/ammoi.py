@@ -45,6 +45,8 @@ class OrganDensity:
     organ_id: str
     organ_name: str
     repo_count: int = 0
+    module_count: int = 0
+    component_count: int = 0  # from deep structural indexer
     internal_edges: int = 0
     cross_edges: int = 0
     avg_gate_pct: int = 0
@@ -69,6 +71,9 @@ class AMMOI:
     # Macro: system-wide
     system_density: float = 0.0
     total_entities: int = 0
+    total_modules: int = 0
+    total_components: int = 0  # from deep structural indexer
+    hierarchy_depth: int = 3  # organ→repo→module (2 before modules existed)
     active_edges: int = 0
     active_loops: int = 0
     tension_count: int = 0
@@ -92,6 +97,14 @@ class AMMOI:
     pulse_count: int = 0
     pulse_interval: int = 900  # default 15min
 
+    # Temporal profile (from temporal.py)
+    temporal: dict[str, Any] | None = None
+
+    # Flow analysis (from flow.py)
+    flow_score: float = 0.0
+    flow_active: int = 0
+    flow_dormant: int = 0
+
     # Compressed text (for context injection)
     compressed_text: str = ""
 
@@ -100,6 +113,9 @@ class AMMOI:
             "timestamp": self.timestamp,
             "system_density": self.system_density,
             "total_entities": self.total_entities,
+            "total_modules": self.total_modules,
+            "total_components": self.total_components,
+            "hierarchy_depth": self.hierarchy_depth,
             "active_edges": self.active_edges,
             "active_loops": self.active_loops,
             "tension_count": self.tension_count,
@@ -114,6 +130,10 @@ class AMMOI:
             "organs": {k: v.to_dict() for k, v in self.organs.items()},
             "pulse_count": self.pulse_count,
             "pulse_interval": self.pulse_interval,
+            "temporal": self.temporal,
+            "flow_score": self.flow_score,
+            "flow_active": self.flow_active,
+            "flow_dormant": self.flow_dormant,
             "compressed_text": self.compressed_text,
         }
         return d
@@ -127,6 +147,9 @@ class AMMOI:
             timestamp=data.get("timestamp", ""),
             system_density=data.get("system_density", 0.0),
             total_entities=data.get("total_entities", 0),
+            total_modules=data.get("total_modules", 0),
+            total_components=data.get("total_components", 0),
+            hierarchy_depth=data.get("hierarchy_depth", 3),
             active_edges=data.get("active_edges", 0),
             active_loops=data.get("active_loops", 0),
             tension_count=data.get("tension_count", 0),
@@ -141,6 +164,10 @@ class AMMOI:
             organs=organs,
             pulse_count=data.get("pulse_count", 0),
             pulse_interval=data.get("pulse_interval", 900),
+            temporal=data.get("temporal"),
+            flow_score=data.get("flow_score", 0.0),
+            flow_active=data.get("flow_active", 0),
+            flow_dormant=data.get("flow_dormant", 0),
             compressed_text=data.get("compressed_text", ""),
         )
 
@@ -185,6 +212,32 @@ def _count_history() -> int:
     if not path.is_file():
         return 0
     return sum(1 for line in path.read_text().splitlines() if line.strip())
+
+
+# ---------------------------------------------------------------------------
+# Timeseries extraction (bridge to temporal.py)
+# ---------------------------------------------------------------------------
+
+_TIMESERIES_KEYS = (
+    "system_density", "active_edges", "tension_count",
+    "event_frequency_24h", "cluster_count", "orphan_count",
+    "overcoupled_count", "inference_score", "flow_score",
+)
+
+
+def extract_timeseries(history: list[AMMOI]) -> dict[str, list[float]]:
+    """Extract metric time series from AMMOI history.
+
+    Converts a list of AMMOI snapshots into a dict of named float series,
+    suitable for feeding into ``compute_temporal_profile()``.
+    """
+    if not history:
+        return {}
+    result: dict[str, list[float]] = {k: [] for k in _TIMESERIES_KEYS}
+    for snap in history:
+        for key in _TIMESERIES_KEYS:
+            result[key].append(float(getattr(snap, key, 0.0)))
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -257,15 +310,30 @@ def _build_compressed_text(ammoi: AMMOI) -> str:
 
     score_str = f" IS:{ammoi.inference_score:.0%}" if ammoi.inference_score else ""
 
+    trend_str = ""
+    if ammoi.temporal:
+        dominant = ammoi.temporal.get("dominant_trend", "stable")
+        if dominant != "stable":
+            trend_str = f" trend:{dominant}"
+
+    if ammoi.total_components:
+        depth_str = f" 8o/{ammoi.total_entities}r/{ammoi.total_components}c"
+    elif ammoi.total_modules:
+        depth_str = f" 8o/{ammoi.total_entities}r/{ammoi.total_modules}m"
+    else:
+        depth_str = ""
+
     return (
         f"AMMOI:{ammoi.system_density:.0%} "
         f"E:{ammoi.active_edges} "
         f"T:{ammoi.tension_count} "
         f"C:{ammoi.cluster_count} "
         f"Ev24h:{ammoi.event_frequency_24h}"
-        f"{score_str} "
+        f"{score_str}"
+        f"{depth_str} "
         f"[{top_organs}]"
         f"{delta_str}"
+        f"{trend_str}"
     )
 
 
@@ -293,7 +361,46 @@ def compute_ammoi(
     unresolved = validate_edge_resolution(graph)
     dp = compute_density(graph, organism, len(unresolved))
 
-    # Per-organ computation
+    # Per-organ computation — translate org-dir names to organ keys
+    from organvm_engine.organ_config import dir_to_registry_key
+
+    d2r = dir_to_registry_key()
+
+    # Query ontologia for module entities (the 4th scale)
+    modules_by_organ: dict[str, int] = {}
+    total_modules = 0
+    try:
+        from ontologia.entity.identity import EntityType as OntEntityType
+        from ontologia.registry.store import open_store
+
+        ont_store = open_store()
+        for entity in ont_store.list_entities(entity_type=OntEntityType.MODULE):
+            total_modules += 1
+            organ_key = entity.metadata.get("organ_key", "")
+            if organ_key:
+                modules_by_organ[organ_key] = modules_by_organ.get(organ_key, 0) + 1
+    except Exception:
+        pass
+
+    # Load deep structural index (ground-truth component census)
+    components_by_organ: dict[str, int] = {}
+    total_components = 0
+    index_hierarchy_depth = 3
+    try:
+        from organvm_engine.paths import corpus_dir
+
+        index_path = corpus_dir() / "data" / "index" / "deep-index.json"
+        if index_path.is_file():
+            idx_data = json.loads(index_path.read_text())
+            total_components = idx_data.get("total_components", 0)
+            components_by_organ = idx_data.get("by_organ", {})
+            # Max depth across all repos
+            for repo_data in idx_data.get("repos", []):
+                md = repo_data.get("max_depth", 0)
+                index_hierarchy_depth = max(index_hierarchy_depth, md)
+    except Exception:
+        pass
+
     organ_densities: dict[str, OrganDensity] = {}
     for organ_org in organism.organs:
         oid = organ_org.organ_id
@@ -303,10 +410,12 @@ def compute_ammoi(
         internal = 0
         cross = 0
         for src, tgt, _ in graph.edges:
-            src_org = src.split("/")[0] if "/" in src else src
-            tgt_org = tgt.split("/")[0] if "/" in tgt else tgt
-            if src_org == oid or tgt_org == oid:
-                if src_org == tgt_org:
+            src_dir = src.split("/")[0] if "/" in src else src
+            tgt_dir = tgt.split("/")[0] if "/" in tgt else tgt
+            src_key = d2r.get(src_dir, src_dir)
+            tgt_key = d2r.get(tgt_dir, tgt_dir)
+            if oid in (src_key, tgt_key):
+                if src_key == tgt_key:
                     internal += 1
                 else:
                     cross += 1
@@ -315,6 +424,8 @@ def compute_ammoi(
             organ_id=oid,
             organ_name=oname,
             repo_count=organ_org.count,
+            module_count=modules_by_organ.get(oid, 0),
+            component_count=components_by_organ.get(oid, 0),
             internal_edges=internal,
             cross_edges=cross,
             avg_gate_pct=organ_org.avg_pct,
@@ -351,10 +462,27 @@ def compute_ammoi(
     except Exception:
         pass
 
+    # Flow analysis (best-effort)
+    flow_data: dict = {}
+    try:
+        from organvm_engine.pulse.flow import compute_flow as _compute_flow
+
+        flow_profile = _compute_flow(graph)
+        flow_data = {
+            "flow_score": flow_profile.flow_score,
+            "flow_active": flow_profile.active_count,
+            "flow_dormant": flow_profile.dormant_count,
+        }
+    except Exception:
+        pass
+
     ammoi = AMMOI(
         timestamp=datetime.now(timezone.utc).isoformat(),
         system_density=round(system_density, 4),
         total_entities=organism.total_repos,
+        total_modules=total_modules,
+        total_components=total_components,
+        hierarchy_depth=max(index_hierarchy_depth, 3 if total_modules > 0 else 2),
         active_edges=dp.declared_edges,
         active_loops=inference_data.get("active_loops", 0),
         tension_count=inference_data.get("tension_count", 0),
@@ -368,7 +496,22 @@ def compute_ammoi(
         density_delta_30d=round(d30d, 4),
         organs=organ_densities,
         pulse_count=pulse_count,
+        flow_score=flow_data.get("flow_score", 0.0),
+        flow_active=flow_data.get("flow_active", 0),
+        flow_dormant=flow_data.get("flow_dormant", 0),
     )
+
+    # Temporal profile (needs >= 3 history snapshots)
+    if len(history) >= 3:
+        try:
+            from organvm_engine.pulse.temporal import compute_temporal_profile
+
+            timeseries = extract_timeseries(history)
+            profile = compute_temporal_profile(timeseries)
+            ammoi.temporal = profile.to_dict()
+        except Exception:
+            pass
+
     ammoi.compressed_text = _build_compressed_text(ammoi)
 
     return ammoi

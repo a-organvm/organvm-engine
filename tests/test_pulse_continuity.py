@@ -384,3 +384,51 @@ class TestBriefingToMarkdown:
         md = briefing_to_markdown(b)
         assert "Agent Activity" in md
         assert "claude-forge" in md
+
+
+# ---------------------------------------------------------------------------
+# Temporal + Flow in briefing (Stream 6)
+# ---------------------------------------------------------------------------
+
+class TestBriefingTemporalFlow:
+    def test_defaults(self):
+        """New fields default to None."""
+        b = SessionBriefing()
+        assert b.temporal_profile is None
+        assert b.flow_summary is None
+
+    def test_to_dict_includes_temporal(self):
+        b = SessionBriefing(
+            temporal_profile={"dominant_trend": "rising", "total_momentum": 0.05},
+        )
+        d = b.to_dict()
+        assert d["temporal_profile"]["dominant_trend"] == "rising"
+
+    def test_to_dict_includes_flow(self):
+        b = SessionBriefing(
+            flow_summary={"flow_score": 42.5, "active": 10, "dormant": 30},
+        )
+        d = b.to_dict()
+        assert d["flow_summary"]["flow_score"] == 42.5
+
+    def test_markdown_includes_temporal(self):
+        b = SessionBriefing(
+            temporal_profile={"dominant_trend": "accelerating", "total_momentum": 0.1},
+        )
+        md = briefing_to_markdown(b)
+        assert "accelerating" in md
+        assert "Temporal trend" in md
+
+    def test_markdown_includes_flow(self):
+        b = SessionBriefing(
+            flow_summary={"flow_score": 42.5, "active": 10, "dormant": 30},
+        )
+        md = briefing_to_markdown(b)
+        assert "42%" in md or "43%" in md
+        assert "Flow" in md
+
+    def test_markdown_without_temporal(self):
+        """No temporal section when temporal_profile is None."""
+        b = SessionBriefing()
+        md = briefing_to_markdown(b)
+        assert "Temporal trend" not in md

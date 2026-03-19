@@ -702,7 +702,7 @@ def cmd_pulse_scan(args: Namespace) -> int:
     print()
     print(f"  Pulse #{ammoi.pulse_count + 1} complete")
     print(f"  System density: {ammoi.system_density:.1%}")
-    print(f"  Entities: {ammoi.total_entities}")
+    print(f"  Hierarchy: 8 organs → {ammoi.total_entities} repos → {ammoi.total_modules} modules")
     print(f"  Active edges: {ammoi.active_edges}")
     print(f"  Events (24h): {ammoi.event_frequency_24h}")
 
@@ -1316,4 +1316,172 @@ def _cmd_pulse_edges_sync(args: Namespace) -> int:
     print(f"  Unresolved: {result.unresolved}")
     print(f"  Total:      {result.created + result.skipped + result.unresolved}")
     print()
+    return 0
+
+
+def cmd_pulse_temporal(args: Namespace) -> int:
+    """Show temporal profile — velocity, acceleration, and trends."""
+    from organvm_engine.pulse.ammoi import _read_history, extract_timeseries
+    from organvm_engine.pulse.temporal import compute_temporal_profile
+
+    use_json = getattr(args, "json", False)
+    window = getattr(args, "window", 7)
+    limit = getattr(args, "limit", 50)
+
+    history = _read_history(limit=limit)
+    if len(history) < 3:
+        if use_json:
+            json.dump({"error": "insufficient history", "snapshots": len(history)}, sys.stdout)
+            sys.stdout.write("\n")
+        else:
+            print(f"  Insufficient history ({len(history)} snapshots, need >= 3).")
+            print(f"  Run `organvm pulse scan` a few times to build history.")
+        return 0
+
+    timeseries = extract_timeseries(history)
+    profile = compute_temporal_profile(timeseries, window=window)
+
+    if use_json:
+        json.dump(profile.to_dict(), sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0
+
+    print()
+    print(f"  Temporal Profile ({len(history)} snapshots, window={window})")
+    print(f"  {'─' * 60}")
+    print(f"  Dominant trend: {profile.dominant_trend.value}")
+    print(f"  Total momentum: {profile.total_momentum:.4f}")
+    print()
+    print(f"  {'Metric':<22} {'Current':>8} {'Velocity':>10} {'Accel':>10} {'Trend':<14}")
+    print(f"  {'─' * 22} {'─' * 8} {'─' * 10} {'─' * 10} {'─' * 14}")
+    for m in profile.metrics:
+        vel_sign = "+" if m.velocity > 0 else ""
+        print(
+            f"  {m.name:<22} {m.current:>8.2f} "
+            f"{vel_sign}{m.velocity:>9.4f} "
+            f"{m.acceleration:>10.4f}  {m.trend.value:<14}",
+        )
+    print()
+    return 0
+
+
+def cmd_pulse_relations(args: Namespace) -> int:
+    """Query multi-scale relations for an entity."""
+    from organvm_engine.pulse.graph import query_relations
+
+    entity = args.entity
+
+    rmap = query_relations(
+        entity,
+        include_seed=not getattr(args, "no_seed", False),
+        include_indexer=not getattr(args, "no_indexer", False),
+        include_ontologia=not getattr(args, "no_ontologia", False),
+    )
+
+    if getattr(args, "json", False):
+        print(json.dumps(rmap.to_dict(), indent=2))
+        return 0
+
+    print(f"  Relations for: {rmap.entity}")
+    if rmap.entity_uid:
+        print(f"  UID: {rmap.entity_uid}  Type: {rmap.entity_type}")
+    print(f"  Total edges: {rmap.total_edges}")
+    print()
+
+    if rmap.seed_produces or rmap.seed_consumes:
+        print("  Inter-Repo (seed graph)")
+        print("  " + "─" * 50)
+        for e in rmap.seed_produces:
+            print(f"    produces → {e.target}  [{e.metadata.get('artifact_type', '')}]")
+        for e in rmap.seed_consumes:
+            print(f"    consumes ← {e.source}  [{e.metadata.get('artifact_type', '')}]")
+        print()
+
+    if rmap.imports_from or rmap.imported_by:
+        print("  Intra-Repo (import graph)")
+        print("  " + "─" * 50)
+        for e in rmap.imports_from:
+            print(f"    imports → {e.target}")
+        for e in rmap.imported_by:
+            print(f"    imported by ← {e.source}")
+        print()
+
+    if rmap.hierarchy_parents or rmap.hierarchy_children or rmap.ontologia_relations:
+        print("  Entity-Level (ontologia)")
+        print("  " + "─" * 50)
+        for e in rmap.hierarchy_parents:
+            print(f"    parent ↑ {e.source}")
+        for e in rmap.hierarchy_children:
+            print(f"    child  ↓ {e.target}")
+        for e in rmap.ontologia_relations:
+            print(f"    {e.relation_type} → {e.target}")
+        print()
+
+    return 0
+
+
+def cmd_pulse_entity_memory(args: Namespace) -> int:
+    """Aggregate all signals about an entity from every data source."""
+    from organvm_engine.pulse.memory import aggregate_entity_memory
+
+    entity = args.entity
+    limit = getattr(args, "limit", 50)
+
+    mem = aggregate_entity_memory(
+        entity,
+        include_pulse=not getattr(args, "no_pulse", False),
+        include_insights=not getattr(args, "no_insights", False),
+        include_ontologia=not getattr(args, "no_ontologia", False),
+        include_continuity=not getattr(args, "no_continuity", False),
+        include_metrics=not getattr(args, "no_metrics", False),
+        limit=limit,
+    )
+
+    if getattr(args, "json", False):
+        print(json.dumps(mem.to_dict(), indent=2))
+        return 0
+
+    print(f"  Entity Memory: {mem.entity}")
+    if mem.entity_uid:
+        print(f"  UID: {mem.entity_uid}  Type: {mem.entity_type}")
+        print(f"  Lifecycle: {mem.lifecycle_status}")
+    print(f"  Total signals: {mem.total_signals}")
+    print()
+
+    if mem.pulse_events:
+        print(f"  Pulse Events ({mem.pulse_event_count})")
+        print("  " + "─" * 50)
+        for ev in mem.pulse_events[-10:]:
+            print(f"    {ev['timestamp'][:19]}  {ev['event_type']:20s}  {ev['source']}")
+        print()
+
+    if mem.insights:
+        print(f"  Shared Memory ({mem.insight_count})")
+        print("  " + "─" * 50)
+        for ins in mem.insights[-10:]:
+            print(f"    [{ins['category']}] {ins['content'][:60]}")
+        print()
+
+    if mem.name_history:
+        print(f"  Name History ({len(mem.name_history)})")
+        print("  " + "─" * 50)
+        for nr in mem.name_history:
+            primary = "*" if nr["is_primary"] else " "
+            print(f"    {primary} {nr['display_name']:30s}  from {nr['valid_from'][:19]}")
+        print()
+
+    if mem.ontologia_events:
+        print(f"  Ontologia Events ({mem.ontologia_event_count})")
+        print("  " + "─" * 50)
+        for ev in mem.ontologia_events[-10:]:
+            print(f"    {ev['timestamp'][:19]}  {ev['event_type']}")
+        print()
+
+    if mem.recent_claims:
+        print(f"  Continuity Claims ({len(mem.recent_claims)})")
+        print("  " + "─" * 50)
+        for claim in mem.recent_claims[:5]:
+            print(f"    {claim}")
+        print()
+
     return 0

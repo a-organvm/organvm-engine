@@ -161,6 +161,187 @@ def cmd_governance_dictums(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_governance_placement(args: argparse.Namespace) -> int:
+    """Audit repo-to-organ placement affinity."""
+    import json as json_mod
+
+    from organvm_engine.governance.placement import (
+        audit_all_placements,
+        load_organ_definitions,
+        recommend_placement,
+    )
+
+    registry = load_registry(args.registry)
+    definitions = load_organ_definitions()
+    if not definitions:
+        print("ERROR: organ-definitions.json not found")
+        return 1
+
+    # Single-repo mode
+    single_repo = getattr(args, "repo", None)
+    if single_repo:
+        resolved = resolve_entity(single_repo, registry=registry)
+        if resolved and resolved.get("registry_entry"):
+            repo = resolved["registry_entry"]
+        else:
+            result = find_repo(registry, single_repo)
+            if not result:
+                print(f"ERROR: Repo '{single_repo}' not found")
+                return 1
+            _, repo = result
+
+        rec = recommend_placement(repo, definitions)
+        if getattr(args, "json", False):
+            print(json_mod.dumps(rec.to_dict(), indent=2))
+        else:
+            print(f"  Repo: {rec.repo_name}")
+            print(f"  Current organ: {rec.current_organ}")
+            print(f"  Flagged: {'YES' if rec.flagged else 'no'}")
+            print()
+            for s in rec.scores[:5]:
+                marker = " <-- current" if s.organ == rec.current_organ else ""
+                print(f"  {s.organ:14s}  score={s.score:3d}{marker}")
+                for inc in s.matched_inclusion:
+                    print(f"    + {inc}")
+                for exc in s.triggered_exclusion:
+                    print(f"    - {exc}")
+                for n in s.notes:
+                    print(f"    * {n}")
+        return 0
+
+    # Full audit mode
+    audit = audit_all_placements(registry, definitions)
+
+    if getattr(args, "json", False):
+        print(json_mod.dumps(audit.to_dict(), indent=2))
+        return 0
+
+    audit_only = getattr(args, "audit", False)
+
+    print("Organ Placement Audit")
+    print("=" * 60)
+    print(f"  Total repos: {audit.total_repos}")
+    print(f"  Well-placed: {audit.well_placed}")
+    print(f"  Questionable: {len(audit.questionable)}")
+    print(f"  Misplaced: {len(audit.misplaced)}")
+
+    if audit.misplaced:
+        print(f"\n  MISPLACED ({len(audit.misplaced)}):")
+        print("  " + "─" * 56)
+        for rec in audit.misplaced:
+            top = rec.scores[0] if rec.scores else None
+            cur = next(
+                (s for s in rec.scores if s.organ == rec.current_organ), None,
+            )
+            cur_score = cur.score if cur else 0
+            top_info = f" → best: {top.organ} ({top.score})" if top else ""
+            print(f"    {rec.repo_name:30s}  {rec.current_organ} ({cur_score}){top_info}")
+
+    if audit.questionable and not audit_only:
+        print(f"\n  QUESTIONABLE ({len(audit.questionable)}):")
+        print("  " + "─" * 56)
+        for rec in audit.questionable:
+            top = rec.scores[0] if rec.scores else None
+            cur = next(
+                (s for s in rec.scores if s.organ == rec.current_organ), None,
+            )
+            cur_score = cur.score if cur else 0
+            top_info = f" → best: {top.organ} ({top.score})" if top else ""
+            print(f"    {rec.repo_name:30s}  {rec.current_organ} ({cur_score}){top_info}")
+
+    return 0
+
+
+def cmd_governance_excavate(args: argparse.Namespace) -> int:
+    """Run buried entity excavation across the workspace."""
+    import json as json_mod
+    from pathlib import Path
+
+    from organvm_engine.governance.excavation import run_full_excavation
+
+    registry = load_registry(args.registry)
+    workspace = Path(args.workspace) if getattr(args, "workspace", None) else None
+
+    if workspace is None:
+        from organvm_engine.paths import workspace_root
+
+        workspace = workspace_root()
+
+    entity_type = getattr(args, "type", None)
+    severity = getattr(args, "severity", None)
+    families_only = getattr(args, "families", False)
+
+    report = run_full_excavation(workspace, registry)
+
+    findings = report.findings
+    if entity_type:
+        findings = [f for f in findings if f.entity_type == entity_type]
+    if severity:
+        sev_order = {"info": 0, "warning": 1, "critical": 2}
+        min_sev = sev_order.get(severity, 0)
+        findings = [
+            f for f in findings
+            if sev_order.get(f.severity, 0) >= min_sev
+        ]
+
+    if getattr(args, "json", False):
+        out = report.to_dict()
+        out["findings"] = [f.to_dict() for f in findings]
+        print(json_mod.dumps(out, indent=2))
+        return 0
+
+    if families_only:
+        families = report.cross_organ_families
+        if not families:
+            print("No cross-organ families detected.")
+            return 0
+        print(f"Cross-Organ Families ({len(families)}):")
+        print("=" * 60)
+        for fam in families:
+            print(f"\n  Family: {fam.get('stem', '?')}")
+            for member in fam.get("members", []):
+                print(f"    {member.get('organ', '?'):14s}  {member.get('repo', '?')}")
+        return 0
+
+    print("Excavation Report")
+    print("=" * 60)
+    print(f"  Scanned repos: {report.scanned_repos}")
+    print(f"  Total findings: {len(findings)}")
+    print(f"  By type: {report.by_type}")
+    print(f"  By severity: {report.by_severity}")
+
+    if findings:
+        print(f"\n  {'Repo':25s} {'Organ':14s} {'Type':20s} {'Sev':8s} {'Pattern':13s} Path")
+        print("  " + "─" * 90)
+        for f in findings:
+            pat = getattr(f, "pattern", "") or ""
+            print(
+                f"  {f.repo:25s} {f.organ:14s} {f.entity_type:20s} "
+                f"{f.severity:8s} {pat:13s} {f.entity_path}",
+            )
+
+    # --register: create ontologia MODULE entities from sub-package findings
+    if getattr(args, "register", False):
+        from organvm_engine.governance.module_bridge import sync_modules_from_excavation
+
+        sub_pkgs = [f for f in report.findings if f.entity_type == "sub_package"]
+        if not sub_pkgs:
+            print("\nNo sub-packages to register.")
+        else:
+            result = sync_modules_from_excavation(sub_pkgs)
+            print("\nOntologia registration:")
+            print(f"  Modules created: {result.modules_created}")
+            print(f"  Modules skipped (existing): {result.modules_skipped}")
+            print(f"  Hierarchy edges: {result.hierarchy_edges_created}")
+            if result.unresolved_parents:
+                print(f"  Unresolved parents: {result.unresolved_parents}")
+            if result.errors:
+                for err in result.errors:
+                    print(f"  ERROR: {err}")
+
+    return 0
+
+
 def cmd_governance_impact(args: argparse.Namespace) -> int:
     from organvm_engine.governance.impact import calculate_impact
 

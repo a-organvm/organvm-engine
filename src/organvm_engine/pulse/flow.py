@@ -185,8 +185,19 @@ def compute_flow(graph: object, hours: int = 168) -> FlowProfile:
         # Count events mentioning source or target
         relevant_events: list = []
         for e in events:
+            # Match on event source
             if _node_matches_event(src, e.source) or _node_matches_event(
                 tgt, e.source,
+            ):
+                relevant_events.append(e)
+                continue
+            # Also match on payload subject_entity or consumers (events use
+            # module names like "pulse"/"metrics" as source, but may reference
+            # specific repos in their payload)
+            payload = e.payload if hasattr(e, "payload") and isinstance(e.payload, dict) else {}
+            subject = payload.get("subject_entity", "")
+            if subject and (
+                _node_matches_event(src, subject) or _node_matches_event(tgt, subject)
             ):
                 relevant_events.append(e)
 

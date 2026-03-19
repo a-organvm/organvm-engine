@@ -132,3 +132,45 @@ class TestSeedGraphStringEntries:
         # Edge should be created: producer --[unknown]--> consumer
         assert len(graph.edges) == 1
         assert graph.edges[0] == ("org/producer", "org/consumer", "unknown")
+
+
+class TestSeedGraphRegistryKeyAlias:
+    """Test that build_seed_graph resolves registry-key organ names to dir names."""
+
+    def test_registry_key_source_resolves(self, tmp_path, monkeypatch):
+        """source: META-ORGANVM should match producer org 'meta-organvm'."""
+        import yaml
+
+        # Create two seed.yaml files
+        producer_dir = tmp_path / "meta-organvm" / "schema-defs"
+        producer_dir.mkdir(parents=True)
+        (producer_dir / "seed.yaml").write_text(yaml.dump({
+            "schema_version": "1.0",
+            "organ": "Meta", "repo": "schema-defs", "org": "meta-organvm",
+            "produces": [{"type": "schema", "description": "JSON schemas"}],
+        }))
+
+        consumer_dir = tmp_path / "meta-organvm" / "engine"
+        consumer_dir.mkdir(parents=True)
+        (consumer_dir / "seed.yaml").write_text(yaml.dump({
+            "schema_version": "1.0",
+            "organ": "Meta", "repo": "engine", "org": "meta-organvm",
+            "consumes": [{"type": "schema", "source": "META-ORGANVM"}],
+        }))
+
+        # Patch discover_seeds to find only these two
+        monkeypatch.setattr(
+            "organvm_engine.seed.graph.discover_seeds",
+            lambda workspace=None, orgs=None: [
+                producer_dir / "seed.yaml",
+                consumer_dir / "seed.yaml",
+            ],
+        )
+
+        from organvm_engine.seed.graph import build_seed_graph
+
+        graph = build_seed_graph()
+        assert len(graph.edges) == 1
+        assert graph.edges[0] == (
+            "meta-organvm/schema-defs", "meta-organvm/engine", "schema"
+        )

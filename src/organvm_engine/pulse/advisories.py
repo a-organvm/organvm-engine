@@ -75,6 +75,66 @@ def _severity_from_action(action: str) -> str:
     return "info"
 
 
+def check_snapshot_staleness(
+    snapshot_path: Path,
+    max_age_hours: int = 48,
+) -> Advisory | None:
+    """Check if system-snapshot.json is stale or missing."""
+    now = datetime.now(timezone.utc)
+
+    if not snapshot_path.is_file():
+        return Advisory(
+            advisory_id=_make_advisory_id("snapshot-staleness", "system"),
+            policy_id="snapshot-staleness",
+            action="flag",
+            entity_id="system",
+            entity_name="system-snapshot.json",
+            description="System snapshot not found. Run `organvm refresh`.",
+            severity="warning",
+            timestamp=now.isoformat(),
+        )
+
+    try:
+        data = json.loads(snapshot_path.read_text())
+        generated_at = data.get("generated_at", "")
+        if not generated_at:
+            raise ValueError("No generated_at field")
+        gen_dt = datetime.fromisoformat(generated_at)
+        age = now - gen_dt
+        if age > timedelta(hours=max_age_hours):
+            days = age.days
+            return Advisory(
+                advisory_id=_make_advisory_id("snapshot-staleness", "system"),
+                policy_id="snapshot-staleness",
+                action="flag",
+                entity_id="system",
+                entity_name="system-snapshot.json",
+                description=(
+                    f"System snapshot is {days} days stale. "
+                    f"Run `organvm refresh` or trigger CI workflow."
+                ),
+                severity="warning",
+                timestamp=now.isoformat(),
+                evidence={
+                    "generated_at": generated_at,
+                    "age_hours": int(age.total_seconds() / 3600),
+                },
+            )
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return Advisory(
+            advisory_id=_make_advisory_id("snapshot-staleness", "system"),
+            policy_id="snapshot-staleness",
+            action="flag",
+            entity_id="system",
+            entity_name="system-snapshot.json",
+            description="System snapshot is malformed. Run `organvm refresh`.",
+            severity="warning",
+            timestamp=now.isoformat(),
+        )
+
+    return None
+
+
 def _build_repo_state(repo_dict: dict[str, Any]) -> dict[str, Any]:
     """Build entity state dict from registry repo data for policy evaluation."""
     last_val = repo_dict.get("last_validated", "")
@@ -103,6 +163,48 @@ def _build_repo_state(repo_dict: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_inference_context(
+    workspace: Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Build per-entity inference context from ontologia analysis.
+
+    Runs inference once and returns a lookup mapping entity IDs to
+    structural properties needed by governance policies:
+    - is_orphan, incoming_relations, cluster_size, cohesion
+
+    Returns empty dict on any failure (fail-safe).
+    """
+    try:
+        from organvm_engine.pulse.inference_bridge import run_inference
+
+        summary = run_inference(workspace)
+        ctx: dict[str, dict[str, Any]] = {}
+
+        # Mark orphans
+        for eid in summary.orphaned_entities:
+            ctx.setdefault(eid, {})["is_orphan"] = True
+
+        # Mark overcoupled (high incoming relations)
+        for eid in summary.overcoupled_entities:
+            entry = ctx.setdefault(eid, {})
+            entry["incoming_relations"] = entry.get("incoming_relations", 0) + 5
+
+        # Mark cluster membership
+        for cluster in summary.clusters:
+            entity_ids = cluster.get("entity_ids", [])
+            cohesion = cluster.get("cohesion", 0.0)
+            size = len(entity_ids)
+            for eid in entity_ids:
+                entry = ctx.setdefault(eid, {})
+                entry["cluster_size"] = size
+                entry["cohesion"] = cohesion
+
+        return ctx
+    except Exception:
+        logger.debug("Inference context build failed (non-fatal)", exc_info=True)
+        return {}
+
+
 def evaluate_all_policies(workspace: Path | None = None) -> list[Advisory]:
     """Evaluate default policies against live registry state.
 
@@ -127,6 +229,9 @@ def evaluate_all_policies(workspace: Path | None = None) -> list[Advisory]:
     # Read existing advisory IDs for deduplication
     existing_ids = {a.advisory_id for a in read_advisories(limit=500)}
 
+    # Build inference context once for all repos
+    inference_ctx = _build_inference_context(workspace)
+
     now = datetime.now(timezone.utc).isoformat()
     advisories: list[Advisory] = []
 
@@ -136,6 +241,13 @@ def evaluate_all_policies(workspace: Path | None = None) -> list[Advisory]:
             repo_name = repo.get("name", "")
             entity_id = f"{organ_key}/{repo_name}"
             state = _build_repo_state(repo)
+
+            # Merge inference-derived structural data if available
+            for eid, entity_data in inference_ctx.items():
+                # Match by entity ID suffix (repo name) since inference uses UIDs
+                if eid.endswith(repo_name) or repo_name in eid:
+                    state.update(entity_data)
+                    break
 
             for policy in DEFAULT_POLICIES:
                 if policy.scope_entity_type and policy.scope_entity_type != "repo":
@@ -156,6 +268,41 @@ def evaluate_all_policies(workspace: Path | None = None) -> list[Advisory]:
                         evidence={k: v for k, v in state.items()
                                   if v and v is not True},
                     ))
+
+    # -----------------------------------------------------------------------
+    # Metric threshold advisories — best-effort, completely optional
+    # -----------------------------------------------------------------------
+    try:
+        from organvm_engine.pulse.metric_policies import evaluate_metric_thresholds
+    except ImportError:
+        pass
+    else:
+        try:
+            from ontologia.registry.store import open_store
+
+            store = open_store()
+            obs_store = store.observation_store
+            all_obs = obs_store.query()
+            metric_advs = evaluate_metric_thresholds(all_obs)
+            for adv in metric_advs:
+                if adv.advisory_id not in existing_ids:
+                    advisories.append(adv)
+        except ImportError:
+            logger.debug("ontologia not available for metric threshold evaluation")
+        except Exception:
+            logger.debug(
+                "Metric threshold evaluation failed (non-fatal)", exc_info=True,
+            )
+
+    # Check snapshot staleness
+    try:
+        from organvm_engine.paths import corpus_dir
+        snapshot_path = Path(corpus_dir()) / "system-snapshot.json"
+        staleness = check_snapshot_staleness(snapshot_path)
+        if staleness and staleness.advisory_id not in existing_ids:
+            advisories.append(staleness)
+    except Exception:
+        pass
 
     return advisories
 

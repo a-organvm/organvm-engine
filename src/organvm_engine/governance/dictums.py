@@ -557,6 +557,83 @@ def validate_logos_write_scope(
     return violations
 
 
+def validate_organ_placement(
+    registry: dict,
+    workspace: Path | None = None,
+) -> list[DictumViolation]:
+    """AX-5: Check every non-archived repo against its organ's definitions.
+
+    Loads organ-definitions.json and validates:
+    1. Revenue-bearing repos outside ORGAN-III are flagged
+    2. Repos with no consumers in ORGAN-I (producing nothing) are flagged
+    3. Basic keyword heuristics against exclusion criteria
+    """
+    violations: list[DictumViolation] = []
+
+    from organvm_engine.governance.placement import load_organ_definitions
+    from organvm_engine.registry.query import all_repos
+
+    definitions = load_organ_definitions()
+    if not definitions:
+        return violations
+
+    organs_defs = definitions.get("organs", {})
+
+    for organ_key, repo in all_repos(registry):
+        if repo.get("implementation_status") == "ARCHIVED":
+            continue
+        name = repo.get("name", "?")
+
+        organ_def = organs_defs.get(organ_key)
+        if not organ_def:
+            continue
+
+        # Check: revenue model outside ORGAN-III
+        revenue = repo.get("revenue_model")
+        if revenue and revenue not in ("none", "internal") and organ_key != "ORGAN-III":
+            violations.append(DictumViolation(
+                dictum_id="AX-5",
+                dictum_name="Organ Placement",
+                severity="warning",
+                message=(
+                    f"Has revenue_model='{revenue}' but is in {organ_key}, "
+                    "not ORGAN-III"
+                ),
+                organ=organ_key,
+                repo=name,
+            ))
+
+        # Check: ORGAN-I repos with no consumers may be misplaced
+        if organ_key == "ORGAN-I":
+            deps_pointing_here = False
+            for other_key, other_repo in all_repos(registry):
+                if other_key == organ_key:
+                    continue
+                for dep in other_repo.get("dependencies", []):
+                    org_prefix = repo.get("org", "")
+                    if f"{org_prefix}/{name}" == dep:
+                        deps_pointing_here = True
+                        break
+                if deps_pointing_here:
+                    break
+            if not deps_pointing_here and repo.get("promotion_status") not in (
+                "LOCAL", "INCUBATOR",
+            ):
+                violations.append(DictumViolation(
+                    dictum_id="AX-5",
+                    dictum_name="Organ Placement",
+                    severity="warning",
+                    message=(
+                        "ORGAN-I repo with no cross-organ consumers — "
+                        "may not be producing theory consumed by other organs"
+                    ),
+                    organ=organ_key,
+                    repo=name,
+                ))
+
+    return violations
+
+
 def validate_kerygma_consumer(
     registry: dict,
     workspace: Path | None = None,
@@ -616,6 +693,7 @@ _VALIDATORS: dict[str, callable] = {
     "validate_promotion_integrity": lambda reg, rules, ws: validate_promotion_integrity(reg),
     "validate_logos_write_scope": lambda reg, rules, ws: validate_logos_write_scope(reg, ws),
     "validate_kerygma_consumer": lambda reg, rules, ws: validate_kerygma_consumer(reg, ws),
+    "validate_organ_placement": lambda reg, rules, ws: validate_organ_placement(reg, ws),
 }
 
 

@@ -12,6 +12,7 @@ from organvm_engine.pulse.ammoi import (
     OrganDensity,
     _build_compressed_text,
     _compute_temporal_deltas,
+    extract_timeseries,
 )
 
 
@@ -244,3 +245,121 @@ class TestCompressedText:
         a = AMMOI(system_density=0.5, density_delta_24h=0.0)
         text = _build_compressed_text(a)
         assert "d24h" not in text
+
+    def test_includes_trend_when_nonstable(self):
+        """Compressed text includes trend indicator when temporal data has non-stable trend."""
+        a = AMMOI(
+            system_density=0.5,
+            temporal={"dominant_trend": "rising", "total_momentum": 0.05, "metrics": []},
+        )
+        text = _build_compressed_text(a)
+        assert "trend:rising" in text
+
+    def test_no_trend_when_stable(self):
+        """No trend indicator when dominant trend is stable."""
+        a = AMMOI(
+            system_density=0.5,
+            temporal={"dominant_trend": "stable", "total_momentum": 0.0, "metrics": []},
+        )
+        text = _build_compressed_text(a)
+        assert "trend:" not in text
+
+    def test_no_trend_without_temporal(self):
+        """No trend indicator when temporal data is absent."""
+        a = AMMOI(system_density=0.5)
+        text = _build_compressed_text(a)
+        assert "trend:" not in text
+
+
+# ---------------------------------------------------------------------------
+# New fields: temporal + flow (Streams 1+4)
+# ---------------------------------------------------------------------------
+
+
+class TestAMMOINewFields:
+    def test_temporal_defaults_to_none(self):
+        a = AMMOI()
+        assert a.temporal is None
+
+    def test_flow_defaults(self):
+        a = AMMOI()
+        assert a.flow_score == 0.0
+        assert a.flow_active == 0
+        assert a.flow_dormant == 0
+
+    def test_to_dict_includes_temporal(self):
+        a = AMMOI(
+            temporal={"dominant_trend": "rising", "total_momentum": 0.1, "metrics": []},
+        )
+        d = a.to_dict()
+        assert d["temporal"]["dominant_trend"] == "rising"
+
+    def test_to_dict_temporal_none(self):
+        a = AMMOI()
+        d = a.to_dict()
+        assert d["temporal"] is None
+
+    def test_to_dict_includes_flow(self):
+        a = AMMOI(flow_score=42.5, flow_active=10, flow_dormant=30)
+        d = a.to_dict()
+        assert d["flow_score"] == 42.5
+        assert d["flow_active"] == 10
+        assert d["flow_dormant"] == 30
+
+    def test_from_dict_roundtrip_with_temporal(self):
+        tp = {"dominant_trend": "accelerating", "total_momentum": 0.3, "metrics": []}
+        a = AMMOI(temporal=tp, flow_score=15.0, flow_active=5, flow_dormant=20)
+        restored = AMMOI.from_dict(a.to_dict())
+        assert restored.temporal == tp
+        assert restored.flow_score == 15.0
+        assert restored.flow_active == 5
+        assert restored.flow_dormant == 20
+
+    def test_from_dict_missing_new_fields(self):
+        """Existing AMMOI history without new fields loads cleanly."""
+        a = AMMOI.from_dict({"timestamp": "2026-01-01T00:00:00Z"})
+        assert a.temporal is None
+        assert a.flow_score == 0.0
+        assert a.flow_active == 0
+        assert a.flow_dormant == 0
+
+
+# ---------------------------------------------------------------------------
+# extract_timeseries (Stream 1)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractTimeseries:
+    def test_empty_history(self):
+        result = extract_timeseries([])
+        assert result == {}
+
+    def test_extracts_all_metric_keys(self):
+        history = [
+            AMMOI(system_density=0.4, active_edges=80, tension_count=3,
+                  event_frequency_24h=10, cluster_count=2, orphan_count=5,
+                  overcoupled_count=1, inference_score=0.8, flow_score=30.0),
+            AMMOI(system_density=0.45, active_edges=85, tension_count=2,
+                  event_frequency_24h=12, cluster_count=3, orphan_count=4,
+                  overcoupled_count=1, inference_score=0.85, flow_score=35.0),
+        ]
+        result = extract_timeseries(history)
+        expected_keys = {
+            "system_density", "active_edges", "tension_count",
+            "event_frequency_24h", "cluster_count", "orphan_count",
+            "overcoupled_count", "inference_score", "flow_score",
+        }
+        assert set(result.keys()) == expected_keys
+
+    def test_preserves_order(self):
+        history = [
+            AMMOI(system_density=0.1),
+            AMMOI(system_density=0.2),
+            AMMOI(system_density=0.3),
+        ]
+        result = extract_timeseries(history)
+        assert result["system_density"] == [0.1, 0.2, 0.3]
+
+    def test_single_snapshot(self):
+        result = extract_timeseries([AMMOI(system_density=0.5)])
+        assert result["system_density"] == [0.5]

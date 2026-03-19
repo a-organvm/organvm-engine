@@ -30,6 +30,8 @@ class SessionBriefing:
     key_changes: list[str] = field(default_factory=list)
     active_tensions: list[dict] = field(default_factory=list)
     pending_advisories: list[dict] = field(default_factory=list)
+    temporal_profile: dict | None = None
+    flow_summary: dict | None = None
 
     def to_dict(self) -> dict:
         from dataclasses import asdict
@@ -52,6 +54,8 @@ class SessionBriefing:
             "key_changes": self.key_changes,
             "active_tensions": self.active_tensions,
             "pending_advisories": self.pending_advisories,
+            "temporal_profile": self.temporal_profile,
+            "flow_summary": self.flow_summary,
         }
 
 
@@ -232,6 +236,31 @@ def build_briefing(hours: int = 24) -> SessionBriefing:
     except Exception:
         pass
 
+    # Temporal profile from AMMOI history (best-effort)
+    temporal_profile: dict | None = None
+    flow_summary: dict | None = None
+    try:
+        from organvm_engine.pulse.ammoi import _read_history, extract_timeseries
+        from organvm_engine.pulse.temporal import compute_temporal_profile
+
+        history = _read_history(limit=50)
+        if len(history) >= 3:
+            timeseries = extract_timeseries(history)
+            profile = compute_temporal_profile(timeseries)
+            temporal_profile = profile.to_dict()
+
+        # Flow from latest AMMOI
+        if history:
+            latest = history[-1]
+            if latest.flow_score > 0:
+                flow_summary = {
+                    "flow_score": latest.flow_score,
+                    "active": latest.flow_active,
+                    "dormant": latest.flow_dormant,
+                }
+    except Exception:
+        pass
+
     return SessionBriefing(
         recent_events=events,
         recent_claims=claims,
@@ -241,6 +270,8 @@ def build_briefing(hours: int = 24) -> SessionBriefing:
         key_changes=key_changes,
         active_tensions=tensions,
         pending_advisories=advisories,
+        temporal_profile=temporal_profile,
+        flow_summary=flow_summary,
     )
 
 
@@ -269,6 +300,21 @@ def briefing_to_markdown(briefing: SessionBriefing) -> str:
     if briefing.last_mood is not None:
         mood_val = briefing.last_mood.mood.value
         lines.append(f"**Last mood:** {mood_val}")
+    lines.append("")
+
+    # Temporal trends
+    if briefing.temporal_profile:
+        dominant = briefing.temporal_profile.get("dominant_trend", "stable")
+        momentum = briefing.temporal_profile.get("total_momentum", 0)
+        lines.append(f"**Temporal trend:** {dominant} (momentum: {momentum:.3f})")
+
+    # Flow state
+    if briefing.flow_summary:
+        fs = briefing.flow_summary
+        lines.append(
+            f"**Flow:** {fs.get('flow_score', 0):.0f}% "
+            f"({fs.get('active', 0)} active, {fs.get('dormant', 0)} dormant)",
+        )
     lines.append("")
 
     # Active agents

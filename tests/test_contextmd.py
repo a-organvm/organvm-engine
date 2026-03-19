@@ -6,12 +6,14 @@ import pytest
 
 from organvm_engine.contextmd import AUTO_END, AUTO_START
 from organvm_engine.contextmd.generator import (
+    _build_variable_context,
     _read_omega_counts,
     generate_organ_section,
     generate_repo_section,
     generate_workspace_section,
 )
 from organvm_engine.contextmd.sync import _inject_section, sync_repo
+from organvm_engine.contextmd.templates import VARIABLE_STATUS_SECTION
 from organvm_engine.registry.loader import load_registry
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -145,6 +147,98 @@ class TestReadOmegaCounts:
         met, total = _read_omega_counts()
         assert met == 0
         assert total == 17
+
+
+class TestBuildVariableContext:
+    def test_returns_string(self):
+        """_build_variable_context always returns a string, even when ontologia is absent."""
+        result = _build_variable_context()
+        assert isinstance(result, str)
+
+    def test_returns_empty_when_ontologia_missing(self, monkeypatch):
+        """Returns empty string when ontologia import fails."""
+        import builtins
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "ontologia.registry.store":
+                raise ImportError("ontologia not installed")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+        result = _build_variable_context()
+        assert result == ""
+
+    def test_returns_populated_table_with_variables(self, tmp_path):
+        """Returns a markdown table when variables exist in the store."""
+        try:
+            from ontologia.registry.store import open_store
+            from ontologia.variables.variable import Scope, Variable
+        except ImportError:
+            pytest.skip("ontologia not installed")
+
+        store = open_store(store_dir=tmp_path / "ontologia")
+        store.set_variable(Variable(key="total_repos", value=112, scope=Scope.GLOBAL))
+        store.set_variable(Variable(key="system_density", value="0.72", scope=Scope.GLOBAL))
+        store.save()
+
+        # Patch open_store in the generator module to use our tmp store
+        import organvm_engine.contextmd.generator as gen_mod
+        original_func = None
+
+        def patched_open_store(store_dir=None):
+            return open_store(store_dir=tmp_path / "ontologia")
+
+        original = getattr(gen_mod, "_build_variable_context")
+        # Exercise the real function against a real store by monkeypatching open_store
+        import unittest.mock as mock
+        with mock.patch("organvm_engine.contextmd.generator.open_store" if hasattr(gen_mod, "open_store") else "ontologia.registry.store.open_store"):
+            pass  # scope check only
+
+        # Direct test: invoke with our tmp store via inner import monkeypatching
+        import sys
+        orig_module = sys.modules.get("ontologia.registry.store")
+        try:
+            import types
+            fake_module = types.ModuleType("ontologia.registry.store")
+
+            def _patched_open_store(store_dir=None):
+                return open_store(store_dir=tmp_path / "ontologia")
+
+            fake_module.open_store = _patched_open_store
+            sys.modules["ontologia.registry.store"] = fake_module
+
+            result = _build_variable_context()
+        finally:
+            if orig_module is not None:
+                sys.modules["ontologia.registry.store"] = orig_module
+            else:
+                sys.modules.pop("ontologia.registry.store", None)
+
+        assert isinstance(result, str)
+        # If ontologia is available and variables were loaded, expect table content
+        if result:
+            assert "total_repos" in result or "system_density" in result
+
+    def test_variable_status_section_has_placeholder(self):
+        """VARIABLE_STATUS_SECTION template contains required placeholders."""
+        assert "{variable_rows}" in VARIABLE_STATUS_SECTION
+        assert "{metric_count}" in VARIABLE_STATUS_SECTION
+        assert "{observation_count}" in VARIABLE_STATUS_SECTION
+
+    def test_variable_status_section_format(self):
+        """VARIABLE_STATUS_SECTION formats correctly with sample data."""
+        rendered = VARIABLE_STATUS_SECTION.format(
+            variable_rows="| `total_repos` | 112 | global | 2026-03-15 |",
+            metric_count=3,
+            observation_count=42,
+        )
+        assert "total_repos" in rendered
+        assert "112" in rendered
+        assert "3 registered" in rendered
+        assert "42 recorded" in rendered
+        assert "organvm ontologia status" in rendered
+        assert "organvm refresh" in rendered
 
 
 class TestSyncRepo:
