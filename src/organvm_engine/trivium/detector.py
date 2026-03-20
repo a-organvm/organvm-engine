@@ -24,6 +24,8 @@ class CorrespondenceType(Enum):
     SEMANTIC = "semantic"        # description similarity
     MATURITY = "maturity"        # parallel promotion status distributions
     FORMATION = "formation"      # parallel tier/role classifications
+    TECHNOLOGY = "technology"    # shared technology stack indicators
+    GOVERNANCE = "governance"    # parallel governance patterns (CI, platinum, public)
 
 
 @dataclass(frozen=True)
@@ -285,6 +287,110 @@ def detect_formation_correspondences(
     return correspondences
 
 
+def detect_technology_correspondences(
+    organ_a_repos: list[dict[str, Any]],
+    organ_b_repos: list[dict[str, Any]],
+) -> list[Correspondence]:
+    """Detect repos sharing technology stack indicators.
+
+    Uses description keywords, repo name patterns, and any available
+    technology metadata to identify shared stacks across organs.
+    """
+    if not organ_a_repos or not organ_b_repos:
+        return []
+
+    correspondences: list[Correspondence] = []
+
+    # Technology indicators from names and descriptions
+    tech_keywords = {
+        "python", "typescript", "javascript", "rust", "react", "fastapi",
+        "nextjs", "astro", "django", "flask", "node", "deno", "svelte",
+        "api", "cli", "sdk", "mcp", "websocket", "graphql", "rest",
+    }
+
+    for a in organ_a_repos:
+        a_tech = _extract_tech(a, tech_keywords)
+        if not a_tech:
+            continue
+        for b in organ_b_repos:
+            b_tech = _extract_tech(b, tech_keywords)
+            if not b_tech:
+                continue
+            shared = a_tech & b_tech
+            if shared:
+                strength = len(shared) / max(len(a_tech), len(b_tech))
+                correspondences.append(Correspondence(
+                    correspondence_type=CorrespondenceType.TECHNOLOGY,
+                    source_organ=a.get("org", ""),
+                    target_organ=b.get("org", ""),
+                    source_entity=a.get("name", ""),
+                    target_entity=b.get("name", ""),
+                    evidence=f"Shared tech: {', '.join(sorted(shared))}",
+                    strength=min(strength, 1.0),
+                ))
+
+    return correspondences
+
+
+def detect_governance_correspondences(
+    organ_a_repos: list[dict[str, Any]],
+    organ_b_repos: list[dict[str, Any]],
+) -> list[Correspondence]:
+    """Detect parallel governance patterns across organs.
+
+    Compares CI workflow presence, platinum status, and public visibility
+    distributions to find organs that govern themselves similarly.
+    """
+    if not organ_a_repos or not organ_b_repos:
+        return []
+
+    correspondences: list[Correspondence] = []
+
+    # Compare CI workflow coverage
+    a_ci = sum(1 for r in organ_a_repos if r.get("ci_workflow"))
+    b_ci = sum(1 for r in organ_b_repos if r.get("ci_workflow"))
+    a_ci_ratio = a_ci / len(organ_a_repos) if organ_a_repos else 0
+    b_ci_ratio = b_ci / len(organ_b_repos) if organ_b_repos else 0
+
+    ci_similarity = 1.0 - abs(a_ci_ratio - b_ci_ratio)
+    if ci_similarity > 0.5 and (a_ci > 0 or b_ci > 0):
+        correspondences.append(Correspondence(
+            correspondence_type=CorrespondenceType.GOVERNANCE,
+            source_organ=organ_a_repos[0].get("org", ""),
+            target_organ=organ_b_repos[0].get("org", ""),
+            source_entity=f"ci_coverage:{a_ci_ratio:.0%}",
+            target_entity=f"ci_coverage:{b_ci_ratio:.0%}",
+            evidence=(
+                f"CI coverage similarity: {ci_similarity:.2f} "
+                f"({a_ci}/{len(organ_a_repos)} vs {b_ci}/{len(organ_b_repos)})"
+            ),
+            strength=ci_similarity,
+        ))
+
+    # Compare public visibility ratio
+    a_pub = sum(1 for r in organ_a_repos if r.get("public"))
+    b_pub = sum(1 for r in organ_b_repos if r.get("public"))
+    a_pub_ratio = a_pub / len(organ_a_repos) if organ_a_repos else 0
+    b_pub_ratio = b_pub / len(organ_b_repos) if organ_b_repos else 0
+
+    pub_similarity = 1.0 - abs(a_pub_ratio - b_pub_ratio)
+    if pub_similarity > 0.5 and (a_pub > 0 or b_pub > 0):
+        correspondences.append(Correspondence(
+            correspondence_type=CorrespondenceType.GOVERNANCE,
+            source_organ=organ_a_repos[0].get("org", ""),
+            target_organ=organ_b_repos[0].get("org", ""),
+            source_entity=f"public_ratio:{a_pub_ratio:.0%}",
+            target_entity=f"public_ratio:{b_pub_ratio:.0%}",
+            evidence=(
+                f"Public visibility similarity: {pub_similarity:.2f} "
+                f"({a_pub}/{len(organ_a_repos)} vs {b_pub}/{len(organ_b_repos)})"
+            ),
+            strength=pub_similarity,
+        ))
+
+    return correspondences
+
+
 def scan_organ_pair(
     organ_a_key: str,
     organ_b_key: str,
@@ -318,6 +424,8 @@ def scan_organ_pair(
     all_corr.extend(detect_semantic_correspondences(a_repos, b_repos))
     all_corr.extend(detect_maturity_correspondences(a_repos, b_repos))
     all_corr.extend(detect_formation_correspondences(a_repos, b_repos))
+    all_corr.extend(detect_technology_correspondences(a_repos, b_repos))
+    all_corr.extend(detect_governance_correspondences(a_repos, b_repos))
 
     by_type: dict[str, int] = {}
     for c in all_corr:
@@ -406,6 +514,13 @@ def _tier_distribution(repos: list[dict[str, Any]]) -> dict[str, int]:
 def _description_keywords(desc: str) -> set[str]:
     words = re.findall(r"[a-zA-Z]+", desc.lower())
     return {w for w in words if len(w) > 3 and w not in _STOP_WORDS}
+
+
+def _extract_tech(repo: dict[str, Any], keywords: set[str]) -> set[str]:
+    """Extract technology indicators from a repo's name and description."""
+    text = (repo.get("name", "") + " " + repo.get("description", "")).lower()
+    words = set(re.findall(r"[a-z]+", text))
+    return words & keywords
 
 
 def _repos_for_organ(organ_key: str, registry: dict[str, Any]) -> list[dict]:

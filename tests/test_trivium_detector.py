@@ -8,10 +8,12 @@ from organvm_engine.trivium.detector import (
     CorrespondenceType,
     detect_formation_correspondences,
     detect_functional_correspondences,
+    detect_governance_correspondences,
     detect_maturity_correspondences,
     detect_naming_isomorphisms,
     detect_semantic_correspondences,
     detect_structural_correspondences,
+    detect_technology_correspondences,
     scan_organ_pair,
 )
 
@@ -24,7 +26,7 @@ def _load_fixture() -> dict:
 
 
 def test_correspondence_type_enum():
-    assert len(CorrespondenceType) == 6
+    assert len(CorrespondenceType) == 8
 
 
 def test_correspondence_strength_range():
@@ -205,3 +207,65 @@ def test_detect_formation_no_flagships():
     b = [{"name": "std-b", "org": "b", "tier": "standard"}]
     result = detect_formation_correspondences(a, b)
     assert result == []
+
+
+# Technology correspondences
+
+
+def test_detect_technology_empty():
+    result = detect_technology_correspondences([], [])
+    assert result == []
+
+
+def test_detect_technology_shared_stack():
+    a = [{"name": "api-server", "org": "a", "description": "FastAPI Python REST service"}]
+    b = [{"name": "web-api", "org": "b", "description": "Python REST API with FastAPI"}]
+    result = detect_technology_correspondences(a, b)
+    assert len(result) >= 1
+    assert result[0].correspondence_type == CorrespondenceType.TECHNOLOGY
+    assert "python" in result[0].evidence.lower() or "fastapi" in result[0].evidence.lower()
+
+
+def test_detect_technology_no_overlap():
+    a = [{"name": "rust-engine", "org": "a", "description": "A Rust systems tool"}]
+    b = [{"name": "js-app", "org": "b", "description": "A React frontend application"}]
+    result = detect_technology_correspondences(a, b)
+    assert result == []
+
+
+# Governance correspondences
+
+
+def test_detect_governance_empty():
+    result = detect_governance_correspondences([], [])
+    assert result == []
+
+
+def test_detect_governance_similar_ci():
+    a = [{"org": "a", "ci_workflow": True} for _ in range(3)]
+    b = [{"org": "b", "ci_workflow": True} for _ in range(3)]
+    result = detect_governance_correspondences(a, b)
+    assert len(result) >= 1
+    assert any(c.correspondence_type == CorrespondenceType.GOVERNANCE for c in result)
+
+
+def test_detect_governance_similar_public():
+    a = [{"org": "a", "public": True} for _ in range(5)]
+    b = [{"org": "b", "public": True} for _ in range(5)]
+    result = detect_governance_correspondences(a, b)
+    assert any(
+        c.correspondence_type == CorrespondenceType.GOVERNANCE
+        and "public" in c.evidence.lower()
+        for c in result
+    )
+
+
+def test_detect_governance_different_patterns():
+    a = [{"org": "a", "ci_workflow": True, "public": True}]
+    b = [{"org": "b", "ci_workflow": False, "public": False}]
+    # Very different governance — should produce weak or no correspondences
+    result = detect_governance_correspondences(a, b)
+    # With only 1 repo each, ratios are 0% vs 100% — no match expected
+    ci_matches = [c for c in result if "CI" in c.evidence or "ci" in c.evidence.lower()]
+    for m in ci_matches:
+        assert m.strength <= 0.5
