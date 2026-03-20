@@ -209,20 +209,20 @@ class TestEvaluate:
 
     def test_met_count(self, registry, soak_dir):
         scorecard = evaluate(registry=registry, soak_dir=soak_dir)
-        # #5 (submitted), #6 (essay), #8 (products live), #13 (inbound link) are MET
-        assert scorecard.met_count == 4
+        # #5 (submitted), #6 (essay), #8 (products live), #13 (inbound link), #15 (portfolio validation) are MET
+        assert scorecard.met_count == 5
 
     def test_summary_output(self, registry, soak_dir):
         scorecard = evaluate(registry=registry, soak_dir=soak_dir)
         summary = scorecard.summary()
-        assert "4/17 MET" in summary
+        assert "5/17 MET" in summary
         assert "Soak Test Streak" in summary
         assert "8/30" in summary
 
     def test_to_dict(self, registry, soak_dir):
         scorecard = evaluate(registry=registry, soak_dir=soak_dir)
         d = scorecard.to_dict()
-        assert d["score"] == 4
+        assert d["score"] == 5
         assert d["total"] == 17
         assert len(d["criteria"]) == 17
         assert "soak" in d
@@ -246,7 +246,7 @@ class TestWriteSnapshot:
         scorecard = evaluate(registry=registry, soak_dir=soak_dir)
         path = write_snapshot(scorecard, corpus_dir=tmp_path)
         data = json.loads(path.read_text())
-        assert data["score"] == 4
+        assert data["score"] == 5
         assert data["total"] == 17
         assert len(data["criteria"]) == 17
 

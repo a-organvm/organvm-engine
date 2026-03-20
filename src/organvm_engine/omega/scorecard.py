@@ -197,6 +197,7 @@ _KNOWN_MET = {
     6: ("AI-conductor essay published", "public-process essay #9, 2026-02-12"),
     8: ("≥1 ORGAN-III product live", "12 products live across Netlify/Render, 2026-02-28"),
     13: ("≥1 organic inbound link", "LobeHub organic indexing of ORGAN-IV skills, 2026-02-28"),
+    15: ("Portfolio updated with validation", "validation page at 4444j99.github.io/portfolio/validation/, 2026-03-19"),
 }
 
 
@@ -364,8 +365,9 @@ def evaluate(
             horizon="H5",
             measurement="Portfolio site",
             auto=False,
-            status="NOT_MET",
-            value="Portfolio live, no validation data",
+            status="MET",
+            value="Validation page live at portfolio/validation/",
+            evidence=_KNOWN_MET[15][1],
         ),
         OmegaCriterion(
             id=16,
