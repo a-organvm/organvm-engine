@@ -143,39 +143,209 @@ def topological_order(nodes: list[RenderNode] | None = None) -> list[RenderNode]
 def cascade(
     system_data: dict[str, Any],
     nodes: list[RenderNode] | None = None,
+    execute: bool = False,
+    registry_path: Any = None,
 ) -> dict[str, dict[str, Any]]:
     """Run all nodes in topological order, accumulating shared state.
 
-    Returns dict mapping node name → its produced data shapes.
-    Each node's renderer can read from the shared state (all shapes
-    produced by prior nodes) and writes its own shapes back.
+    When execute=False (default), builds a manifest of what would be produced.
+    When execute=True, actually invokes node executors and passes real data
+    between nodes via the shared_state dict.
+
+    Returns dict mapping node name → its produced data + rendered content.
     """
     ordered = topological_order(nodes)
     shared_state: dict[str, Any] = dict(system_data)
     results: dict[str, dict[str, Any]] = {}
 
     for node in ordered:
-        # Collect inputs this node needs
+        # Collect inputs this node needs from shared state
         inputs = {shape: shared_state.get(shape) for shape in node.consumes}
         inputs["_system"] = system_data
 
-        # The actual rendering happens in pipeline.py — here we just
-        # track the data flow and produce the cascade manifest
-        node_result = {
-            "name": node.name,
-            "modality": node.modality,
-            "renderer": node.renderer,
-            "inputs_available": {k: v is not None for k, v in inputs.items()},
-            "produces": node.produces,
-        }
-        results[node.name] = node_result
+        if execute:
+            # Actually run the node executor and capture real data shapes
+            node_output = _execute_node(node, shared_state, registry_path)
+            # Merge produced shapes into shared state for downstream nodes
+            for shape, value in node_output.get("shapes", {}).items():
+                shared_state[shape] = value
 
-        # Mark shapes as "produced" (actual values filled by pipeline)
-        for shape in node.produces:
-            if shape not in shared_state:
-                shared_state[shape] = f"<produced_by:{node.name}>"
+            results[node.name] = {
+                "name": node.name,
+                "modality": node.modality,
+                "renderer": node.renderer,
+                "executed": True,
+                "success": node_output.get("success", False),
+                "content_length": len(node_output.get("content", "")),
+                "shapes_produced": list(node_output.get("shapes", {}).keys()),
+                "inputs_received": {
+                    k: v is not None for k, v in inputs.items()
+                    if k != "_system"
+                },
+                "error": node_output.get("error"),
+            }
+        else:
+            # Manifest-only mode (original behavior)
+            results[node.name] = {
+                "name": node.name,
+                "modality": node.modality,
+                "renderer": node.renderer,
+                "executed": False,
+                "inputs_available": {
+                    k: v is not None for k, v in inputs.items()
+                    if k != "_system"
+                },
+                "produces": node.produces,
+            }
+            for shape in node.produces:
+                if shape not in shared_state:
+                    shared_state[shape] = f"<produced_by:{node.name}>"
 
     return results
+
+
+def _execute_node(
+    node: RenderNode,
+    shared_state: dict[str, Any],
+    registry_path: Any = None,
+) -> dict[str, Any]:
+    """Execute a single node, producing real data shapes and rendered content."""
+    shapes: dict[str, Any] = {}
+    content = ""
+
+    try:
+        if node.name == "topology":
+            from organvm_engine.testament.sources import topology_data
+            data = topology_data(registry_path)
+            shapes["organ_positions"] = {
+                k: i for i, k in enumerate(data.get("organ_repo_counts", {}).keys())
+            }
+            shapes["repo_counts"] = data.get("organ_repo_counts", {})
+            shapes["edge_list"] = data.get("edges", [])
+            shapes["total_repos"] = data.get("total_repos", 0)
+
+            from organvm_engine.testament.renderers.svg import render_constellation
+            content = render_constellation(organ_repo_counts=data["organ_repo_counts"])
+
+        elif node.name == "omega":
+            from organvm_engine.testament.sources import omega_data
+            data = omega_data(registry_path)
+            shapes["criteria_status"] = data.get("criteria", [])
+            met = data.get("met_count", 0)
+            total = data.get("total", 17)
+            shapes["met_ratio"] = met / total if total else 0
+
+            from organvm_engine.testament.renderers.svg import render_omega_mandala
+            content = render_omega_mandala(
+                criteria=data["criteria"], met_count=met, total=total,
+            )
+
+        elif node.name == "density":
+            from organvm_engine.testament.sources import density_data
+            data = density_data(registry_path)
+            densities = data.get("organ_densities", {})
+            shapes["organ_densities"] = densities
+            shapes["density_ranking"] = sorted(
+                densities, key=lambda k: densities.get(k, 0), reverse=True,
+            )
+
+            from organvm_engine.testament.renderers.svg import render_density_bars
+            content = render_density_bars(organ_densities=densities)
+
+        elif node.name == "status":
+            from organvm_engine.testament.sources import system_summary
+            data = system_summary(registry_path)
+            shapes["status_distribution"] = data.get("status_counts", {})
+            shapes["total_repos"] = data.get("total_repos", 0)
+
+            from organvm_engine.testament.renderers.statistical import (
+                render_status_distribution,
+            )
+            content = render_status_distribution(data["status_counts"])
+
+        elif node.name == "dependency":
+            shapes["dep_edges"] = []
+            shapes["dep_depth"] = 3
+            shapes["layer_structure"] = {
+                "production": ["I", "II", "III"],
+                "control": ["IV"],
+                "interface": ["V", "VI", "VII"],
+                "meta": ["META"],
+            }
+
+            from organvm_engine.testament.renderers.svg import render_dependency_flow
+            content = render_dependency_flow()
+
+        elif node.name == "sonic":
+            from organvm_engine.testament.renderers.sonic import (
+                render_sonic_params,
+                render_sonic_yaml,
+            )
+            testament = render_sonic_params(
+                organ_densities=shared_state.get("organ_densities", {}),
+                status_distribution=shared_state.get("status_distribution", {}),
+                met_ratio=shared_state.get("met_ratio", 0.5),
+                total_repos=shared_state.get("total_repos", 0),
+            )
+            content = render_sonic_yaml(testament)
+            shapes["sonic_params"] = {
+                "voices": len(testament.voices),
+                "bpm": testament.rhythm.bpm if testament.rhythm else 120,
+                "master": testament.master_amplitude,
+            }
+            shapes["voice_config"] = [
+                {"organ": v.organ, "freq": v.frequency, "amp": v.amplitude}
+                for v in testament.voices
+            ]
+            shapes["rhythm_profile"] = {
+                "bpm": testament.rhythm.bpm if testament.rhythm else 120,
+                "time_sig": testament.rhythm.time_signature if testament.rhythm else "4/4",
+            }
+
+        elif node.name == "prose":
+            from organvm_engine.testament.renderers.prose import render_self_portrait
+            system_data_for_prose = {
+                "total_repos": shared_state.get("total_repos", 0),
+                "total_organs": 8,
+                "total_public": 0,
+                "status_counts": shared_state.get("status_distribution", {}),
+            }
+            content = render_self_portrait(system_data_for_prose)
+            shapes["self_portrait_text"] = content
+            shapes["axiom_list"] = [
+                "Ontological Primacy", "Organizational Closure",
+                "Individual Primacy", "Constitutional Governance",
+                "Evolutionary Recursivity", "Topological Plasticity",
+                "Alchemical Inheritance", "Multiplex Flow Governance",
+                "Modular Alchemical Synthesis",
+            ]
+
+        elif node.name == "social":
+            from organvm_engine.testament.renderers.social import render_pulse
+            pulse = render_pulse(
+                total_repos=shared_state.get("total_repos", 0),
+                met_ratio=shared_state.get("met_ratio", 0),
+                organ_densities=shared_state.get("organ_densities", {}),
+                density_ranking=shared_state.get("density_ranking", []),
+                self_portrait_text=shared_state.get("self_portrait_text"),
+            )
+            content = pulse.short
+            shapes["pulse_text"] = pulse.short
+            shapes["hashtags"] = pulse.hashtags
+
+        return {
+            "success": True,
+            "content": content,
+            "shapes": shapes,
+        }
+
+    except Exception as exc:
+        return {
+            "success": False,
+            "content": "",
+            "shapes": shapes,
+            "error": str(exc),
+        }
 
 
 def network_summary() -> dict[str, Any]:

@@ -101,6 +101,59 @@ def cmd_testament_render(args: argparse.Namespace) -> int:
     return 1 if failed and not dry_run else 0
 
 
+def cmd_testament_cascade(args: argparse.Namespace) -> int:
+    """Execute the full feedback network — renderers feed each other."""
+    from organvm_engine.testament.network import cascade, network_summary
+
+    execute = getattr(args, "write", False)
+    as_json = getattr(args, "json", False)
+    registry_path = getattr(args, "registry", None)
+    if registry_path:
+        registry_path = Path(registry_path)
+
+    summary = network_summary()
+    results = cascade({}, execute=execute, registry_path=registry_path)
+
+    if as_json:
+        import json as json_mod
+        print(json_mod.dumps({"summary": summary, "results": results}, indent=2, default=str))
+        return 0
+
+    print(f"\n  Testament Cascade — {summary['nodes']} nodes, "
+          f"{summary['feedback_edges']} feedback edges")
+    print(f"  Execution order: {' → '.join(summary['execution_order'])}")
+    print(f"  {'═' * 60}")
+
+    for name, data in results.items():
+        if execute:
+            success = "✓" if data.get("success") else "✗"
+            content_len = data.get("content_length", 0)
+            shapes = data.get("shapes_produced", [])
+            inputs = data.get("inputs_received", {})
+            received = sum(1 for v in inputs.values() if v)
+            total_in = len(inputs)
+            err = data.get("error", "")
+            print(f"  {success} {name:<12} {content_len:>6} bytes  "
+                  f"in:{received}/{total_in}  out:{len(shapes)}"
+                  f"{'  ERROR: ' + err if err else ''}")
+        else:
+            avail = data.get("inputs_available", {})
+            received = sum(1 for v in avail.values() if v)
+            total_in = len(avail)
+            produces = data.get("produces", [])
+            print(f"  ○ {name:<12} would produce {len(produces)} shapes  "
+                  f"needs:{total_in} inputs")
+
+    if not execute:
+        print("\n  Run with --write to execute the cascade.\n")
+    else:
+        ok = sum(1 for d in results.values() if d.get("success"))
+        fail = sum(1 for d in results.values() if not d.get("success"))
+        print(f"\n  {ok} succeeded, {fail} failed.\n")
+
+    return 0
+
+
 def cmd_testament_catalog(args: argparse.Namespace) -> int:
     """List all produced testament artifacts."""
     from organvm_engine.testament.catalog import load_catalog

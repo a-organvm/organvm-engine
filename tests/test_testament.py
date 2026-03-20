@@ -538,6 +538,54 @@ class TestFeedbackNetwork:
                     f"Node {node.name} consumes its own product {shape}"
                 )
 
+    def test_cascade_execute_all_succeed(self):
+        reg_path = Path(__file__).parent / "fixtures" / "registry-minimal.json"
+        results = cascade({}, execute=True, registry_path=reg_path)
+        assert len(results) >= 8
+        for name, data in results.items():
+            assert data.get("executed") is True, f"Node {name} was not executed"
+            assert data.get("success") is True, (
+                f"Node {name} failed: {data.get('error')}"
+            )
+
+    def test_cascade_execute_produces_content(self):
+        reg_path = Path(__file__).parent / "fixtures" / "registry-minimal.json"
+        results = cascade({}, execute=True, registry_path=reg_path)
+        for name, data in results.items():
+            assert data.get("content_length", 0) > 0, (
+                f"Node {name} produced no content"
+            )
+
+    def test_cascade_data_flows_to_downstream(self):
+        reg_path = Path(__file__).parent / "fixtures" / "registry-minimal.json"
+        results = cascade({}, execute=True, registry_path=reg_path)
+        # Prose should receive inputs from status and omega
+        prose = results.get("prose", {})
+        inputs = prose.get("inputs_received", {})
+        assert inputs.get("total_repos") is True, "Prose did not receive total_repos"
+        assert inputs.get("status_distribution") is True, "Prose did not receive status"
+        assert inputs.get("met_ratio") is True, "Prose did not receive met_ratio"
+
+    def test_cascade_sonic_receives_density(self):
+        reg_path = Path(__file__).parent / "fixtures" / "registry-minimal.json"
+        results = cascade({}, execute=True, registry_path=reg_path)
+        sonic = results.get("sonic", {})
+        inputs = sonic.get("inputs_received", {})
+        assert inputs.get("organ_densities") is True
+        assert inputs.get("met_ratio") is True
+
+    def test_cascade_social_receives_prose(self):
+        reg_path = Path(__file__).parent / "fixtures" / "registry-minimal.json"
+        results = cascade({}, execute=True, registry_path=reg_path)
+        social = results.get("social", {})
+        inputs = social.get("inputs_received", {})
+        assert inputs.get("self_portrait_text") is True
+
+    def test_cascade_manifest_mode_no_execution(self):
+        results = cascade({}, execute=False)
+        for name, data in results.items():
+            assert data.get("executed") is False
+
 
 # ── Pipeline tests ──────────────────────────────────────────────────
 
