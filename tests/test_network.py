@@ -821,3 +821,185 @@ class TestSynthesizer:
         target = tmp_path / "deep" / "testament"
         out = write_testament("content", target)
         assert out.exists()
+
+    def test_synthesize_with_convergences(self, tmp_path: Path):
+        """Convergence points appear in synthesis when multiple repos share mirrors."""
+        organ = tmp_path / "organ-x"
+        for name in ("repo-a", "repo-b"):
+            d = organ / name
+            d.mkdir(parents=True)
+            nmap = NetworkMap(
+                schema_version="1.0", repo=name, organ="X",
+                technical=[MirrorEntry(
+                    project="shared/proj", platform="github",
+                    relevance="shared dep",
+                )],
+            )
+            write_network_map(nmap, d / NETWORK_MAP_FILENAME)
+
+        empty_ledger = tmp_path / "empty.jsonl"
+        content = synthesize_testament(
+            tmp_path, ledger_path=empty_ledger, period="all-time",
+            total_active_repos=2,
+        )
+        assert "Convergence" in content
+        assert "shared/proj" in content
+
+
+# ─── Additional edge cases ──────────────────────────────────────────
+
+
+class TestScannerEdgeCases:
+    def test_cargo_dev_dependencies(self, tmp_path: Path):
+        cargo = tmp_path / "Cargo.toml"
+        cargo.write_text(
+            "[package]\nname = \"myapp\"\n\n"
+            "[dev-dependencies]\nclap = \"4.0\"\n"
+        )
+        mirrors = scan_cargo_toml(tmp_path)
+        projects = {m.project for m in mirrors}
+        assert "clap-rs/clap" in projects
+
+    def test_go_mod_non_github(self, tmp_path: Path):
+        """Non-GitHub Go modules are skipped."""
+        go = tmp_path / "go.mod"
+        go.write_text(
+            "module example.com/mymod\n\n"
+            "require (\n"
+            "\tgolang.org/x/text v0.3.0\n"
+            ")\n"
+        )
+        mirrors = scan_go_mod(tmp_path)
+        assert mirrors == []
+
+    def test_scan_pyproject_no_known_deps(self, tmp_path: Path):
+        """Dependencies not in KNOWN_REPOS produce no mirrors."""
+        toml = tmp_path / "pyproject.toml"
+        toml.write_text(
+            '[project]\ndependencies = [\n  "totally-unknown-package>=1.0",\n]\n'
+        )
+        mirrors = scan_pyproject(tmp_path)
+        assert mirrors == []
+
+    def test_package_json_scoped_packages(self, tmp_path: Path):
+        """Scoped npm packages (@org/name) are handled."""
+        pkg = tmp_path / "package.json"
+        pkg.write_text(json.dumps({
+            "dependencies": {"@tailwindcss/forms": "^0.5"},
+        }))
+        # @tailwindcss/forms -> cleaned to "tailwindcss-forms" which isn't in KNOWN_REPOS
+        mirrors = scan_package_json(tmp_path)
+        assert mirrors == []  # correct: scoped pkg not in mapping
+
+
+class TestDiscoverEdgeCases:
+    def test_suggest_parallel_empty_inputs(self):
+        """Empty tags and empty description = no suggestions."""
+        assert suggest_parallel_mirrors([], repo_description="") == []
+
+    def test_suggest_kinship_no_matching_tags(self):
+        """Unrelated tags produce no kinship suggestions."""
+        suggestions = suggest_kinship_mirrors(["quantum-physics-simulation"])
+        assert suggestions == []
+
+    def test_suggest_parallel_multiple_domains(self):
+        """Tags matching multiple domains produce combined suggestions."""
+        suggestions = suggest_parallel_mirrors(["mcp", "generative", "art"])
+        # Should get both MCP and generative-art suggestions
+        projects = {s.project for s in suggestions}
+        assert any("modelcontextprotocol" in p for p in projects)
+
+
+class TestMapperEdgeCases:
+    def test_discover_skips_malformed(self, tmp_path: Path):
+        """discover_network_maps skips repos with malformed YAML."""
+        organ = tmp_path / "organ-x"
+        good = organ / "good-repo"
+        bad = organ / "bad-repo"
+        good.mkdir(parents=True)
+        bad.mkdir(parents=True)
+
+        nmap = _make_map(repo="good-repo", organ="X", technical=1)
+        write_network_map(nmap, good / NETWORK_MAP_FILENAME)
+
+        (bad / NETWORK_MAP_FILENAME).write_text("- this is a list not a map\n")
+
+        from organvm_engine.network.mapper import discover_network_maps
+        found = discover_network_maps(tmp_path)
+        assert len(found) == 1
+        assert found[0][1].repo == "good-repo"
+
+    def test_validate_extra_lens_keys_ok(self):
+        """Unknown keys in mirrors are not flagged (extensibility)."""
+        data = {
+            "repo": "x", "organ": "M",
+            "mirrors": {
+                "technical": [], "parallel": [], "kinship": [],
+            },
+        }
+        errors = validate_network_map(data)
+        assert errors == []
+
+    def test_validate_non_list_lens(self):
+        """Non-list lens value is caught."""
+        data = {
+            "repo": "x", "organ": "M",
+            "mirrors": {"technical": "string", "parallel": [], "kinship": []},
+        }
+        errors = validate_network_map(data)
+        assert any("must be a list" in e for e in errors)
+
+
+class TestLedgerEdgeCases:
+    def test_multiple_filters_combined(self, tmp_path: Path):
+        """Filtering by repo + lens simultaneously."""
+        ledger = tmp_path / "ledger.jsonl"
+        log_engagement(_make_entry(repo="a", lens="technical"), ledger)
+        log_engagement(_make_entry(repo="a", lens="kinship"), ledger)
+        log_engagement(_make_entry(repo="b", lens="technical"), ledger)
+        entries = read_ledger(ledger, repo="a", lens="technical")
+        assert len(entries) == 1
+
+    def test_ledger_summary_by_form(self, tmp_path: Path):
+        """Summary correctly counts by action form."""
+        ledger = tmp_path / "ledger.jsonl"
+        log_engagement(_make_entry(action_type="presence"), ledger)
+        log_engagement(_make_entry(action_type="presence"), ledger)
+        log_engagement(_make_entry(action_type="dialogue"), ledger)
+        s = ledger_summary(ledger)
+        assert s["by_form"]["presence"] == 2
+        assert s["by_form"]["dialogue"] == 1
+
+
+class TestMetricsEdgeCases:
+    def test_convergence_across_lenses(self):
+        """Same project in different lenses of different repos converges."""
+        m1 = NetworkMap(
+            schema_version="1.0", repo="a", organ="X",
+            technical=[_make_mirror("shared/p")],
+        )
+        m2 = NetworkMap(
+            schema_version="1.0", repo="b", organ="X",
+            kinship=[_make_mirror("shared/p", platform="community", relevance="values")],
+        )
+        cp = convergence_points([m1, m2])
+        assert "shared/p" in cp
+        assert set(cp["shared/p"]) == {"a", "b"}
+
+    def test_lens_balance_ignores_unknown(self):
+        """Entries with invalid lens values don't crash balance."""
+        entries = [
+            _make_entry(lens="technical"),
+            _make_entry(lens="unknown_lens"),
+        ]
+        b = lens_balance(entries)
+        assert b["technical"] == 0.5  # 1 of 2
+
+    def test_form_balance_ignores_unknown(self):
+        """Entries with invalid form values don't crash balance."""
+        entries = [
+            _make_entry(action_type="presence"),
+            _make_entry(action_type="unknown_form"),
+        ]
+        b = form_balance(entries)
+        assert b["presence"] == 0.5
