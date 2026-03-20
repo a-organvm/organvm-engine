@@ -397,6 +397,16 @@ def sync_organ(
     commit_msg = message or f"chore: sync {organ_dir} submodule pointers ({len(changed)} updated)"
     _run_git_checked(["commit", "-m", commit_msg], organ_path)
 
+    # Emit to Testament Chain
+    from organvm_engine.ledger.emit import testament_emit
+    testament_emit(
+        event_type="git.sync",
+        source_organ=organ.upper(),
+        source_repo=organ_dir,
+        actor="cli",
+        payload={"submodules": changed, "message": commit_msg},
+    )
+
     return {"organ": organ_dir, "changed": changed, "committed": True}
 
 

@@ -445,6 +445,16 @@ def punch_in(
     except Exception:
         pass
 
+    # Emit to Testament Chain
+    from organvm_engine.ledger.emit import testament_emit
+    testament_emit(
+        event_type="agent.punch_in",
+        source_organ="META-ORGANVM",
+        source_repo="organvm-engine",
+        actor=handle,
+        payload={"agent": agent, "handle": handle, "areas": result["areas"]},
+    )
+
     return result
 
 
@@ -522,6 +532,16 @@ def punch_out(claim_id: str) -> dict[str, Any]:
         )
     except Exception:
         pass
+
+    # Emit to Testament Chain
+    from organvm_engine.ledger.emit import testament_emit
+    testament_emit(
+        event_type="agent.punch_out",
+        source_organ="META-ORGANVM",
+        source_repo="organvm-engine",
+        actor=found.handle,
+        payload={"agent": found.agent, "handle": found.handle, "claim_id": claim_id},
+    )
 
     return result
 
