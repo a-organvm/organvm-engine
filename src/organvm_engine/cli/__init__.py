@@ -157,6 +157,7 @@ from organvm_engine.cli.network import (
 from organvm_engine.cli.omega import cmd_omega_check, cmd_omega_status, cmd_omega_update
 from organvm_engine.cli.trivium import (
     cmd_trivium_dialects,
+    cmd_trivium_essays,
     cmd_trivium_matrix,
     cmd_trivium_scan,
     cmd_trivium_status,
@@ -242,6 +243,7 @@ from organvm_engine.cli.study import (
     cmd_study_feedback,
 )
 from organvm_engine.cli.testament import (
+    cmd_testament_cascade,
     cmd_testament_catalog,
     cmd_testament_gallery,
     cmd_testament_render,
@@ -1466,6 +1468,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir", default=None, help="Output directory for gallery",
     )
 
+    testament_cascade = testament_sub.add_parser(
+        "cascade", help="Execute feedback network — renderers feed each other",
+    )
+    testament_cascade.add_argument(
+        "--write", action="store_true", help="Actually execute (default: manifest only)",
+    )
+    testament_cascade.add_argument("--json", action="store_true", help="JSON output")
+    testament_cascade.add_argument("--registry", default=None, help="Registry path override")
+
     # ledger (Testament Protocol — hash-linked event chain)
     ledger = sub.add_parser(
         "ledger", help="Testament Protocol — native hash-linked event chain",
@@ -1637,6 +1648,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     trv_status = trv_sub.add_parser("status", help="Trivium subsystem health")
     trv_status.add_argument("--json", action="store_true", help="Output JSON")
+
+    trv_essays = trv_sub.add_parser("essays", help="Generate essay catalog from translations")
+    trv_essays.add_argument("--json", action="store_true", help="Output JSON")
+    trv_essays.add_argument("--write", action="store_true", help="Write catalog to disk")
+    trv_essays.add_argument("--output-dir", default=None, help="Output directory")
+    trv_essays.add_argument(
+        "--tier", default="analogical",
+        choices=["formal", "structural", "analogical", "all"],
+        help="Minimum tier to include (default: analogical)",
+    )
 
     # audit
     aud = sub.add_parser(
@@ -2423,6 +2444,7 @@ def main() -> int:
         testament_dispatch = {
             "status": cmd_testament_status,
             "render": cmd_testament_render,
+            "cascade": cmd_testament_cascade,
             "catalog": cmd_testament_catalog,
             "gallery": cmd_testament_gallery,
         }
@@ -2466,6 +2488,7 @@ def main() -> int:
             "scan": cmd_trivium_scan,
             "synthesize": cmd_trivium_synthesize,
             "status": cmd_trivium_status,
+            "essays": cmd_trivium_essays,
         }
         handler = trivium_dispatch.get(getattr(args, "subcommand", "") or "")
         if handler:

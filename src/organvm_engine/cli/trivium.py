@@ -203,6 +203,64 @@ def cmd_trivium_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_trivium_essays(args: argparse.Namespace) -> int:
+    """Generate essay catalog from the translation matrix."""
+    from organvm_engine.trivium.content import (
+        generate_all_outlines,
+        render_essay_catalog,
+    )
+    from organvm_engine.trivium.taxonomy import TranslationTier
+
+    as_json = getattr(args, "json", False)
+    tier_map = {
+        "formal": TranslationTier.FORMAL,
+        "structural": TranslationTier.STRUCTURAL,
+        "analogical": TranslationTier.ANALOGICAL,
+        "all": TranslationTier.EMERGENT,
+    }
+    min_tier = tier_map.get(
+        getattr(args, "tier", "analogical"), TranslationTier.ANALOGICAL,
+    )
+
+    essays = generate_all_outlines(min_tier=min_tier)
+
+    if as_json:
+        data = [
+            {
+                "title": e.title,
+                "subtitle": e.subtitle,
+                "thesis": e.thesis,
+                "tier": e.pair.tier.value,
+                "source": e.pair.source.value,
+                "target": e.pair.target.value,
+                "outline": e.outline,
+            }
+            for e in essays
+        ]
+        print(_json.dumps(data, indent=2))
+        return 0
+
+    dry_run = not getattr(args, "write", False)
+    if dry_run:
+        print(f"\n  Trivium Essay Catalog — {len(essays)} essays")
+        print(f"  {'═' * 48}\n")
+        for e in essays:
+            print(f"  [{e.pair.tier.value:>10}] {e.title}")
+            print(f"               {e.subtitle}")
+            print()
+        print(f"  Run with --write to generate full catalog.\n")
+        return 0
+
+    catalog = render_essay_catalog(essays)
+    output_dir = Path(getattr(args, "output_dir", None) or ".")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / "trivium-essay-catalog.md"
+    out_path.write_text(catalog)
+    print(f"\n  Essay catalog written to {out_path}")
+    print(f"  {len(essays)} essays, {len(catalog)} bytes.\n")
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
