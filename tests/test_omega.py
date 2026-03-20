@@ -270,13 +270,21 @@ class TestWriteSnapshot:
         changes = diff_snapshots(scorecard, corpus_dir=tmp_path)
         assert any("No previous" in c for c in changes)
 
-    def test_diff_detects_change(self, registry, registry_with_revenue, soak_dir, tmp_path):
-        # Write snapshot with no revenue
+    def test_diff_detects_change(self, registry, soak_dir, tmp_path):
+        # Write a snapshot, then manually alter it to simulate a score change
         sc1 = evaluate(registry=registry, soak_dir=soak_dir)
         write_snapshot(sc1, corpus_dir=tmp_path)
 
-        # Evaluate with revenue → score changes
-        sc2 = evaluate(registry=registry_with_revenue, soak_dir=soak_dir)
+        # Modify the saved snapshot to have a different score
+        omega_dir = tmp_path / "data" / "omega"
+        snap_files = sorted(omega_dir.glob("omega-status-*.json"))
+        assert snap_files
+        data = json.loads(snap_files[-1].read_text())
+        data["score"] = data["score"] - 1  # pretend one fewer MET
+        snap_files[-1].write_text(json.dumps(data))
+
+        # Re-evaluate → score differs from saved snapshot
+        sc2 = evaluate(registry=registry, soak_dir=soak_dir)
         changes = diff_snapshots(sc2, corpus_dir=tmp_path)
         assert any("Score changed" in c for c in changes)
 
