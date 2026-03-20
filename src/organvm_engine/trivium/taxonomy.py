@@ -129,6 +129,49 @@ _TIER_3: list[TranslationPair] = [
         "Community generates its own broadcasts",
         "Learning communities naturally syndicate.",
     ),
+    # Promoted from Tier 4 based on 2026-03-20 live registry scan (281 correspondences)
+    TranslationPair(
+        Dialect.FORMAL_LOGIC, Dialect.NATURAL_RHETORIC,
+        TranslationTier.ANALOGICAL, PreservationDegree.PROJECTION,
+        "Live scan: I↔V strength 0.722 (3 corr). Logic grounds discourse.",
+        "Theory provides the formal skeleton that essays make legible.",
+    ),
+    TranslationPair(
+        Dialect.FORMAL_LOGIC, Dialect.PEDAGOGICAL_DIALECTIC,
+        TranslationTier.ANALOGICAL, PreservationDegree.RESONANCE,
+        "Live scan: I↔VI strength 0.532 (5 corr). Logic grounds pedagogy.",
+        "Teaching formal concepts IS translating between formal and intuitive.",
+    ),
+    TranslationPair(
+        Dialect.FORMAL_LOGIC, Dialect.SIGNAL_PROPAGATION,
+        TranslationTier.ANALOGICAL, PreservationDegree.PROJECTION,
+        "Live scan: I↔VII strength 0.620 (3 corr). Theory broadcasts.",
+        "Theoretical results compressed for external consumption.",
+    ),
+    TranslationPair(
+        Dialect.AESTHETIC_FORM, Dialect.SIGNAL_PROPAGATION,
+        TranslationTier.ANALOGICAL, PreservationDegree.PROJECTION,
+        "Live scan: II↔VII strength 0.694 (3 corr). Art broadcasts.",
+        "Generative art outputs are the system's most syndication-ready form.",
+    ),
+    TranslationPair(
+        Dialect.EXECUTABLE_ALGORITHM, Dialect.NATURAL_RHETORIC,
+        TranslationTier.ANALOGICAL, PreservationDegree.PROJECTION,
+        "Live scan: III↔V strength 0.688 (4 corr). Products speak.",
+        "Products are arguments for their own existence — discourse made executable.",
+    ),
+    TranslationPair(
+        Dialect.NATURAL_RHETORIC, Dialect.SIGNAL_PROPAGATION,
+        TranslationTier.ANALOGICAL, PreservationDegree.HOMOMORPHISM,
+        "Live scan: V↔VII strength 0.583 (3 corr). Essays syndicate.",
+        "Public discourse IS structure-preserving broadcast of system state.",
+    ),
+    TranslationPair(
+        Dialect.NATURAL_RHETORIC, Dialect.SELF_WITNESSING,
+        TranslationTier.ANALOGICAL, PreservationDegree.HOMOMORPHISM,
+        "Live scan: V↔META strength 0.794 (3 corr). Discourse witnesses.",
+        "Essays about the system ARE the system witnessing itself through language.",
+    ),
 ]
 
 

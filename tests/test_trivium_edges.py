@@ -49,9 +49,9 @@ def test_trivium_edges_default_excludes_emergent():
 
 
 def test_trivium_edges_default_count():
-    # 3 formal + 5 structural + 4 analogical = 12
+    # 3 formal + 5 structural + 11 analogical = 19
     edges = trivium_edges()
-    assert len(edges) == 12
+    assert len(edges) == 19
 
 
 def test_trivium_edges_formal_only():
@@ -98,12 +98,8 @@ def test_kinship_from_dialect_has_required_fields():
 
 def test_kinship_from_dialect_organ_i():
     entries = kinship_from_dialect("I")
-    # I has 3 T1 + 0 T2 + 0 T3 = 3 non-emergent connections
-    # Actually: T1: I↔III, I↔IV, I↔META (3 pairs)
-    # T2: none where I is involved
-    # T3: none where I is involved
-    # Check: I is in T1 (3 pairs). All other pairs involving I are emergent.
-    assert len(entries) == 3
+    # I has 3 T1 (I↔III, I↔IV, I↔META) + 3 T3 (I↔V, I↔VI, I↔VII) = 6 non-emergent
+    assert len(entries) == 6
 
 
 def test_enrich_kinship_deduplicates():

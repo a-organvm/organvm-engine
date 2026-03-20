@@ -60,6 +60,7 @@ def test_tier_1_has_three_pairs():
 
 
 def test_tier_2_has_five_pairs():
+    """5 structurally grounded pairs."""
     assert len(tier_2_pairs()) == 5
 
 
@@ -152,5 +153,5 @@ def test_translation_pair_frozen():
 
 def test_pairs_by_tier_emergent_nonempty():
     emergent = pairs_by_tier(TranslationTier.EMERGENT)
-    # There should be emergent pairs (28 - 3 - 5 - 4 = 16)
-    assert len(emergent) == 16
+    # 28 - 3 formal - 5 structural - 11 analogical = 9 emergent
+    assert len(emergent) == 9
