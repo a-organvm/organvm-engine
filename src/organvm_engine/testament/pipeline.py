@@ -207,6 +207,19 @@ def _render_content_post(
     return render_pulse_markdown(pulse)
 
 
+def _render_isomorphism(
+    registry_path: Path | None, aesthetic: AestheticProfile, organ_key: str | None,
+) -> str:
+    """Render trivium isomorphism portrait.
+
+    aesthetic and organ_key are intentionally unused — the trivium synthesis
+    is system-wide, not organ-specific.
+    """
+    from organvm_engine.trivium.synthesis import synthesize_trivium_testament
+
+    return synthesize_trivium_testament(registry_path=registry_path)
+
+
 def _render_sonic(
     registry_path: Path | None, aesthetic: AestheticProfile, organ_key: str | None,
 ) -> str:
@@ -248,6 +261,7 @@ _DISPATCH: dict[tuple[str, str], Callable[..., str]] = {
     ("session", "statistical"): _render_session_timeline,
     ("pitchdeck", "visual"): _render_pitch,
     ("content", "social"): _render_content_post,
+    ("trivium", "philosophical"): _render_isomorphism,
 }
 
 

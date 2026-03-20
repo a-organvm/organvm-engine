@@ -211,6 +211,14 @@ MODULE_SOURCES: dict[str, list[ArtifactType]] = {
             "content",
         ),
     ],
+    "trivium": [
+        ArtifactType(
+            ArtifactModality.PHILOSOPHICAL,
+            ArtifactFormat.MARKDOWN,
+            "Dialectica Universalis — inter-organ isomorphism portrait",
+            "trivium",
+        ),
+    ],
 }
 
 

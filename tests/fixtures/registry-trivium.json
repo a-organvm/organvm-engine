@@ -1,0 +1,105 @@
+{
+  "version": "2.0",
+  "schema_version": "2.0",
+  "summary": "Trivium test fixture — multi-organ registry for cross-organ detection",
+  "organs": {
+    "ORGAN-I": {
+      "name": "ORGAN-I",
+      "description": "Theory",
+      "repositories": [
+        {
+          "name": "recursive-engine--generative-entity",
+          "org": "organvm-i-theoria",
+          "status": "active",
+          "public": true,
+          "description": "Recursive computation engine for generative entities",
+          "promotion_status": "GRADUATED",
+          "tier": "flagship",
+          "dependencies": []
+        },
+        {
+          "name": "type-theory--formal-foundations",
+          "org": "organvm-i-theoria",
+          "status": "active",
+          "public": true,
+          "description": "Type-theoretic formal foundations for the system",
+          "promotion_status": "GRADUATED",
+          "tier": "standard",
+          "dependencies": []
+        },
+        {
+          "name": "symbolic-logic--constraint-solver",
+          "org": "organvm-i-theoria",
+          "status": "active",
+          "public": true,
+          "description": "Symbolic logic constraint solver engine",
+          "promotion_status": "CANDIDATE",
+          "tier": "standard",
+          "dependencies": []
+        }
+      ]
+    },
+    "ORGAN-III": {
+      "name": "ORGAN-III",
+      "description": "Commerce",
+      "repositories": [
+        {
+          "name": "recursive-tool--generative-util",
+          "org": "organvm-iii-ergon",
+          "status": "active",
+          "public": true,
+          "description": "Recursive computation tool for generative utilities",
+          "promotion_status": "GRADUATED",
+          "tier": "flagship",
+          "dependencies": ["recursive-engine--generative-entity"]
+        },
+        {
+          "name": "type-checker--validation-service",
+          "org": "organvm-iii-ergon",
+          "status": "active",
+          "public": true,
+          "description": "Type-checking validation service for developers",
+          "promotion_status": "CANDIDATE",
+          "tier": "standard",
+          "dependencies": ["type-theory--formal-foundations"]
+        },
+        {
+          "name": "constraint-solver--api",
+          "org": "organvm-iii-ergon",
+          "status": "active",
+          "public": true,
+          "description": "Constraint solver exposed as developer API",
+          "promotion_status": "CANDIDATE",
+          "tier": "standard",
+          "dependencies": ["symbolic-logic--constraint-solver"]
+        }
+      ]
+    },
+    "META-ORGANVM": {
+      "name": "META-ORGANVM",
+      "description": "Meta",
+      "repositories": [
+        {
+          "name": "organvm-engine",
+          "org": "meta-organvm",
+          "status": "active",
+          "public": true,
+          "description": "Core engine for the ORGANVM system",
+          "promotion_status": "GRADUATED",
+          "tier": "flagship",
+          "dependencies": []
+        },
+        {
+          "name": "organvm-corpvs-testamentvm",
+          "org": "meta-organvm",
+          "status": "active",
+          "public": true,
+          "description": "Constitutional governance corpus",
+          "promotion_status": "GRADUATED",
+          "tier": "flagship",
+          "dependencies": []
+        }
+      ]
+    }
+  }
+}

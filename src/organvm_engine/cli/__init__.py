@@ -154,6 +154,13 @@ from organvm_engine.cli.network import (
     cmd_network_synthesize,
 )
 from organvm_engine.cli.omega import cmd_omega_check, cmd_omega_status, cmd_omega_update
+from organvm_engine.cli.trivium import (
+    cmd_trivium_dialects,
+    cmd_trivium_matrix,
+    cmd_trivium_scan,
+    cmd_trivium_status,
+    cmd_trivium_synthesize,
+)
 from organvm_engine.cli.ontologia import (
     cmd_ontologia_bootstrap,
     cmd_ontologia_events,
@@ -1598,6 +1605,34 @@ def build_parser() -> argparse.ArgumentParser:
 
     net_sub.add_parser("suggest", help="Suggest next engagement actions")
 
+    # trivium — dialectica universalis
+    trv = sub.add_parser(
+        "trivium",
+        help="Trivium — Dialectica Universalis: cross-organ structural isomorphism",
+    )
+    trv.add_argument("--registry", default=None, help="Path to registry JSON")
+    trv_sub = trv.add_subparsers(dest="subcommand")
+
+    trv_dialects = trv_sub.add_parser("dialects", help="List all eight dialects")
+    trv_dialects.add_argument("--json", action="store_true", help="Output JSON")
+
+    trv_matrix = trv_sub.add_parser("matrix", help="Show translation evidence matrix")
+    trv_matrix.add_argument("--organ", default=None, help="Filter to organ pairs")
+    trv_matrix.add_argument("--json", action="store_true", help="Output JSON")
+
+    trv_scan = trv_sub.add_parser("scan", help="Scan correspondences between organs")
+    trv_scan.add_argument("organ_a", nargs="?", default=None, help="First organ key")
+    trv_scan.add_argument("organ_b", nargs="?", default=None, help="Second organ key")
+    trv_scan.add_argument("--all", action="store_true", help="Scan all 28 pairs")
+    trv_scan.add_argument("--json", action="store_true", help="Output JSON")
+
+    trv_synth = trv_sub.add_parser("synthesize", help="Generate trivium testament")
+    trv_synth.add_argument("--write", action="store_true", help="Write to testament dir")
+    trv_synth.add_argument("--output-dir", default=None, help="Output directory")
+
+    trv_status = trv_sub.add_parser("status", help="Trivium subsystem health")
+    trv_status.add_argument("--json", action="store_true", help="Output JSON")
+
     # audit
     aud = sub.add_parser(
         "audit",
@@ -2417,6 +2452,19 @@ def main() -> int:
         if handler:
             return handler(args)
         parser.parse_args(["network", "--help"])
+        return 0
+    if args.command == "trivium":
+        trivium_dispatch = {
+            "dialects": cmd_trivium_dialects,
+            "matrix": cmd_trivium_matrix,
+            "scan": cmd_trivium_scan,
+            "synthesize": cmd_trivium_synthesize,
+            "status": cmd_trivium_status,
+        }
+        handler = trivium_dispatch.get(getattr(args, "subcommand", "") or "")
+        if handler:
+            return handler(args)
+        parser.parse_args(["trivium", "--help"])
         return 0
     if args.command == "ecosystem":
         ecosystem_dispatch = {

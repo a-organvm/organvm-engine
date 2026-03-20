@@ -231,3 +231,15 @@ def _repo_to_organ_key(repo_name: str, registry: dict) -> str | None:
             if r.get("name") == repo_name:
                 return registry_to_cli.get(reg_key)
     return None
+
+
+def isomorphism_data(
+    registry_path: Path | None = None,
+) -> dict:
+    """Extract trivium isomorphism data for testament rendering.
+
+    Delegates to the trivium sources module.
+    """
+    from organvm_engine.trivium.sources import isomorphism_data as _iso_data
+
+    return _iso_data(registry_path)
