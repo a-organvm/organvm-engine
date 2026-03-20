@@ -35,6 +35,7 @@ class EventType(str, enum.Enum):
     Adding a new type here is an intentional constitutional act.
     """
 
+    # Original constitutional types
     PROMOTION = "governance.promotion"
     DEPENDENCY_CHANGE = "governance.dependency_change"
     SEED_UPDATE = "seed.update"
@@ -43,6 +44,20 @@ class EventType(str, enum.Enum):
     ENTITY_CREATED = "entity.created"
     ENTITY_ARCHIVED = "entity.archived"
     CONTEXT_SYNC = "context.sync"
+    # Testament Protocol additions
+    TESTAMENT_GENESIS = "testament.genesis"
+    TESTAMENT_CHECKPOINT = "testament.checkpoint"
+    TESTAMENT_VERIFIED = "testament.verified"
+    CI_HEALTH = "ci.health"
+    CONTENT_PUBLISHED = "content.published"
+    ECOSYSTEM_MUTATION = "ecosystem.mutation"
+    PITCH_GENERATED = "pitch.generated"
+    GIT_SYNC = "git.sync"
+    AGENT_PUNCH_IN = "agent.punch_in"
+    AGENT_PUNCH_OUT = "agent.punch_out"
+    AGENT_TOOL_LOCK = "agent.tool_lock"
+    ONTOLOGIA_VARIABLE = "ontologia.variable"
+    REGISTRY_UPDATE = "registry.update"
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +76,14 @@ class EventRecord:
         payload:     Arbitrary structured data for this event type.
         source_spec: Which spec/invariant triggered this event (e.g. "SPEC-004").
         actor:       Who or what caused the event (agent handle, "cli", "human").
+
+    Chain fields (Testament Protocol):
+        sequence:            Monotonic block number (-1 = not yet assigned).
+        prev_hash:           SHA-256 hash of the preceding event's hash field.
+        hash:                SHA-256 hash of this event (excluding hash itself).
+        causal_predecessor:  Event ID of the event that causally triggered this one.
+        source_organ:        Organ key (e.g. "META-ORGANVM", "ORGAN-I").
+        source_repo:         Repository name within the organ.
     """
 
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -72,6 +95,13 @@ class EventRecord:
     payload: dict[str, Any] = field(default_factory=dict)
     source_spec: str = ""
     actor: str = ""
+    # Chain fields (Testament Protocol)
+    sequence: int = -1
+    prev_hash: str = ""
+    hash: str = ""
+    causal_predecessor: str = ""
+    source_organ: str = ""
+    source_repo: str = ""
 
     def to_json(self) -> str:
         """Serialize to compact JSON for JSONL storage."""
@@ -88,6 +118,12 @@ class EventRecord:
             payload=data.get("payload", {}),
             source_spec=data.get("source_spec", ""),
             actor=data.get("actor", ""),
+            sequence=data.get("sequence", -1),
+            prev_hash=data.get("prev_hash", ""),
+            hash=data.get("hash", ""),
+            causal_predecessor=data.get("causal_predecessor", ""),
+            source_organ=data.get("source_organ", ""),
+            source_repo=data.get("source_repo", ""),
         )
 
 
@@ -129,8 +165,15 @@ class EventSpine:
         payload: dict[str, Any] | None = None,
         source_spec: str = "",
         actor: str = "",
+        source_organ: str = "",
+        source_repo: str = "",
+        causal_predecessor: str = "",
     ) -> EventRecord:
-        """Append a new event to the spine.
+        """Append a new event to the spine with hash-chain linking.
+
+        The event is assigned the next sequence number, its prev_hash is set
+        to the hash of the preceding event (or GENESIS_PREV_HASH for the first
+        event), and its own hash is computed over all fields.
 
         Args:
             event_type: Constitutional event type (string or EventType enum).
@@ -138,13 +181,37 @@ class EventSpine:
             payload: Additional structured data.
             source_spec: Originating specification reference.
             actor: Who/what caused this event.
+            source_organ: Organ key (e.g. "META-ORGANVM").
+            source_repo: Repository name within the organ.
+            causal_predecessor: Event ID of the triggering event.
 
         Returns:
             The persisted EventRecord.
         """
+        from organvm_engine.ledger.chain import GENESIS_PREV_HASH, compute_event_hash
+
         # Normalize enum to string value
         if isinstance(event_type, EventType):
             event_type = event_type.value
+
+        # Determine sequence and prev_hash from the last event in the file
+        last_hash = GENESIS_PREV_HASH
+        last_seq = -1
+        if self._path.is_file():
+            for line in self._path.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    h = data.get("hash", "")
+                    if h:
+                        last_hash = h
+                    s = data.get("sequence", -1)
+                    if s >= 0:
+                        last_seq = s
+                except json.JSONDecodeError:
+                    continue
 
         record = EventRecord(
             event_type=event_type,
@@ -152,7 +219,16 @@ class EventSpine:
             payload=payload or {},
             source_spec=source_spec,
             actor=actor,
+            source_organ=source_organ,
+            source_repo=source_repo,
+            causal_predecessor=causal_predecessor,
+            sequence=last_seq + 1,
+            prev_hash=last_hash,
         )
+
+        # Compute hash over all fields except hash itself
+        event_dict = asdict(record)
+        record.hash = compute_event_hash(event_dict)
 
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._path.open("a") as f:

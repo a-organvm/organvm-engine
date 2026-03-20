@@ -47,7 +47,7 @@ from organvm_engine.cli.atoms import (
     cmd_atoms_pipeline,
     cmd_atoms_reconcile,
 )
-from organvm_engine.cli.ci import cmd_ci_triage
+from organvm_engine.cli.ci import cmd_ci_audit, cmd_ci_mandate, cmd_ci_triage
 from organvm_engine.cli.cmd_audit import (
     cmd_audit_absorption,
     cmd_audit_full,
@@ -85,6 +85,19 @@ from organvm_engine.cli.content import (
     cmd_content_list,
     cmd_content_new,
     cmd_content_status,
+)
+from organvm_engine.cli.testament import (
+    cmd_testament_catalog,
+    cmd_testament_gallery,
+    cmd_testament_render,
+    cmd_testament_status,
+)
+from organvm_engine.cli.ledger import (
+    cmd_ledger_checkpoint,
+    cmd_ledger_genesis,
+    cmd_ledger_log,
+    cmd_ledger_status,
+    cmd_ledger_verify,
 )
 from organvm_engine.cli.context import cmd_context_sync
 from organvm_engine.cli.deadlines import cmd_deadlines
@@ -604,6 +617,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Categorize CI failures from soak data",
     )
     ci_triage.add_argument(
+        "--json",
+        action="store_true",
+        help="Output machine-readable JSON",
+    )
+    ci_audit = ci_sub.add_parser(
+        "audit",
+        help="Infrastructure audit (The Descent Protocol)",
+    )
+    ci_audit.add_argument(
+        "--json",
+        action="store_true",
+        help="Output machine-readable JSON",
+    )
+    ci_audit.add_argument(
+        "--organ",
+        help="Filter by organ key (e.g., META-ORGANVM)",
+    )
+    ci_audit.add_argument(
+        "--repo",
+        help="Filter by repo name",
+    )
+    ci_mandate = ci_sub.add_parser(
+        "mandate",
+        help="Verify CI workflows exist on disk",
+    )
+    ci_mandate.add_argument(
         "--json",
         action="store_true",
         help="Output machine-readable JSON",
@@ -1380,6 +1419,65 @@ def build_parser() -> argparse.ArgumentParser:
     content_status = content_sub.add_parser("status", help="Weekly cadence health check")
     content_status.add_argument("--json", action="store_true", help="JSON output")
 
+    # testament
+    testament = sub.add_parser(
+        "testament", help="Generative self-portrait — the system renders itself",
+    )
+    testament_sub = testament.add_subparsers(dest="subcommand")
+
+    testament_status = testament_sub.add_parser("status", help="Testament system status")
+    testament_status.add_argument("--json", action="store_true", help="JSON output")
+
+    testament_render = testament_sub.add_parser(
+        "render", help="Render artifacts from live system data",
+    )
+    testament_render.add_argument("--organ", default=None, help="Filter to organ")
+    testament_render.add_argument("--write", action="store_true", help="Actually produce files")
+    testament_render.add_argument(
+        "--output-dir", default=None, help="Output directory for artifacts",
+    )
+    testament_render.add_argument("--registry", default=None, help="Registry path override")
+
+    testament_catalog = testament_sub.add_parser("catalog", help="List produced artifacts")
+    testament_catalog.add_argument("--organ", default=None, help="Filter to organ")
+    testament_catalog.add_argument("--json", action="store_true", help="JSON output")
+
+    testament_gallery = testament_sub.add_parser(
+        "gallery", help="Generate static HTML gallery",
+    )
+    testament_gallery.add_argument("--write", action="store_true", help="Actually generate")
+    testament_gallery.add_argument(
+        "--output-dir", default=None, help="Output directory for gallery",
+    )
+
+    # ledger (Testament Protocol — hash-linked event chain)
+    ledger = sub.add_parser(
+        "ledger", help="Testament Protocol — native hash-linked event chain",
+    )
+    ledger_sub = ledger.add_subparsers(dest="subcommand")
+
+    ledger_genesis = ledger_sub.add_parser("genesis", help="Initialize the chain")
+    ledger_genesis.add_argument("--chain-path", default=None, help="Override chain file path")
+
+    ledger_status_p = ledger_sub.add_parser("status", help="Chain status")
+    ledger_status_p.add_argument("--json", action="store_true")
+    ledger_status_p.add_argument("--chain-path", default=None)
+
+    ledger_verify_p = ledger_sub.add_parser("verify", help="Verify chain integrity")
+    ledger_verify_p.add_argument("--chain-path", default=None)
+    ledger_verify_p.add_argument("--event", default=None, help="Verify single event")
+
+    ledger_log_p = ledger_sub.add_parser("log", help="Query the chain")
+    ledger_log_p.add_argument("--type", default=None, help="Filter by event type")
+    ledger_log_p.add_argument("--tier", default=None, help="Filter by tier")
+    ledger_log_p.add_argument("--limit", type=int, default=20)
+    ledger_log_p.add_argument("--json", action="store_true")
+    ledger_log_p.add_argument("--chain-path", default=None)
+
+    ledger_chk = ledger_sub.add_parser("checkpoint", help="Create Merkle checkpoint")
+    ledger_chk.add_argument("--write", action="store_true")
+    ledger_chk.add_argument("--chain-path", default=None)
+
     # ecosystem
     eco = sub.add_parser(
         "ecosystem",
@@ -2123,6 +2221,8 @@ def main() -> int:
         ("git", "diff-pinned"): cmd_git_diff_pinned,
         ("git", "install-hooks"): cmd_git_install_hooks,
         ("ci", "triage"): cmd_ci_triage,
+        ("ci", "audit"): cmd_ci_audit,
+        ("ci", "mandate"): cmd_ci_mandate,
         ("pitch", "generate"): cmd_pitch_generate,
         ("pitch", "sync"): cmd_pitch_sync,
         ("context", "sync"): cmd_context_sync,
@@ -2228,6 +2328,31 @@ def main() -> int:
         if handler:
             return handler(args)
         parser.parse_args(["content", "--help"])
+        return 0
+    if args.command == "testament":
+        testament_dispatch = {
+            "status": cmd_testament_status,
+            "render": cmd_testament_render,
+            "catalog": cmd_testament_catalog,
+            "gallery": cmd_testament_gallery,
+        }
+        handler = testament_dispatch.get(getattr(args, "subcommand", "") or "")
+        if handler:
+            return handler(args)
+        parser.parse_args(["testament", "--help"])
+        return 0
+    if args.command == "ledger":
+        ledger_dispatch = {
+            "genesis": cmd_ledger_genesis,
+            "status": cmd_ledger_status,
+            "verify": cmd_ledger_verify,
+            "log": cmd_ledger_log,
+            "checkpoint": cmd_ledger_checkpoint,
+        }
+        handler = ledger_dispatch.get(getattr(args, "subcommand", "") or "")
+        if handler:
+            return handler(args)
+        parser.parse_args(["ledger", "--help"])
         return 0
     if args.command == "ecosystem":
         ecosystem_dispatch = {

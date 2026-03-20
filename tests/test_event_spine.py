@@ -16,14 +16,15 @@ class TestEventType:
 
     def test_all_types_present(self):
         expected = {
-            "PROMOTION",
-            "DEPENDENCY_CHANGE",
-            "SEED_UPDATE",
-            "GOVERNANCE_AUDIT",
-            "METRIC_UPDATE",
-            "ENTITY_CREATED",
-            "ENTITY_ARCHIVED",
-            "CONTEXT_SYNC",
+            "PROMOTION", "DEPENDENCY_CHANGE", "SEED_UPDATE",
+            "GOVERNANCE_AUDIT", "METRIC_UPDATE",
+            "ENTITY_CREATED", "ENTITY_ARCHIVED", "CONTEXT_SYNC",
+            # Testament Protocol additions
+            "TESTAMENT_GENESIS", "TESTAMENT_CHECKPOINT", "TESTAMENT_VERIFIED",
+            "CI_HEALTH", "CONTENT_PUBLISHED", "ECOSYSTEM_MUTATION",
+            "PITCH_GENERATED", "GIT_SYNC",
+            "AGENT_PUNCH_IN", "AGENT_PUNCH_OUT", "AGENT_TOOL_LOCK",
+            "ONTOLOGIA_VARIABLE", "REGISTRY_UPDATE",
         }
         actual = {e.name for e in EventType}
         assert actual == expected
