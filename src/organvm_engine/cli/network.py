@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
-from organvm_engine.network import ENGAGEMENT_FORMS, MIRROR_LENSES
+from organvm_engine.network import ENGAGEMENT_FORMS, MIRROR_LENSES, NETWORK_MAP_FILENAME
 
 
 def _workspace_root(args: argparse.Namespace) -> Path:
@@ -25,17 +26,58 @@ def _workspace_root(args: argparse.Namespace) -> Path:
     return Path(ws) if ws else workspace_root()
 
 
+def _count_active_repos(workspace: Path) -> int:
+    """Count active repos from registry if available, else estimate from workspace."""
+    try:
+        from organvm_engine.registry.loader import load_registry
+        from organvm_engine.registry.query import list_repos
+
+        registry = load_registry()
+        all_repos = list_repos(registry)
+        return sum(
+            1 for r in all_repos
+            if r.get("status") not in ("ARCHIVED", "DEPRECATED")
+        )
+    except Exception:
+        # Fallback: count directories with seed.yaml
+        count = 0
+        for organ_dir in workspace.iterdir():
+            if not organ_dir.is_dir() or organ_dir.name.startswith("."):
+                continue
+            for repo_dir in organ_dir.iterdir():
+                if repo_dir.is_dir() and (repo_dir / "seed.yaml").exists():
+                    count += 1
+        return count or 1  # avoid division by zero
+
+
+def _resolve_organ_key(dir_name: str) -> str:
+    """Resolve organ key from directory name using organ_config if available."""
+    try:
+        from organvm_engine.organ_config import dir_to_registry_key
+
+        mapping = dir_to_registry_key()
+        return mapping.get(dir_name, dir_name.upper())
+    except (ImportError, Exception):
+        return dir_name.upper()
+
+
 def cmd_network_scan(args: argparse.Namespace) -> int:
     """Scan repos for potential mirrors and suggest additions."""
+    from organvm_engine.network.mapper import (
+        merge_mirrors,
+        read_network_map,
+        write_network_map,
+    )
     from organvm_engine.network.scanner import scan_repo_dependencies
+    from organvm_engine.network.schema import NetworkMap
 
     workspace = _workspace_root(args)
     repo_filter = getattr(args, "repo", None)
-    dry_run = not getattr(args, "write", False)
+    do_write = getattr(args, "write", False)
 
-    # Walk workspace looking for repos
     scanned = 0
     total_mirrors = 0
+    written = 0
 
     for organ_dir in sorted(workspace.iterdir()):
         if not organ_dir.is_dir() or organ_dir.name.startswith("."):
@@ -58,7 +100,28 @@ def cmd_network_scan(args: argparse.Namespace) -> int:
                 for m in mirrors:
                     print(f"  - {m.project} ({m.relevance})")
 
-    if dry_run:
+                if do_write:
+                    nmap_path = repo_dir / NETWORK_MAP_FILENAME
+                    if nmap_path.exists():
+                        existing = read_network_map(nmap_path)
+                        existing.technical = merge_mirrors(existing.technical, mirrors)
+                        existing.last_scanned = datetime.now(timezone.utc).isoformat()
+                        write_network_map(existing, nmap_path)
+                    else:
+                        organ_key = _resolve_organ_key(organ_dir.name)
+                        nmap = NetworkMap(
+                            schema_version="1.0",
+                            repo=repo_dir.name,
+                            organ=organ_key,
+                            technical=mirrors,
+                            last_scanned=datetime.now(timezone.utc).isoformat(),
+                        )
+                        write_network_map(nmap, nmap_path)
+                    written += 1
+
+    if do_write:
+        print(f"\nWritten: {written} network-map.yaml files ({total_mirrors} mirrors)")
+    else:
         print(f"\n[dry-run] Scanned repos with findings: {scanned}, mirrors: {total_mirrors}")
         print("Run with --write to update network-map.yaml files")
     return 0
@@ -154,7 +217,8 @@ def cmd_network_status(args: argparse.Namespace) -> int:
     pairs = discover_network_maps(workspace)
     maps = [m for _, m in pairs]
     summary = ledger_summary()
-    density = network_density(maps, 59)  # TODO: compute from registry
+    active = _count_active_repos(workspace)
+    density = network_density(maps, active)
     coverage = mirror_coverage(maps)
     convergences = convergence_points(maps)
 
@@ -164,6 +228,7 @@ def cmd_network_status(args: argparse.Namespace) -> int:
             "coverage": coverage,
             "maps_count": len(maps),
             "total_mirrors": sum(m.mirror_count for m in maps),
+            "active_repos": active,
             "ledger": summary,
             "convergence_points": len(convergences),
         }, indent=2))
@@ -171,6 +236,7 @@ def cmd_network_status(args: argparse.Namespace) -> int:
         print("Network Testament Status")
         print(f"  Maps: {len(maps)} repos with network-map.yaml")
         print(f"  Mirrors: {sum(m.mirror_count for m in maps)} total")
+        print(f"  Active repos: {active}")
         print(f"  Density: {density:.1%}")
         print(f"  Coverage — technical: {coverage['technical']:.0%}"
               f" | parallel: {coverage['parallel']:.0%}"
@@ -190,7 +256,8 @@ def cmd_network_synthesize(args: argparse.Namespace) -> int:
     period = getattr(args, "period", "monthly")
     write = getattr(args, "write", False)
 
-    content = synthesize_testament(workspace, period=period, total_active_repos=59)
+    active = _count_active_repos(workspace)
+    content = synthesize_testament(workspace, period=period, total_active_repos=active)
     print(content)
 
     if write:
@@ -202,22 +269,89 @@ def cmd_network_synthesize(args: argparse.Namespace) -> int:
 
 
 def cmd_network_suggest(args: argparse.Namespace) -> int:
-    """AI-informed suggestions for next engagement actions."""
-    # Stub — will be enriched with AI suggestions via MCP/LLM
+    """Generate actionable engagement suggestions from network state."""
+    from organvm_engine.network.ledger import ledger_summary, read_ledger
     from organvm_engine.network.mapper import discover_network_maps
-    from organvm_engine.network.metrics import convergence_points
+    from organvm_engine.network.metrics import (
+        convergence_points,
+        form_balance,
+        lens_balance,
+        mirror_coverage,
+    )
+    from organvm_engine.network.query import blind_spots
 
     workspace = _workspace_root(args)
     pairs = discover_network_maps(workspace)
     maps = [m for _, m in pairs]
+    entries = read_ledger()
+    summary = ledger_summary()
 
+    suggestions: list[str] = []
+
+    # 1. Convergence points — high-value targets
     convergences = convergence_points(maps)
     if convergences:
-        print("High-value convergence points (mirrored by multiple repos):")
+        suggestions.append("## Convergence Points (high-value targets)")
         for project, repos in sorted(convergences.items(), key=lambda x: -len(x[1])):
-            print(f"  {project} ← {', '.join(repos)}")
-        print("\nConsider deepening engagement with these projects first.")
+            suggestions.append(f"  {project} ← {', '.join(repos)}")
+        suggestions.append("  → Deepen engagement here: multiple repos connect.")
+        suggestions.append("")
+
+    # 2. Blind spots — repos with no mirrors
+    all_repo_names: list[str] = []
+    for organ_dir in sorted(workspace.iterdir()):
+        if not organ_dir.is_dir() or organ_dir.name.startswith("."):
+            continue
+        for repo_dir in sorted(organ_dir.iterdir()):
+            if repo_dir.is_dir() and (repo_dir / "seed.yaml").exists():
+                all_repo_names.append(repo_dir.name)
+
+    spots = blind_spots(maps, all_repo_names)
+    if spots:
+        suggestions.append(f"## Blind Spots ({len(spots)} repos with no mirrors)")
+        for repo in spots[:10]:
+            suggestions.append(f"  - {repo}")
+        if len(spots) > 10:
+            suggestions.append(f"  ... and {len(spots) - 10} more")
+        suggestions.append("  → Run `organvm network scan` to discover technical mirrors.")
+        suggestions.append("")
+
+    # 3. Lens imbalance
+    coverage = mirror_coverage(maps)
+    if maps:
+        weakest = min(coverage, key=coverage.get)  # type: ignore[arg-type]
+        if coverage[weakest] < 0.3:
+            suggestions.append(f"## Underrepresented Lens: {weakest} ({coverage[weakest]:.0%})")
+            suggestions.append(f"  → Actively seek {weakest} mirrors for mapped repos.")
+            suggestions.append("")
+
+    # 4. Engagement form imbalance
+    if entries:
+        forms = form_balance(entries)
+        lenses = lens_balance(entries)
+        absent_forms = [f for f, v in forms.items() if v == 0.0]
+        if absent_forms:
+            suggestions.append(f"## Unused Engagement Forms: {', '.join(absent_forms)}")
+            suggestions.append("  → Diversify engagement: all four forms are equal.")
+            suggestions.append("")
+        absent_lenses = [l for l, v in lenses.items() if v == 0.0]
+        if absent_lenses:
+            suggestions.append(f"## Silent Lenses: {', '.join(absent_lenses)}")
+            suggestions.append("  → No engagement logged for these lenses.")
+            suggestions.append("")
+
+    # 5. Overall momentum
+    if summary["total_actions"] == 0:
+        suggestions.append("## Getting Started")
+        suggestions.append("  No engagement actions logged yet.")
+        suggestions.append("  → Start with `organvm network scan --write` to populate maps.")
+        suggestions.append("  → Then log your first action: `organvm network log <repo> <project> ...`")
+        suggestions.append("")
+
+    if suggestions:
+        print("Network Testament — Suggestions\n")
+        print("\n".join(suggestions))
     else:
-        print("No convergence points found yet. Run `organvm network scan` to populate maps.")
+        print("Network looks healthy. All lenses covered, all forms active.")
 
     return 0

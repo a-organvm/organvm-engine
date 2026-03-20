@@ -9,12 +9,12 @@ from pathlib import Path
 
 def cmd_testament_status(args: argparse.Namespace) -> int:
     """Show testament system status — what the system can and has produced."""
+    from organvm_engine.testament.catalog import catalog_summary, load_catalog
     from organvm_engine.testament.manifest import (
         MODULE_SOURCES,
         ORGAN_OUTPUT_MATRIX,
         all_artifact_types,
     )
-    from organvm_engine.testament.catalog import load_catalog, catalog_summary
 
     as_json = getattr(args, "json", False)
     base_dir = _resolve_base_dir(args)
@@ -46,7 +46,7 @@ def cmd_testament_status(args: argparse.Namespace) -> int:
     if summary.latest_timestamp:
         print(f"  Latest:  {summary.latest_timestamp[:19]}")
     if summary.by_modality:
-        print(f"\n  By modality:")
+        print("\n  By modality:")
         for mod, count in sorted(summary.by_modality.items()):
             print(f"    {mod:<16} {count}")
     print()
@@ -55,8 +55,8 @@ def cmd_testament_status(args: argparse.Namespace) -> int:
 
 def cmd_testament_render(args: argparse.Namespace) -> int:
     """Render testament artifacts from live system data."""
-    from organvm_engine.testament.pipeline import render_all, render_organ
     from organvm_engine.testament.aesthetic import load_taste
+    from organvm_engine.testament.pipeline import render_all, render_organ
 
     organ = getattr(args, "organ", None)
     dry_run = getattr(args, "dry_run", True)
@@ -69,7 +69,7 @@ def cmd_testament_render(args: argparse.Namespace) -> int:
     if registry_path:
         registry_path = Path(registry_path)
 
-    aesthetic = load_taste()
+    load_taste()  # validates taste.yaml is parseable before rendering
 
     if organ:
         results = render_organ(
@@ -88,7 +88,7 @@ def cmd_testament_render(args: argparse.Namespace) -> int:
         for r in results:
             organ_label = r.artifact.organ or "system"
             print(f"    {r.artifact.modality.value:<14} {organ_label:<8} {r.artifact.title}")
-        print(f"\n  Run with --write to produce artifacts.\n")
+        print("\n  Run with --write to produce artifacts.\n")
     else:
         print(f"\n  Produced {len(succeeded)} artifacts" +
               (f" ({len(failed)} failed)" if failed else ""))
@@ -137,9 +137,9 @@ def cmd_testament_catalog(args: argparse.Namespace) -> int:
 
 def cmd_testament_gallery(args: argparse.Namespace) -> int:
     """Generate a static HTML gallery of all testament artifacts."""
+    from organvm_engine.testament.aesthetic import load_taste
     from organvm_engine.testament.catalog import load_catalog
     from organvm_engine.testament.renderers.html import render_gallery_page
-    from organvm_engine.testament.aesthetic import load_taste
 
     dry_run = not getattr(args, "write", False)
     output_dir = _resolve_output_dir(args)
@@ -176,7 +176,7 @@ def cmd_testament_gallery(args: argparse.Namespace) -> int:
     if dry_run:
         print(f"\n  [dry-run] Would write gallery to {gallery_path}")
         print(f"  {len(catalog)} artifacts, {len(html)} bytes")
-        print(f"\n  Run with --write to generate.\n")
+        print("\n  Run with --write to generate.\n")
         return 0
 
     output_dir.mkdir(parents=True, exist_ok=True)

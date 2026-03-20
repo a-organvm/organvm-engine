@@ -508,3 +508,342 @@ class TestEdgeCases:
             tier="standard",
         )
         assert result.is_docs_only is True
+
+
+# ---------------------------------------------------------------------------
+# Individual mechanism checks (direct unit tests)
+# ---------------------------------------------------------------------------
+
+class TestIndividualChecks:
+    """Direct tests for each private check function."""
+
+    def test_check_dependabot_present(self, tmp_path: Path):
+        from organvm_engine.ci.audit import _check_dependabot
+
+        repo = tmp_path / "r"
+        repo.mkdir()
+        (repo / ".github").mkdir()
+        (repo / ".github" / "dependabot.yml").write_text("version: 2\n")
+        result = _check_dependabot(repo)
+        assert result.status == CheckStatus.PASS
+
+    def test_check_dependabot_yaml_extension(self, tmp_path: Path):
+        from organvm_engine.ci.audit import _check_dependabot
+
+        repo = tmp_path / "r"
+        repo.mkdir()
+        (repo / ".github").mkdir()
+        (repo / ".github" / "dependabot.yaml").write_text("version: 2\n")
+        result = _check_dependabot(repo)
+        assert result.status == CheckStatus.PASS
+
+    def test_check_dependabot_missing(self, tmp_path: Path):
+        from organvm_engine.ci.audit import _check_dependabot
+
+        repo = tmp_path / "r"
+        repo.mkdir()
+        (repo / ".github").mkdir()
+        result = _check_dependabot(repo)
+        assert result.status == CheckStatus.FAIL
+
+    def test_check_codeowners_in_github_dir(self, tmp_path: Path):
+        from organvm_engine.ci.audit import _check_codeowners
+
+        repo = tmp_path / "r"
+        repo.mkdir()
+        (repo / ".github").mkdir()
+        (repo / ".github" / "CODEOWNERS").write_text("* @owner\n")
+        result = _check_codeowners(repo)
+        assert result.status == CheckStatus.PASS
+
+    def test_check_codeowners_at_root(self, tmp_path: Path):
+        from organvm_engine.ci.audit import _check_codeowners
+
+        repo = tmp_path / "r"
+        repo.mkdir()
+        (repo / "CODEOWNERS").write_text("* @owner\n")
+        result = _check_codeowners(repo)
+        assert result.status == CheckStatus.PASS
+
+    def test_check_codeowners_missing(self, tmp_path: Path):
+        from organvm_engine.ci.audit import _check_codeowners
+
+        repo = tmp_path / "r"
+        repo.mkdir()
+        result = _check_codeowners(repo)
+        assert result.status == CheckStatus.FAIL
+
+    def test_check_codeql_present(self, tmp_path: Path):
+        from organvm_engine.ci.audit import _check_codeql
+
+        repo = tmp_path / "r"
+        wf = repo / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / "codeql.yml").write_text("name: CodeQL\n")
+        result = _check_codeql(repo)
+        assert result.status == CheckStatus.PASS
+
+    def test_check_codeql_missing(self, tmp_path: Path):
+        from organvm_engine.ci.audit import _check_codeql
+
+        repo = tmp_path / "r"
+        wf = repo / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / "ci.yml").write_text("name: CI\n")
+        result = _check_codeql(repo)
+        assert result.status == CheckStatus.FAIL
+
+    def test_check_pr_template_directory(self, tmp_path: Path):
+        from organvm_engine.ci.audit import _check_pr_template
+
+        repo = tmp_path / "r"
+        tpl_dir = repo / ".github" / "PULL_REQUEST_TEMPLATE"
+        tpl_dir.mkdir(parents=True)
+        (tpl_dir / "default.md").write_text("## PR\n")
+        result = _check_pr_template(repo)
+        assert result.status == CheckStatus.PASS
+
+    def test_check_issue_templates_single_file(self, tmp_path: Path):
+        from organvm_engine.ci.audit import _check_issue_templates
+
+        repo = tmp_path / "r"
+        (repo / ".github").mkdir(parents=True)
+        (repo / ".github" / "ISSUE_TEMPLATE.md").write_text("## Issue\n")
+        result = _check_issue_templates(repo)
+        assert result.status == CheckStatus.PASS
+
+    def test_check_release_config_fallback(self, tmp_path: Path):
+        from organvm_engine.ci.audit import _check_release_automation
+
+        repo = tmp_path / "r"
+        gh = repo / ".github"
+        gh.mkdir(parents=True)
+        (gh / "workflows").mkdir()
+        (gh / "release-drafter.yml").write_text("name-template: v$V\n")
+        result = _check_release_automation(repo)
+        assert result.status == CheckStatus.PASS
+
+    def test_check_stale_present(self, tmp_path: Path):
+        from organvm_engine.ci.audit import _check_stale_management
+
+        repo = tmp_path / "r"
+        wf = repo / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / "stale.yml").write_text("name: Stale\n")
+        result = _check_stale_management(repo)
+        assert result.status == CheckStatus.PASS
+
+    def test_check_ci_content_non_yaml_skipped(self, tmp_path: Path):
+        from organvm_engine.ci.audit import _check_ci_content
+
+        repo = tmp_path / "r"
+        wf = repo / ".github" / "workflows"
+        wf.mkdir(parents=True)
+        (wf / "notes.txt").write_text("ruff check src/\n")
+        result = _check_ci_content(repo, "linting", [r"ruff\s+check"])
+        assert result.status == CheckStatus.FAIL
+
+
+# ---------------------------------------------------------------------------
+# Tier-aware requirements
+# ---------------------------------------------------------------------------
+
+class TestTierAwareRequirements:
+    def test_infrastructure_tier_reduces_requirements(self, full_repo: Path):
+        result = audit_repo(
+            repo_path=full_repo,
+            repo_name="infra-repo",
+            organ="META-ORGANVM",
+            org="meta-organvm",
+            promotion_status="GRADUATED",
+            tier="infrastructure",
+        )
+        reqs = result.required_mechanisms
+        assert "release_automation" not in reqs
+        assert "type_checking" not in reqs
+        assert "codeql" not in reqs
+        assert "ci_workflow" in reqs
+
+    def test_archive_tier_clears_all(self, minimal_repo: Path):
+        result = audit_repo(
+            repo_path=minimal_repo,
+            repo_name="old",
+            organ="META-ORGANVM",
+            org="meta-organvm",
+            promotion_status="GRADUATED",
+            tier="archive",
+        )
+        assert result.required_mechanisms == set()
+        assert result.tier_compliant is True
+
+    def test_standard_tier_full_requirements(self, full_repo: Path):
+        result = audit_repo(
+            repo_path=full_repo,
+            repo_name="std",
+            organ="META-ORGANVM",
+            org="meta-organvm",
+            promotion_status="GRADUATED",
+            tier="standard",
+        )
+        reqs = result.required_mechanisms
+        assert "release_automation" in reqs
+        assert "type_checking" in reqs
+
+
+# ---------------------------------------------------------------------------
+# run_infra_audit edge cases
+# ---------------------------------------------------------------------------
+
+class TestRunInfraAuditEdgeCases:
+    def test_repo_filter(self, tmp_path: Path):
+        registry = {
+            "organs": {
+                "META-ORGANVM": {
+                    "repositories": [
+                        {"name": "r1", "org": "o", "promotion_status": "LOCAL", "tier": "standard"},
+                        {"name": "r2", "org": "o", "promotion_status": "LOCAL", "tier": "standard"},
+                    ],
+                },
+            },
+        }
+        report = run_infra_audit(registry, workspace=tmp_path, repo_filter="r1")
+        assert all(r.repo_name == "r1" for r in report.repos)
+
+    def test_repo_not_on_disk(self, tmp_path: Path):
+        registry = {
+            "organs": {
+                "META-ORGANVM": {
+                    "repositories": [
+                        {"name": "ghost", "org": "o", "promotion_status": "LOCAL", "tier": "standard"},
+                    ],
+                },
+            },
+        }
+        report = run_infra_audit(registry, workspace=tmp_path)
+        assert report.total_repos == 1
+        assert report.non_compliant_repos == 1
+
+    def test_empty_name_skipped(self, tmp_path: Path):
+        registry = {
+            "organs": {
+                "META-ORGANVM": {
+                    "repositories": [{"name": "", "org": "o", "promotion_status": "LOCAL"}],
+                },
+            },
+        }
+        report = run_infra_audit(registry, workspace=tmp_path)
+        assert report.total_repos == 0
+
+    def test_summary_with_organ_data(self):
+        report = InfraAuditReport(
+            total_repos=10,
+            compliant_repos=6,
+            non_compliant_repos=4,
+            by_organ={"META": {"total": 5, "compliant": 3, "non_compliant": 2}},
+        )
+        summary = report.summary()
+        assert "META" in summary
+        assert "6/10" in summary
+
+    def test_compliance_rate_zero_repos(self):
+        report = InfraAuditReport()
+        assert report.compliance_rate == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Promotion gate integration
+# ---------------------------------------------------------------------------
+
+class TestPromotionGateIntegration:
+    def test_gate_blocks_missing_infra(self, minimal_repo: Path):
+        from organvm_engine.governance.state_machine import (
+            execute_transition,
+            reset_loaded_transitions,
+        )
+
+        reset_loaded_transitions()
+        ok, msg = execute_transition(
+            repo_name="bare",
+            current_state="LOCAL",
+            target_state="CANDIDATE",
+            repo_path=minimal_repo,
+            organ="META-ORGANVM",
+            org="meta-organvm",
+            tier="standard",
+        )
+        assert ok is False
+        assert "Infrastructure requirements not met" in msg
+        reset_loaded_transitions()
+
+    def test_gate_allows_with_infra(self, full_repo: Path):
+        from organvm_engine.governance.state_machine import (
+            execute_transition,
+            reset_loaded_transitions,
+        )
+
+        reset_loaded_transitions()
+        ok, _ = execute_transition(
+            repo_name="full",
+            current_state="LOCAL",
+            target_state="CANDIDATE",
+            repo_path=full_repo,
+            organ="META-ORGANVM",
+            org="meta-organvm",
+            tier="standard",
+        )
+        assert ok is True
+        reset_loaded_transitions()
+
+    def test_gate_skipped_without_repo_path(self):
+        from organvm_engine.governance.state_machine import (
+            execute_transition,
+            reset_loaded_transitions,
+        )
+
+        reset_loaded_transitions()
+        ok, _ = execute_transition(
+            repo_name="any",
+            current_state="LOCAL",
+            target_state="CANDIDATE",
+        )
+        assert ok is True
+        reset_loaded_transitions()
+
+    def test_gate_skipped_for_archival(self, minimal_repo: Path):
+        from organvm_engine.governance.state_machine import (
+            execute_transition,
+            reset_loaded_transitions,
+        )
+
+        reset_loaded_transitions()
+        ok, _ = execute_transition(
+            repo_name="old",
+            current_state="GRADUATED",
+            target_state="ARCHIVED",
+            repo_path=minimal_repo,
+            organ="META-ORGANVM",
+            org="meta-organvm",
+            tier="standard",
+        )
+        assert ok is True
+        reset_loaded_transitions()
+
+    def test_gate_disabled_with_flag(self, minimal_repo: Path):
+        from organvm_engine.governance.state_machine import (
+            execute_transition,
+            reset_loaded_transitions,
+        )
+
+        reset_loaded_transitions()
+        ok, _ = execute_transition(
+            repo_name="bare",
+            current_state="LOCAL",
+            target_state="CANDIDATE",
+            repo_path=minimal_repo,
+            organ="META-ORGANVM",
+            org="meta-organvm",
+            tier="standard",
+            enforce_infrastructure=False,
+        )
+        assert ok is True
+        reset_loaded_transitions()

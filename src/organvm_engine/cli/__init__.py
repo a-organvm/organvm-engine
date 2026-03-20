@@ -86,19 +86,6 @@ from organvm_engine.cli.content import (
     cmd_content_new,
     cmd_content_status,
 )
-from organvm_engine.cli.testament import (
-    cmd_testament_catalog,
-    cmd_testament_gallery,
-    cmd_testament_render,
-    cmd_testament_status,
-)
-from organvm_engine.cli.ledger import (
-    cmd_ledger_checkpoint,
-    cmd_ledger_genesis,
-    cmd_ledger_log,
-    cmd_ledger_status,
-    cmd_ledger_verify,
-)
 from organvm_engine.cli.context import cmd_context_sync
 from organvm_engine.cli.deadlines import cmd_deadlines
 from organvm_engine.cli.dispatch import cmd_dispatch_validate
@@ -117,14 +104,6 @@ from organvm_engine.cli.ecosystem import (
     cmd_ecosystem_sync,
     cmd_ecosystem_sync_dna,
     cmd_ecosystem_validate,
-)
-from organvm_engine.cli.network import (
-    cmd_network_log,
-    cmd_network_map,
-    cmd_network_scan,
-    cmd_network_status,
-    cmd_network_suggest,
-    cmd_network_synthesize,
 )
 from organvm_engine.cli.git_cmds import (
     cmd_git_add_submodule,
@@ -152,12 +131,27 @@ from organvm_engine.cli.indexer import (
     cmd_index_show,
     cmd_index_stats,
 )
+from organvm_engine.cli.ledger import (
+    cmd_ledger_checkpoint,
+    cmd_ledger_genesis,
+    cmd_ledger_log,
+    cmd_ledger_status,
+    cmd_ledger_verify,
+)
 from organvm_engine.cli.lint_vars import cmd_lint_vars
 from organvm_engine.cli.metrics import (
     cmd_metrics_calculate,
     cmd_metrics_count_words,
     cmd_metrics_propagate,
     cmd_metrics_refresh,
+)
+from organvm_engine.cli.network import (
+    cmd_network_log,
+    cmd_network_map,
+    cmd_network_scan,
+    cmd_network_status,
+    cmd_network_suggest,
+    cmd_network_synthesize,
 )
 from organvm_engine.cli.omega import cmd_omega_check, cmd_omega_status, cmd_omega_update
 from organvm_engine.cli.ontologia import (
@@ -238,6 +232,12 @@ from organvm_engine.cli.study import (
     cmd_study_audit_report,
     cmd_study_consilience,
     cmd_study_feedback,
+)
+from organvm_engine.cli.testament import (
+    cmd_testament_catalog,
+    cmd_testament_gallery,
+    cmd_testament_render,
+    cmd_testament_status,
 )
 from organvm_engine.cli.verify import (
     cmd_verify_contracts,

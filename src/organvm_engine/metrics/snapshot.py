@@ -76,10 +76,10 @@ def build_system_snapshot(
     # Code profile (best-effort, requires workspace)
     code_profile: dict[str, Any] = {}
     if workspace and workspace.is_dir():
-        try:
+        import contextlib
+
+        with contextlib.suppress(Exception):
             code_profile = _scan_code_profile(workspace)
-        except Exception:
-            pass
 
     # Word counts from computed metrics
     word_counts = computed_metrics.get("word_counts", {})

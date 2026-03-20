@@ -154,6 +154,103 @@ def scan_package_json(repo_path: Path) -> list[MirrorEntry]:
     return mirrors
 
 
+def scan_go_mod(repo_path: Path) -> list[MirrorEntry]:
+    """Extract dependencies from go.mod."""
+    go_mod = repo_path / "go.mod"
+    if not go_mod.exists():
+        return []
+
+    content = go_mod.read_text()
+    mirrors: list[MirrorEntry] = []
+    seen: set[str] = set()
+
+    in_require = False
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped == "require (":
+            in_require = True
+            continue
+        if stripped == ")" and in_require:
+            in_require = False
+            continue
+        if stripped.startswith("require ") and "(" not in stripped:
+            # Single-line require
+            parts = stripped.split()
+            if len(parts) >= 2:
+                mod_path = parts[1]
+                if mod_path.startswith("github.com/"):
+                    segments = mod_path.split("/")
+                    if len(segments) >= 3:
+                        github_repo = f"{segments[1]}/{segments[2]}"
+                        if github_repo not in seen:
+                            seen.add(github_repo)
+                            mirrors.append(MirrorEntry(
+                                project=github_repo,
+                                platform="github",
+                                relevance=f"Go dependency: {mod_path}",
+                                engagement=["watch"],
+                                tags=["auto-discovered", "go-dep"],
+                            ))
+            continue
+
+        if in_require:
+            parts = stripped.split()
+            if len(parts) >= 2:
+                mod_path = parts[0]
+                if mod_path.startswith("github.com/"):
+                    segments = mod_path.split("/")
+                    if len(segments) >= 3:
+                        github_repo = f"{segments[1]}/{segments[2]}"
+                        if github_repo not in seen:
+                            seen.add(github_repo)
+                            mirrors.append(MirrorEntry(
+                                project=github_repo,
+                                platform="github",
+                                relevance=f"Go dependency: {mod_path}",
+                                engagement=["watch"],
+                                tags=["auto-discovered", "go-dep"],
+                            ))
+
+    return mirrors
+
+
+def scan_cargo_toml(repo_path: Path) -> list[MirrorEntry]:
+    """Extract dependencies from Cargo.toml."""
+    cargo_path = repo_path / "Cargo.toml"
+    if not cargo_path.exists():
+        return []
+
+    content = cargo_path.read_text()
+    mirrors: list[MirrorEntry] = []
+    seen: set[str] = set()
+
+    in_deps = False
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped in ("[dependencies]", "[dev-dependencies]", "[build-dependencies]"):
+            in_deps = True
+            continue
+        if stripped.startswith("[") and "dependencies" not in stripped:
+            in_deps = False
+            continue
+
+        if in_deps and "=" in stripped:
+            crate_name = stripped.split("=")[0].strip().strip('"')
+            if crate_name and not crate_name.startswith("#"):
+                github_repo = KNOWN_REPOS.get(crate_name)
+                if github_repo and github_repo not in seen:
+                    seen.add(github_repo)
+                    mirrors.append(MirrorEntry(
+                        project=github_repo,
+                        platform="github",
+                        relevance=f"Rust dependency: {crate_name}",
+                        engagement=["watch"],
+                        tags=["auto-discovered", "rust-dep"],
+                    ))
+
+    return mirrors
+
+
 def scan_repo_dependencies(repo_path: Path) -> list[MirrorEntry]:
     """Scan all dependency files in a repo for technical mirrors.
 
@@ -163,7 +260,7 @@ def scan_repo_dependencies(repo_path: Path) -> list[MirrorEntry]:
     all_mirrors: list[MirrorEntry] = []
     seen_projects: set[str] = set()
 
-    for scanner in (scan_pyproject, scan_package_json):
+    for scanner in (scan_pyproject, scan_package_json, scan_go_mod, scan_cargo_toml):
         for mirror in scanner(repo_path):
             if mirror.project not in seen_projects:
                 all_mirrors.append(mirror)

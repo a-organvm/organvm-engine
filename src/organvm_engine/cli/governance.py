@@ -93,7 +93,11 @@ def cmd_governance_checkdeps(args: argparse.Namespace) -> int:
 
 
 def cmd_governance_promote(args: argparse.Namespace) -> int:
-    from organvm_engine.governance.state_machine import check_transition
+
+    from organvm_engine.ci.mandate import _resolve_repo_path
+    from organvm_engine.governance.state_machine import execute_transition
+    from organvm_engine.organ_config import registry_key_to_dir
+    from organvm_engine.paths import workspace_root
 
     registry = load_registry(args.registry)
     resolved = resolve_entity(args.repo, registry=registry)
@@ -105,8 +109,26 @@ def cmd_governance_promote(args: argparse.Namespace) -> int:
             print(f"ERROR: Repo '{args.repo}' not found")
             return 1
         organ_key, repo = result
+
     current = repo.get("promotion_status", "LOCAL")
-    ok, msg = check_transition(current, args.target)
+    repo_name = repo.get("name", args.repo)
+    org = repo.get("org", "")
+    tier = repo.get("tier", "standard")
+
+    # Resolve filesystem path for infrastructure audit
+    key_to_dir = registry_key_to_dir()
+    ws = workspace_root()
+    repo_path = _resolve_repo_path(org, repo_name, organ_key, ws, key_to_dir)
+
+    ok, msg = execute_transition(
+        repo_name=repo_name,
+        current_state=current,
+        target_state=args.target,
+        repo_path=repo_path,
+        organ=organ_key,
+        org=org,
+        tier=tier,
+    )
     print(f"  {msg}")
 
     if ok:

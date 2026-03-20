@@ -109,7 +109,7 @@ class RepoCompliance:
 
     @property
     def required_mechanisms(self) -> set[str]:
-        """Mechanisms required for this repo's promotion status."""
+        """Mechanisms required for this repo's promotion status and tier."""
         reqs = TIER_REQUIREMENTS.get(self.promotion_status, set()).copy()
         if self.is_docs_only:
             # Docs-only repos: skip code-specific checks
@@ -117,6 +117,15 @@ class RepoCompliance:
             reqs.discard("testing")
             reqs.discard("type_checking")
             reqs.discard("codeql")
+        if self.tier == "infrastructure":
+            # Infrastructure repos: reduced requirements — no release automation,
+            # no type checking, no CodeQL (supporting tooling, not portfolio-facing)
+            reqs.discard("release_automation")
+            reqs.discard("type_checking")
+            reqs.discard("codeql")
+        if self.tier == "archive":
+            # Archive repos: no requirements
+            reqs.clear()
         return reqs
 
     @property
@@ -599,6 +608,7 @@ def run_infra_audit(
                 ))
                 report.repos.append(compliance)
                 report.total_repos += 1
+                report.non_compliant_repos += 1
                 organ_stats["total"] += 1
                 organ_stats["non_compliant"] += 1
                 continue

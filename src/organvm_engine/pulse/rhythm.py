@@ -597,6 +597,7 @@ def launchagent_status() -> dict[str, Any]:
             ["launchctl", "list", PLIST_LABEL],
             capture_output=True,
             text=True,
+            check=False,
             timeout=5,
         )
         result["running"] = proc.returncode == 0

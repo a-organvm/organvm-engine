@@ -241,7 +241,11 @@ def execute_transition(
                     f"See: SOP--the-descent-protocol.md"
                 )
         except Exception:
-            logger.debug("Infrastructure check failed (non-fatal)", exc_info=True)
+            logger.warning(
+                "Infrastructure audit could not run for %s (promotion proceeds)",
+                repo_name,
+                exc_info=True,
+            )
 
     # Authorization check (advisory mode — logs but does not block)
     if seed is not None:

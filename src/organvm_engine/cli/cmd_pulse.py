@@ -726,7 +726,7 @@ def cmd_pulse_ammoi(args: Namespace) -> int:
 
     workspace = _resolve_workspace_path(args)
     organ_filter = getattr(args, "organ", None)
-    repo_filter = getattr(args, "repo", None)
+    _repo_filter = getattr(args, "repo", None)  # reserved for future per-repo AMMOI
     use_json = getattr(args, "json", False)
 
     try:
@@ -775,7 +775,7 @@ def cmd_pulse_ammoi(args: Namespace) -> int:
             total_edges = od.internal_edges + od.cross_edges
             print(
                 f"  {oid:<20} {od.repo_count:>6} {total_edges:>8} "
-                f"{od.avg_gate_pct:>5}% {od.density:>7.1%}"
+                f"{od.avg_gate_pct:>5}% {od.density:>7.1%}",
             )
         print()
 
@@ -956,11 +956,10 @@ def cmd_pulse_advisories(args: Namespace) -> int:
         if use_json:
             json.dump({"acknowledged": ok, "advisory_id": ack_id}, sys.stdout)
             sys.stdout.write("\n")
+        elif ok:
+            print(f"  Advisory {ack_id} acknowledged.")
         else:
-            if ok:
-                print(f"  Advisory {ack_id} acknowledged.")
-            else:
-                print(f"  Advisory {ack_id} not found.")
+            print(f"  Advisory {ack_id} not found.")
         return 0 if ok else 1
 
     limit = getattr(args, "limit", 20)
@@ -994,7 +993,7 @@ def cmd_pulse_advisories(args: Namespace) -> int:
             f"{adv.severity:<10} "
             f"{adv.action:<10} "
             f"{adv.entity_name:<20} "
-            f"{adv.description}{ack_mark}"
+            f"{adv.description}{ack_mark}",
         )
 
     print()
@@ -1073,12 +1072,14 @@ def cmd_pulse_start(args: Namespace) -> int:
             ["launchctl", "unload", plist_path],
             capture_output=True,
             timeout=5,
+            check=False,
         )
         result = subprocess.run(
             ["launchctl", "load", plist_path],
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
         if result.returncode != 0:
             msg = result.stderr.strip() or "unknown error"
@@ -1101,7 +1102,7 @@ def cmd_pulse_start(args: Namespace) -> int:
         sys.stdout.write("\n")
     else:
         print()
-        print(f"  Pulse LaunchAgent installed and started.")
+        print("  Pulse LaunchAgent installed and started.")
         print(f"  Label:    {PLIST_LABEL}")
         print(f"  Interval: {interval}s ({interval // 60}m)")
         print(f"  Plist:    {plist_path}")
@@ -1113,7 +1114,6 @@ def cmd_pulse_start(args: Namespace) -> int:
 def cmd_pulse_stop(args: Namespace) -> int:
     """Stop and uninstall the pulse LaunchAgent."""
     from organvm_engine.pulse.rhythm import (
-        PLIST_LABEL,
         PLIST_PATH,
         uninstall_launchagent,
     )
@@ -1122,14 +1122,15 @@ def cmd_pulse_stop(args: Namespace) -> int:
 
     # Unload if running
     if PLIST_PATH.exists():
-        try:
+        import contextlib
+
+        with contextlib.suppress(Exception):
             subprocess.run(
                 ["launchctl", "unload", str(PLIST_PATH)],
                 capture_output=True,
                 timeout=5,
+                check=False,
             )
-        except Exception:
-            pass
 
     removed = uninstall_launchagent()
 
@@ -1139,9 +1140,9 @@ def cmd_pulse_stop(args: Namespace) -> int:
     else:
         print()
         if removed:
-            print(f"  Pulse LaunchAgent stopped and removed.")
+            print("  Pulse LaunchAgent stopped and removed.")
         else:
-            print(f"  Pulse LaunchAgent was not installed.")
+            print("  Pulse LaunchAgent was not installed.")
         print()
 
     return 0
@@ -1228,7 +1229,6 @@ def cmd_pulse_edges(args: Namespace) -> int:
 
         # Cross-organ edge count
         cross_organ = 0
-        from ontologia.entity.identity import EntityType
 
         # Build child→parent mapping for organ resolution
         child_to_organ: dict[str, str] = {}
@@ -1269,7 +1269,7 @@ def cmd_pulse_edges(args: Namespace) -> int:
         return 0
 
     print()
-    print(f"  Structural Edges")
+    print("  Structural Edges")
     print(f"  {'─' * 40}")
     print(f"  Hierarchy (organ→repo): {len(active_h)}")
     print(f"  Relations (repo→repo):  {len(active_r)}")
@@ -1278,7 +1278,7 @@ def cmd_pulse_edges(args: Namespace) -> int:
 
     if by_type:
         print()
-        print(f"  By relation type:")
+        print("  By relation type:")
         for rtype, count in sorted(by_type.items()):
             print(f"     {rtype:<20} {count}")
 
@@ -1309,7 +1309,7 @@ def _cmd_pulse_edges_sync(args: Namespace) -> int:
         return 0
 
     print()
-    print(f"  Edge Sync Result")
+    print("  Edge Sync Result")
     print(f"  {'─' * 40}")
     print(f"  Created:    {result.created}")
     print(f"  Skipped:    {result.skipped}")
@@ -1335,7 +1335,7 @@ def cmd_pulse_temporal(args: Namespace) -> int:
             sys.stdout.write("\n")
         else:
             print(f"  Insufficient history ({len(history)} snapshots, need >= 3).")
-            print(f"  Run `organvm pulse scan` a few times to build history.")
+            print("  Run `organvm pulse scan` a few times to build history.")
         return 0
 
     timeseries = extract_timeseries(history)

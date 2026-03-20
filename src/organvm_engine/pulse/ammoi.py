@@ -109,7 +109,7 @@ class AMMOI:
     compressed_text: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        d = {
+        return {
             "timestamp": self.timestamp,
             "system_density": self.system_density,
             "total_entities": self.total_entities,
@@ -136,7 +136,6 @@ class AMMOI:
             "flow_dormant": self.flow_dormant,
             "compressed_text": self.compressed_text,
         }
-        return d
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AMMOI:

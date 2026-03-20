@@ -36,7 +36,7 @@ class TestamentArtifact:
     timestamp: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(),
     )
-    metadata: dict = field(default_factory=dict)
+    metadata: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Serialize to a JSON-compatible dict."""

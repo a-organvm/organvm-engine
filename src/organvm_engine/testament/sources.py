@@ -55,7 +55,10 @@ def omega_data(
     """
     try:
         from organvm_engine.omega.scorecard import evaluate
-        scorecard = evaluate(registry=None)
+        from organvm_engine.registry.loader import load_registry
+
+        reg = load_registry(registry_path) if registry_path else None
+        scorecard = evaluate(registry=reg)
         criteria = [
             {"id": c.id, "name": c.name, "met": c.status == "MET", "status": c.status}
             for c in scorecard.criteria

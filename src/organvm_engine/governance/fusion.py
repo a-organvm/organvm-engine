@@ -150,7 +150,7 @@ def validate_fusion_plan(plan: FusionPlan) -> list[str]:
     if not plan.has_elevation:
         warnings.append(
             "Fusion plan has no SYNTHESIZE or INVENT components — "
-            "this is consolidation, not elevation"
+            "this is consolidation, not elevation",
         )
 
     if plan.target_name == plan.repo_a:

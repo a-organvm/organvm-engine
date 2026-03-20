@@ -25,13 +25,25 @@ from organvm_engine.network.schema import EngagementEntry
 
 
 def _period_filter(entries: list[EngagementEntry], period: str) -> list[EngagementEntry]:
-    """Filter ledger entries by period."""
+    """Filter ledger entries by period.
+
+    Args:
+        entries: All ledger entries.
+        period: "weekly" (7 days), "monthly" (30 days), or "all-time".
+
+    Returns:
+        Entries within the specified period.
+    """
     if period == "all-time":
         return entries
 
-    # Period filtering placeholder — refined in full implementation
-    # For now, return all entries
-    return entries
+    from datetime import timedelta
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=7 if period == "weekly" else 30)
+
+    cutoff_iso = cutoff.isoformat()
+    return [e for e in entries if e.timestamp >= cutoff_iso]
 
 
 def synthesize_testament(

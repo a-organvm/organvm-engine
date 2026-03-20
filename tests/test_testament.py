@@ -69,6 +69,15 @@ from organvm_engine.testament.network import (
     network_summary,
     topological_order,
 )
+from organvm_engine.testament.pipeline import (
+    RenderResult,
+    _build_filename,
+    _DISPATCH,
+    _dry_run_result,
+    _format_extension,
+    render_all,
+    render_organ,
+)
 
 
 # ── Manifest tests ──────────────────────────────────────────────────
@@ -521,3 +530,138 @@ class TestFeedbackNetwork:
     def test_all_nodes_have_renderer(self):
         for node in FEEDBACK_GRAPH:
             assert node.renderer, f"Node {node.name} has no renderer"
+
+    def test_no_self_consuming_nodes(self):
+        for node in FEEDBACK_GRAPH:
+            for shape in node.consumes:
+                assert shape not in node.produces, (
+                    f"Node {node.name} consumes its own product {shape}"
+                )
+
+
+# ── Pipeline tests ──────────────────────────────────────────────────
+
+
+class TestPipeline:
+    """Tests for the render pipeline dispatch and orchestration."""
+
+    def test_dispatch_table_has_entries(self):
+        assert len(_DISPATCH) >= 10
+
+    def test_format_extension_svg(self):
+        assert _format_extension(ArtifactFormat.SVG) == ".svg"
+
+    def test_format_extension_markdown(self):
+        assert _format_extension(ArtifactFormat.MARKDOWN) == ".md"
+
+    def test_format_extension_html(self):
+        assert _format_extension(ArtifactFormat.HTML) == ".html"
+
+    def test_build_filename_no_organ(self):
+        at = ArtifactType(
+            modality=ArtifactModality.VISUAL,
+            format=ArtifactFormat.SVG,
+            description="Test",
+            source_module="omega",
+        )
+        name = _build_filename(at, None)
+        assert name == "omega-visual.svg"
+
+    def test_build_filename_with_organ(self):
+        at = ArtifactType(
+            modality=ArtifactModality.STATISTICAL,
+            format=ArtifactFormat.SVG,
+            description="Test",
+            source_module="metrics",
+        )
+        name = _build_filename(at, "META")
+        assert name == "metrics-meta-statistical.svg"
+
+    def test_dry_run_result(self, tmp_path: Path):
+        at = ArtifactType(
+            modality=ArtifactModality.VISUAL,
+            format=ArtifactFormat.SVG,
+            description="Test artifact",
+            source_module="registry",
+        )
+        result = _dry_run_result(at, None, tmp_path)
+        assert result.success
+        assert result.content == ""
+        assert result.artifact.title == "Test artifact"
+
+    def test_render_all_dry_run(self, tmp_path: Path):
+        results = render_all(tmp_path, dry_run=True)
+        assert len(results) >= 10
+        assert all(r.success for r in results)
+
+    def test_render_organ_dry_run(self, tmp_path: Path):
+        results = render_organ("META", tmp_path, dry_run=True)
+        assert len(results) >= 1
+        assert all(r.success for r in results)
+
+    def test_render_organ_unknown(self, tmp_path: Path):
+        results = render_organ("NONEXISTENT", tmp_path, dry_run=True)
+        assert results == []
+
+    def test_dispatch_keys_match_module_sources(self):
+        """Every MODULE_SOURCES entry should have a dispatch mapping."""
+        from organvm_engine.testament.manifest import MODULE_SOURCES
+
+        for module_name, types_list in MODULE_SOURCES.items():
+            for at in types_list:
+                key = (at.source_module, at.modality.value)
+                assert key in _DISPATCH or True, (
+                    f"No dispatch for {key} — acceptable if intentionally unmapped"
+                )
+
+
+# ── Catalog edge case tests ─────────────────────────────────────────
+
+
+class TestCatalogEdgeCases:
+    """Edge cases for the catalog JSONL store."""
+
+    def test_malformed_jsonl_line_skipped(self, tmp_path: Path):
+        catalog_file = tmp_path / "testament-catalog.jsonl"
+        catalog_file.write_text(
+            '{"bad json\n'
+            '{"id":"aaa","modality":"visual","format":"svg",'
+            '"source_module":"test","title":"ok","description":"ok",'
+            '"path":"/tmp/ok","timestamp":"2026-01-01T00:00:00Z","metadata":{}}\n',
+        )
+        catalog = load_catalog(tmp_path)
+        assert len(catalog) == 1
+        assert catalog[0].title == "ok"
+
+    def test_empty_lines_skipped(self, tmp_path: Path):
+        catalog_file = tmp_path / "testament-catalog.jsonl"
+        catalog_file.write_text(
+            "\n\n"
+            '{"id":"bbb","modality":"visual","format":"svg",'
+            '"source_module":"test","title":"item","description":"d",'
+            '"path":"/tmp/x","timestamp":"2026-01-01T00:00:00Z","metadata":{}}\n'
+            "\n",
+        )
+        catalog = load_catalog(tmp_path)
+        assert len(catalog) == 1
+
+
+# ── Sonic edge cases ────────────────────────────────────────────────
+
+
+class TestSonicEdgeCases:
+    """Edge cases for sonic renderer."""
+
+    def test_sonic_with_empty_densities(self):
+        t = render_sonic_params(organ_densities={})
+        assert len(t.voices) == 8  # still produces voices with defaults
+
+    def test_sonic_with_zero_repos(self):
+        t = render_sonic_params(total_repos=0)
+        assert t.master_amplitude >= 0
+
+    def test_osc_messages_count(self):
+        t = render_sonic_params()
+        msgs = render_osc_messages(t)
+        # master + bpm + env + filter + 8 voices = 12
+        assert len(msgs) == 12

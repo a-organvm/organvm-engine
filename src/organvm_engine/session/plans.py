@@ -460,7 +460,11 @@ def render_plan_audit(plans: list[PlanFile]) -> str:
             lines.append(f"- **Slug:** {p.slug}")
             lines.append(f"- **Verification:** {'Yes' if p.has_verification else 'No'}")
             lines.append(f"- **Status:** {p.status}")
-            lines.append("- **Reality:** _TODO: cross-reference with git log_")
+            lines.append(
+                "- **Reality:** Run `organvm atoms reconcile` to cross-reference"
+                " planned tasks against git commit history"
+                " (see `organvm_engine.atoms.reconciler`)",
+            )
             lines.append("")
 
     return "\n".join(lines)
