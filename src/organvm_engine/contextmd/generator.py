@@ -141,6 +141,9 @@ def generate_repo_section(
         ammoi_section = _build_ammoi_context()
         if ammoi_section:
             injected += "\n" + ammoi_section
+        trivium_section = _build_trivium_context(organ_key)
+        if trivium_section:
+            injected += "\n" + trivium_section
         section = section.replace(
             end_marker,
             injected + "\n" + end_marker,
@@ -740,6 +743,58 @@ def _read_omega_counts() -> tuple[int, int]:
     met = counts.get("MET", 0)
     total = met + counts.get("IN PROGRESS", 0) + counts.get("NOT STARTED", 0)
     return met, total if total > 0 else 17
+
+
+def _build_trivium_context(registry_organ_key: str) -> str:
+    """Build trivium dialect identity section for a repo's context file.
+
+    Args:
+        registry_organ_key: Registry-format key like "ORGAN-I" or "META-ORGANVM".
+    """
+    try:
+        from organvm_engine.organ_config import get_organ_map
+        from organvm_engine.trivium.dialects import (
+            dialect_for_organ,
+            dialect_profile,
+            organ_for_dialect,
+        )
+        from organvm_engine.trivium.taxonomy import pairs_for_organ
+    except ImportError:
+        return ""
+
+    try:
+        # Convert registry key ("ORGAN-I") to CLI key ("I")
+        reg_to_cli = {
+            v.get("registry_key", ""): k
+            for k, v in get_organ_map().items()
+            if v.get("registry_key")
+        }
+        organ_key = reg_to_cli.get(registry_organ_key)
+        if not organ_key:
+            return ""
+        dialect = dialect_for_organ(organ_key)
+        profile = dialect_profile(dialect)
+        pairs = pairs_for_organ(dialect)
+
+        tier_order = {"formal": 0, "structural": 1, "analogical": 2, "emergent": 3}
+        ranked = sorted(pairs, key=lambda p: tier_order.get(p.tier.value, 9))
+        top_3 = ranked[:3]
+
+        strongest = ", ".join(
+            f"{organ_for_dialect(p.target if p.source == dialect else p.source)}"
+            f" ({p.tier.value})"
+            for p in top_3
+        )
+
+        return TRIVIUM_SECTION.format(
+            dialect_name=dialect.name,
+            classical_parallel=profile.classical_parallel,
+            translation_role=profile.translation_role,
+            strongest_pairs=strongest,
+            organ_key=organ_key,
+        )
+    except Exception:
+        return ""
 
 
 def _timestamp() -> str:
