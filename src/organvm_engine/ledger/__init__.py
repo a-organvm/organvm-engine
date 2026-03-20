@@ -14,6 +14,7 @@ from organvm_engine.ledger.chain import (
     verify_hash,
 )
 from organvm_engine.ledger.digest import DigestSummary, assemble_digest
+from organvm_engine.ledger.emit import testament_emit
 from organvm_engine.ledger.merkle import (
     compute_merkle_root,
     generate_merkle_proof,
@@ -33,6 +34,7 @@ __all__ = [
     "generate_merkle_proof",
     "verify_chain",
     "verify_chain_link",
+    "testament_emit",
     "verify_hash",
     "verify_merkle_proof",
 ]

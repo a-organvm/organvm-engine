@@ -150,6 +150,9 @@ class EventSpine:
 
     def __init__(self, path: Path | str | None = None) -> None:
         self._path = Path(path) if path is not None else _DEFAULT_EVENTS_PATH
+        # Cache for O(1) chain-linking on emit (avoids scanning the full file)
+        self._last_hash: str | None = None
+        self._last_seq: int | None = None
 
     @property
     def path(self) -> Path:
@@ -194,24 +197,30 @@ class EventSpine:
         if isinstance(event_type, EventType):
             event_type = event_type.value
 
-        # Determine sequence and prev_hash from the last event in the file
-        last_hash = GENESIS_PREV_HASH
-        last_seq = -1
-        if self._path.is_file():
-            for line in self._path.read_text().splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                    h = data.get("hash", "")
-                    if h:
-                        last_hash = h
-                    s = data.get("sequence", -1)
-                    if s >= 0:
-                        last_seq = s
-                except json.JSONDecodeError:
-                    continue
+        # Determine sequence and prev_hash — use cache if available,
+        # otherwise scan the file (happens once per EventSpine instance
+        # or when a different process appended to the same file).
+        if self._last_hash is not None and self._last_seq is not None:
+            last_hash = self._last_hash
+            last_seq = self._last_seq
+        else:
+            last_hash = GENESIS_PREV_HASH
+            last_seq = -1
+            if self._path.is_file():
+                for line in self._path.read_text().splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        h = data.get("hash", "")
+                        if h:
+                            last_hash = h
+                        s = data.get("sequence", -1)
+                        if s >= 0:
+                            last_seq = s
+                    except json.JSONDecodeError:
+                        continue
 
         record = EventRecord(
             event_type=event_type,
@@ -233,6 +242,10 @@ class EventSpine:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._path.open("a") as f:
             f.write(record.to_json() + "\n")
+
+        # Update cache for O(1) next emit
+        self._last_hash = record.hash
+        self._last_seq = record.sequence
 
         return record
 
