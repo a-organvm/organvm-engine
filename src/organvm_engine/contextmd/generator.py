@@ -508,6 +508,58 @@ def _build_ecosystem_context(repo_name: str, organ_key: str) -> str:
     )
 
 
+def _build_network_context(repo_name: str, organ_key: str) -> str:
+    """Build network mirror snippet for a repo if network-map.yaml exists."""
+    from organvm_engine.organ_config import registry_key_to_dir
+    from organvm_engine.paths import workspace_root
+
+    rk_to_dir = registry_key_to_dir()
+    organ_dir_name = rk_to_dir.get(organ_key)
+    if not organ_dir_name:
+        return ""
+
+    nmap_path = workspace_root() / organ_dir_name / repo_name / "network-map.yaml"
+    if not nmap_path.is_file():
+        return ""
+
+    try:
+        from organvm_engine.network.mapper import read_network_map
+        from organvm_engine.network.metrics import convergence_points
+
+        nmap = read_network_map(nmap_path)
+    except Exception:
+        return ""
+
+    if nmap.mirror_count == 0:
+        return ""
+
+    lines = []
+    for lens in ("technical", "parallel", "kinship"):
+        entries = nmap.mirrors_by_lens(lens)
+        if entries:
+            projects = ", ".join(e.project for e in entries[:5])
+            suffix = f" +{len(entries) - 5} more" if len(entries) > 5 else ""
+            lines.append(f"- **{lens}** ({len(entries)}): {projects}{suffix}")
+
+    if not lines:
+        return ""
+
+    # Count convergences across all maps for context
+    try:
+        from organvm_engine.network.mapper import discover_network_maps
+
+        all_maps = [m for _, m in discover_network_maps(workspace_root())]
+        conv_count = len(convergence_points(all_maps))
+    except Exception:
+        conv_count = 0
+
+    return NETWORK_STATUS_SECTION.format(
+        mirror_summary="\n".join(lines),
+        convergence_count=conv_count,
+        repo_name=repo_name,
+    )
+
+
 def _build_ontologia_context(repo_name: str) -> str:
     """Resolve repo's ontologia UID and return a short status snippet."""
     try:
