@@ -99,6 +99,7 @@ class SystemOrganism:
     organs: list[OrganOrganism]
     generated: str = ""
     omega: dict | None = None
+    network: dict | None = None
 
     @property
     def all_repos(self) -> list[RepoProgress]:
@@ -185,6 +186,7 @@ class SystemOrganism:
             "total_discrepancies": self.total_discrepancies(),
             "organs": [o.to_dict() for o in self.organs],
             "omega": self.omega,
+            "network": self.network,
             "generated": self.generated,
         }
 
@@ -255,10 +257,42 @@ def compute_organism(
         scorecard = eval_omega(registry=registry)
         omega = scorecard.to_dict()
 
+    # Compute network metrics if workspace available
+    network_data = None
+    if workspace:
+        try:
+            from organvm_engine.network.ledger import ledger_summary
+            from organvm_engine.network.mapper import discover_network_maps
+            from organvm_engine.network.metrics import (
+                convergence_points,
+                mirror_coverage,
+                network_density,
+            )
+
+            pairs = discover_network_maps(workspace)
+            maps = [m for _, m in pairs]
+            active = sum(1 for o in organs for r in o.repos if r.promo != "ARCHIVED")
+            density = network_density(maps, active) if active else 0.0
+            coverage = mirror_coverage(maps)
+            summary = ledger_summary()
+            conv = convergence_points(maps)
+
+            network_data = {
+                "density": round(density, 3),
+                "coverage": {k: round(v, 3) for k, v in coverage.items()},
+                "maps_count": len(maps),
+                "total_mirrors": sum(m.mirror_count for m in maps),
+                "convergence_points": len(conv),
+                "engagement_actions": summary.get("total_actions", 0),
+            }
+        except Exception:
+            pass
+
     organism = SystemOrganism(
         organs=organs,
         generated=datetime.now(timezone.utc).isoformat(),
         omega=omega,
+        network=network_data,
     )
 
     # Emit organism computed event
