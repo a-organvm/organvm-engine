@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-_DEFAULT_CHAIN_PATH = Path.home() / ".organvm" / "events.jsonl"
+_DEFAULT_CHAIN_PATH = Path.home() / ".organvm" / "testament" / "chain.jsonl"
 
 
 def _chain_path(args: argparse.Namespace) -> Path:
