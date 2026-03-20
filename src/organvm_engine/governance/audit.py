@@ -238,4 +238,19 @@ def run_audit(
     except Exception:
         pass
 
+    # Emit to Testament Chain
+    from organvm_engine.ledger.emit import testament_emit
+    testament_emit(
+        event_type="governance.audit",
+        source_organ="META-ORGANVM",
+        source_repo="organvm-engine",
+        actor="cli",
+        payload={
+            "passed": result.passed,
+            "critical": len(result.critical),
+            "warnings": len(result.warnings),
+            "info": len(result.info),
+        },
+    )
+
     return result

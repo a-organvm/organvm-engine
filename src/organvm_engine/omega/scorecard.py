@@ -391,11 +391,29 @@ def evaluate(
         ),
     ]
 
-    return OmegaScorecard(
+    scorecard = OmegaScorecard(
         criteria=criteria,
         soak=soak,
         generated=datetime.now().isoformat(timespec="seconds"),
     )
+
+    # Emit to Testament Chain if any criteria flipped
+    from organvm_engine.ledger.emit import testament_emit
+    met = [c for c in criteria if c.status == "MET"]
+    testament_emit(
+        event_type="metrics.update",
+        source_organ="META-ORGANVM",
+        source_repo="organvm-engine",
+        actor="cli",
+        payload={
+            "metric": "omega",
+            "met_count": len(met),
+            "total": len(criteria),
+            "met_ids": [c.id for c in met],
+        },
+    )
+
+    return scorecard
 
 
 # ── Snapshot writer ──────────────────────────────────────────────

@@ -53,6 +53,22 @@ from organvm_engine.testament.renderers.statistical import (
     render_repo_heatmap,
     render_status_distribution,
 )
+from organvm_engine.testament.renderers.sonic import (
+    SonicTestament,
+    render_osc_messages,
+    render_sonic_params,
+    render_sonic_yaml,
+)
+from organvm_engine.testament.renderers.social import (
+    render_pulse,
+    render_pulse_markdown,
+)
+from organvm_engine.testament.network import (
+    FEEDBACK_GRAPH,
+    cascade,
+    network_summary,
+    topological_order,
+)
 
 
 # ── Manifest tests ──────────────────────────────────────────────────
@@ -374,3 +390,134 @@ class TestStatisticalRenderers:
         svg = render_repo_heatmap(data)
         assert svg.startswith("<svg")
         assert "Heatmap" in svg
+
+
+# ── Sonic renderer tests ────────────────────────────────────────────
+
+
+class TestSonicRenderers:
+    """Tests for sonic/synthesizer parameter renderers."""
+
+    def test_sonic_params_produces_testament(self):
+        t = render_sonic_params()
+        assert isinstance(t, SonicTestament)
+        assert len(t.voices) == 8
+        assert t.envelope is not None
+        assert t.filter is not None
+        assert t.rhythm is not None
+
+    def test_sonic_params_with_live_data(self):
+        t = render_sonic_params(
+            organ_densities={"META": 0.7, "I": 0.58, "II": 0.48, "III": 0.56,
+                             "IV": 0.45, "V": 0.35, "VI": 0.3, "VII": 0.25},
+            organ_repo_counts={"META": 11, "I": 19, "II": 31, "III": 29,
+                               "IV": 11, "V": 2, "VI": 6, "VII": 4},
+            status_distribution={"GRADUATED": 54, "ARCHIVED": 53},
+            met_ratio=0.47,
+            total_repos=113,
+        )
+        assert t.voices[0].organ == "META"
+        assert t.voices[0].frequency > 200  # A3 range
+        assert t.master_amplitude > 0
+        assert t.rhythm.time_signature == "7/8"
+
+    def test_sonic_voices_span_stereo_field(self):
+        t = render_sonic_params()
+        pans = [v.pan for v in t.voices]
+        assert pans[0] == -1.0  # META far left
+        assert pans[-1] == 1.0  # VII far right
+
+    def test_sonic_yaml_output(self):
+        t = render_sonic_params(total_repos=113)
+        yaml = render_sonic_yaml(t)
+        assert "testament:" in yaml
+        assert "voices:" in yaml
+        assert "envelope:" in yaml
+        assert "filter:" in yaml
+        assert "rhythm:" in yaml
+        assert "organ: META" in yaml
+
+    def test_osc_messages(self):
+        t = render_sonic_params()
+        msgs = render_osc_messages(t)
+        assert any("/testament/master" in m for m in msgs)
+        assert any("/testament/bpm" in m for m in msgs)
+        assert any("/testament/voice/0" in m for m in msgs)
+        assert any("/testament/voice/7" in m for m in msgs)
+        assert len(msgs) >= 12  # master + bpm + env + filter + 8 voices
+
+    def test_filter_opens_with_health(self):
+        healthy = render_sonic_params(met_ratio=0.9)
+        unhealthy = render_sonic_params(met_ratio=0.1)
+        assert healthy.filter.cutoff > unhealthy.filter.cutoff
+
+
+# ── Social renderer tests ───────────────────────────────────────────
+
+
+class TestSocialRenderers:
+    """Tests for social pulse renderers."""
+
+    def test_pulse_produces_all_lengths(self):
+        pulse = render_pulse(total_repos=113, met_ratio=0.47)
+        assert len(pulse.short) > 0
+        assert len(pulse.medium) > len(pulse.short)
+        assert len(pulse.long) > len(pulse.medium)
+
+    def test_pulse_includes_stats(self):
+        pulse = render_pulse(total_repos=113, met_ratio=0.47)
+        assert "113" in pulse.short
+        assert "47%" in pulse.short
+
+    def test_pulse_has_hashtags(self):
+        pulse = render_pulse(total_repos=113)
+        assert len(pulse.hashtags) >= 3
+        assert "#ORGANVM" in pulse.hashtags
+
+    def test_pulse_markdown(self):
+        pulse = render_pulse(total_repos=113, met_ratio=0.47)
+        md = render_pulse_markdown(pulse)
+        assert "# System Pulse" in md
+        assert "## Short" in md
+        assert "## Long" in md
+
+
+# ── Network tests ───────────────────────────────────────────────────
+
+
+class TestFeedbackNetwork:
+    """Tests for the testament feedback network."""
+
+    def test_graph_has_nodes(self):
+        assert len(FEEDBACK_GRAPH) >= 8
+
+    def test_topological_order_producers_first(self):
+        order = topological_order()
+        names = [n.name for n in order]
+        # sonic consumes from density, omega, status — they must come first
+        if "sonic" in names and "density" in names:
+            assert names.index("density") < names.index("sonic")
+        if "sonic" in names and "omega" in names:
+            assert names.index("omega") < names.index("sonic")
+
+    def test_network_summary(self):
+        summary = network_summary()
+        assert summary["nodes"] >= 8
+        assert summary["data_shapes"] >= 10
+        assert summary["feedback_edges"] >= 5
+        assert len(summary["execution_order"]) == summary["nodes"]
+
+    def test_cascade_produces_results(self):
+        results = cascade({"total_repos": 113})
+        assert len(results) >= 8
+        assert "sonic" in results
+        assert "topology" in results
+
+    def test_cascade_tracks_input_availability(self):
+        results = cascade({"total_repos": 113, "met_ratio": 0.47})
+        sonic = results["sonic"]
+        assert sonic["inputs_available"]["met_ratio"] is True
+
+    def test_all_nodes_have_renderer(self):
+        for node in FEEDBACK_GRAPH:
+            assert node.renderer, f"Node {node.name} has no renderer"

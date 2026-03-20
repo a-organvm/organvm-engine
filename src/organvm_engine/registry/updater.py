@@ -69,4 +69,15 @@ def update_repo(
     except Exception:
         pass
 
+    # Emit to Testament Chain
+    from organvm_engine.ledger.emit import testament_emit
+    testament_emit(
+        event_type="registry.update",
+        entity_uid=f"ent_repo_{repo_name}",
+        source_organ=organ_key,
+        source_repo=repo_name,
+        actor="cli",
+        payload={"field": field, "old": str(old_value), "new": str(value)},
+    )
+
     return True, f"{repo_name}.{field}: {old_value} -> {value}"

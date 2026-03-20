@@ -195,6 +195,20 @@ def sync_all(
         except Exception:
             pass
 
+        # Emit to Testament Chain
+        from organvm_engine.ledger.emit import testament_emit
+        testament_emit(
+            event_type="context.sync",
+            source_organ="META-ORGANVM",
+            source_repo="organvm-engine",
+            actor="cli",
+            payload={
+                "updated": len(updated),
+                "created": len(created),
+                "errors": len(errors),
+            },
+        )
+
     return result
 
 
