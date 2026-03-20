@@ -9,6 +9,7 @@ from organvm_engine.ledger.chain import (
     GENESIS_PREV_HASH,
     ChainVerificationResult,
     compute_event_hash,
+    repair_chain,
     verify_chain,
     verify_chain_link,
     verify_hash,

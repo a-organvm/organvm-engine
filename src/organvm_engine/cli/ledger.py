@@ -221,3 +221,49 @@ def cmd_ledger_checkpoint(args: argparse.Namespace) -> int:
     print(f"  Merkle root: {root}")
     print(f"  Events: {len(batch)} (seq {seq_range[0]}-{seq_range[1]})\n")
     return 0
+
+
+def cmd_ledger_repair(args: argparse.Namespace) -> int:
+    """Repair a corrupted chain by recomputing hashes and fixing sequences."""
+    from organvm_engine.ledger.chain import repair_chain, verify_chain
+
+    path = _chain_path(args)
+    if not path.is_file():
+        print("  No chain found.")
+        return 1
+
+    dry_run = not getattr(args, "write", False)
+
+    # Check if repair is needed
+    pre = verify_chain(path)
+    if pre.valid:
+        print(
+            f"\n  Chain is already VALID ({pre.event_count} events). "
+            "No repair needed.\n",
+        )
+        return 0
+
+    if dry_run:
+        print(
+            f"\n  Chain has {len(pre.errors)} error(s) across "
+            f"{pre.event_count} events.",
+        )
+        print("  Run with --write to repair.\n")
+        return 0
+
+    result = repair_chain(path)
+
+    # Verify after repair
+    post = verify_chain(path)
+
+    print(f"\n  Chain Repair Complete")
+    print(f"  {'=' * 48}")
+    print(f"  Events read:    {result['events_read']}")
+    print(f"  Events repaired: {result['events_repaired']}")
+    if result.get("parse_errors"):
+        print(f"  Parse errors:   {result['parse_errors']}")
+    print(f"  Backup:         {result['backup']}")
+    print(f"  Post-repair:    {'VALID' if post.valid else 'STILL CORRUPTED'}")
+    print()
+
+    return 0 if post.valid else 1

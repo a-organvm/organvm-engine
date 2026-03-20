@@ -191,19 +191,25 @@ class EventSpine:
         Returns:
             The persisted EventRecord.
         """
+        import fcntl
+
         from organvm_engine.ledger.chain import GENESIS_PREV_HASH, compute_event_hash
 
         # Normalize enum to string value
         if isinstance(event_type, EventType):
             event_type = event_type.value
 
-        # Determine sequence and prev_hash — use cache if available,
-        # otherwise scan the file (happens once per EventSpine instance
-        # or when a different process appended to the same file).
-        if self._last_hash is not None and self._last_seq is not None:
-            last_hash = self._last_hash
-            last_seq = self._last_seq
-        else:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Acquire exclusive lock for the entire read-compute-write cycle.
+        # This prevents concurrent writers from racing on sequence/prev_hash.
+        lock_path = self._path.with_suffix(".lock")
+        lock_fd = open(lock_path, "w")  # noqa: SIM115
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+            # Under lock: always read the actual last event from disk
+            # (cache may be stale if another process wrote since our last emit)
             last_hash = GENESIS_PREV_HASH
             last_seq = -1
             if self._path.is_file():
@@ -222,30 +228,33 @@ class EventSpine:
                     except json.JSONDecodeError:
                         continue
 
-        record = EventRecord(
-            event_type=event_type,
-            entity_uid=entity_uid,
-            payload=payload or {},
-            source_spec=source_spec,
-            actor=actor,
-            source_organ=source_organ,
-            source_repo=source_repo,
-            causal_predecessor=causal_predecessor,
-            sequence=last_seq + 1,
-            prev_hash=last_hash,
-        )
+            record = EventRecord(
+                event_type=event_type,
+                entity_uid=entity_uid,
+                payload=payload or {},
+                source_spec=source_spec,
+                actor=actor,
+                source_organ=source_organ,
+                source_repo=source_repo,
+                causal_predecessor=causal_predecessor,
+                sequence=last_seq + 1,
+                prev_hash=last_hash,
+            )
 
-        # Compute hash over all fields except hash itself
-        event_dict = asdict(record)
-        record.hash = compute_event_hash(event_dict)
+            # Compute hash over all fields except hash itself
+            event_dict = asdict(record)
+            record.hash = compute_event_hash(event_dict)
 
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with self._path.open("a") as f:
-            f.write(record.to_json() + "\n")
+            with self._path.open("a") as f:
+                f.write(record.to_json() + "\n")
 
-        # Update cache for O(1) next emit
-        self._last_hash = record.hash
-        self._last_seq = record.sequence
+            # Update cache
+            self._last_hash = record.hash
+            self._last_seq = record.sequence
+
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
 
         return record
 

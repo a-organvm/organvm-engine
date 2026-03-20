@@ -198,6 +198,15 @@ ECOSYSTEM_STATUS_SECTION = """\
 Run: `organvm ecosystem show {repo_name}` | `organvm ecosystem validate --organ {organ_short}`
 """
 
+NETWORK_STATUS_SECTION = """\
+
+## External Mirrors (Network Testament)
+
+{mirror_summary}
+
+Convergences: {convergence_count} | Run: `organvm network map --repo {repo_name}` | `organvm network suggest`
+"""
+
 ATOMS_NOT_RUN_HINT = """\
 
 ## Atomization Pipeline
@@ -233,4 +242,15 @@ VARIABLE_STATUS_SECTION = """\
 
 Metrics: {metric_count} registered | Observations: {observation_count} recorded
 Resolve: `organvm ontologia status` | Refresh: `organvm refresh`
+"""
+
+TRIVIUM_SECTION = """\
+
+## Dialect Identity (Trivium)
+
+**Dialect:** {dialect_name} | **Classical Parallel:** {classical_parallel} | **Translation Role:** {translation_role}
+
+Strongest translations: {strongest_pairs}
+
+Scan: `organvm trivium scan {organ_key} <OTHER>` | Matrix: `organvm trivium matrix` | Synthesize: `organvm trivium synthesize`
 """

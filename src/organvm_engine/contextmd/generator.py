@@ -20,12 +20,14 @@ from organvm_engine.contextmd.templates import (
     ATOMS_NOT_RUN_HINT,
     ATOMS_REPO_QUEUE_SECTION,
     ECOSYSTEM_STATUS_SECTION,
+    NETWORK_STATUS_SECTION,
     ONTOLOGIA_STATUS_SECTION,
     ORGAN_SECTION,
     PLAN_CONTEXT_SECTION,
     REPO_SECTION,
     SESSION_REVIEW_SECTION,
     SOP_DIRECTIVES_SECTION,
+    TRIVIUM_SECTION,
     VARIABLE_STATUS_SECTION,
     WORKSPACE_SECTION,
     format_consumes_edge,
@@ -116,6 +118,7 @@ def generate_repo_section(
         sop_section = _build_sop_directives(sop_entries)
         prompting_hint = _build_prompting_hint(agent)
         ecosystem_section = _build_ecosystem_context(repo_name, organ_key)
+        network_section = _build_network_context(repo_name, organ_key)
         ontologia_section = _build_ontologia_context(repo_name)
         injected = SESSION_REVIEW_SECTION
         if sop_section:
@@ -124,6 +127,8 @@ def generate_repo_section(
             injected += "\n" + prompting_hint
         if ecosystem_section:
             injected += "\n" + ecosystem_section
+        if network_section:
+            injected += "\n" + network_section
         if plan_section:
             injected += "\n" + plan_section
         if atoms_section:

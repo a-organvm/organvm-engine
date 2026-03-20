@@ -135,6 +135,7 @@ from organvm_engine.cli.ledger import (
     cmd_ledger_checkpoint,
     cmd_ledger_genesis,
     cmd_ledger_log,
+    cmd_ledger_repair,
     cmd_ledger_status,
     cmd_ledger_verify,
 )
@@ -1493,6 +1494,10 @@ def build_parser() -> argparse.ArgumentParser:
     ledger_chk.add_argument("--write", action="store_true")
     ledger_chk.add_argument("--chain-path", default=None)
 
+    ledger_repair = ledger_sub.add_parser("repair", help="Repair corrupted chain")
+    ledger_repair.add_argument("--write", action="store_true", help="Execute repair")
+    ledger_repair.add_argument("--chain-path", default=None)
+
     # ecosystem
     eco = sub.add_parser(
         "ecosystem",
@@ -2433,6 +2438,7 @@ def main() -> int:
             "verify": cmd_ledger_verify,
             "log": cmd_ledger_log,
             "checkpoint": cmd_ledger_checkpoint,
+            "repair": cmd_ledger_repair,
         }
         handler = ledger_dispatch.get(getattr(args, "subcommand", "") or "")
         if handler:
