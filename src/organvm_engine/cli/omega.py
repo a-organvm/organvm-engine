@@ -12,6 +12,20 @@ def cmd_omega_status(args: argparse.Namespace) -> int:
     registry = load_registry(args.registry)
     scorecard = evaluate(registry=registry)
     print(f"\n{scorecard.summary()}\n")
+
+    # IRF P0 check
+    try:
+        from organvm_engine.irf import parse_irf, query_irf
+        from organvm_engine.paths import irf_path
+        irf_items = parse_irf(irf_path())
+        p0 = query_irf(irf_items, priority="P0", status="open")
+        if p0:
+            print(f"\n⚠  {len(p0)} P0 IRF items require immediate action:")
+            for item in p0:
+                print(f"   {item.id}: {item.action[:60]}")
+    except Exception:
+        pass  # IRF integration is advisory, not blocking
+
     return 0
 
 
