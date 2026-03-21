@@ -178,9 +178,8 @@ def scan_go_mod(repo_path: Path) -> list[MirrorEntry]:
             parts = stripped.split()
             if len(parts) >= 2:
                 mod_path = parts[1]
-                if mod_path.startswith("github.com/"):
-                    segments = mod_path.split("/")
-                    if len(segments) >= 3:
+                segments = mod_path.split("/")
+                if len(segments) >= 3 and segments[0] == "github.com":
                         github_repo = f"{segments[1]}/{segments[2]}"
                         if github_repo not in seen:
                             seen.add(github_repo)
@@ -197,9 +196,8 @@ def scan_go_mod(repo_path: Path) -> list[MirrorEntry]:
             parts = stripped.split()
             if len(parts) >= 2:
                 mod_path = parts[0]
-                if mod_path.startswith("github.com/"):
-                    segments = mod_path.split("/")
-                    if len(segments) >= 3:
+                segments = mod_path.split("/")
+                if len(segments) >= 3 and segments[0] == "github.com":
                         github_repo = f"{segments[1]}/{segments[2]}"
                         if github_repo not in seen:
                             seen.add(github_repo)
