@@ -3,6 +3,11 @@
 Every system-significant action (registry update, promotion, gate change,
 mood shift) emits an event to ~/.organvm/events/events.jsonl.  Consumers
 replay the log to reconstruct state or build temporal profiles.
+
+Event type constants are aliases into the unified ``EventType`` enum
+defined in ``organvm_engine.events.spine``.  Existing imports from this
+module (``from organvm_engine.pulse.events import GATE_CHANGED``) continue
+to work — the values are the same ``str`` instances.
 """
 
 from __future__ import annotations
@@ -13,20 +18,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from organvm_engine.events.spine import EventType
+
 # ---------------------------------------------------------------------------
-# Event type constants
+# Event type constants — backward-compatible aliases
 # ---------------------------------------------------------------------------
 
-REGISTRY_UPDATED = "registry.updated"
-ORGANISM_COMPUTED = "organism.computed"
-GATE_CHANGED = "gate.changed"
-REPO_PROMOTED = "repo.promoted"
-SESSION_STARTED = "session.started"
-SESSION_ENDED = "session.ended"
-PULSE_HEARTBEAT = "pulse.heartbeat"
-SEED_CHANGED = "seed.changed"
-DENSITY_COMPUTED = "density.computed"
-MOOD_SHIFTED = "mood.shifted"
+REGISTRY_UPDATED: str = EventType.REGISTRY_UPDATED
+ORGANISM_COMPUTED: str = EventType.ORGANISM_COMPUTED
+GATE_CHANGED: str = EventType.GATE_CHANGED
+REPO_PROMOTED: str = EventType.REPO_PROMOTED
+SESSION_STARTED: str = EventType.SESSION_STARTED
+SESSION_ENDED: str = EventType.SESSION_ENDED
+PULSE_HEARTBEAT: str = EventType.PULSE_HEARTBEAT
+SEED_CHANGED: str = EventType.SEED_CHANGED
+DENSITY_COMPUTED: str = EventType.DENSITY_COMPUTED
+MOOD_SHIFTED: str = EventType.MOOD_SHIFTED
 
 ALL_EVENT_TYPES: list[str] = [
     REGISTRY_UPDATED,

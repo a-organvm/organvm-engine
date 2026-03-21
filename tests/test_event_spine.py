@@ -16,15 +16,40 @@ class TestEventType:
 
     def test_all_types_present(self):
         expected = {
+            # Constitutional
             "PROMOTION", "DEPENDENCY_CHANGE", "SEED_UPDATE",
             "GOVERNANCE_AUDIT", "METRIC_UPDATE",
             "ENTITY_CREATED", "ENTITY_ARCHIVED", "CONTEXT_SYNC",
-            # Testament Protocol additions
+            # Testament Protocol
             "TESTAMENT_GENESIS", "TESTAMENT_CHECKPOINT", "TESTAMENT_VERIFIED",
-            "CI_HEALTH", "CONTENT_PUBLISHED", "ECOSYSTEM_MUTATION",
-            "PITCH_GENERATED", "GIT_SYNC",
+            # Governance (engine)
+            "PROMOTION_CHANGED", "GATE_EVALUATED",
+            "DEPENDENCY_VIOLATION", "AUDIT_COMPLETED",
+            # Registry
+            "REGISTRY_UPDATE", "REGISTRY_UPDATED", "REGISTRY_LOADED",
+            # Coordination
             "AGENT_PUNCH_IN", "AGENT_PUNCH_OUT", "AGENT_TOOL_LOCK",
-            "ONTOLOGIA_VARIABLE", "REGISTRY_UPDATE",
+            "AGENT_PUNCHED_IN", "AGENT_PUNCHED_OUT", "CAPACITY_WARNING",
+            # Metrics / Organism
+            "ORGANISM_COMPUTED", "STALENESS_DETECTED",
+            # Seed
+            "SEED_EDGE_ADDED", "SEED_EDGE_REMOVED", "SEED_UNRESOLVED",
+            # Context
+            "CONTEXT_SYNCED", "CONTEXT_AMMOI_DISTRIBUTED",
+            # Sensor
+            "SENSOR_SCAN_COMPLETED", "SENSOR_CHANGE_DETECTED",
+            # Pulse
+            "PULSE_HEARTBEAT", "AMMOI_COMPUTED",
+            "INFERENCE_COMPLETED", "ADVISORY_GENERATED",
+            "HEARTBEAT_DIFF", "EDGES_SYNCED", "VARIABLES_SYNCED",
+            # CI, Content, Ecosystem, Pitch, Git, Ontologia
+            "CI_HEALTH", "CONTENT_PUBLISHED", "ECOSYSTEM_MUTATION",
+            "PITCH_GENERATED", "GIT_SYNC", "ONTOLOGIA_VARIABLE",
+            # Session, Density, Affective (pulse-origin)
+            "SESSION_STARTED", "SESSION_ENDED",
+            "DENSITY_COMPUTED", "MOOD_SHIFTED",
+            # Legacy pulse aliases
+            "GATE_CHANGED", "REPO_PROMOTED", "SEED_CHANGED",
         }
         actual = {e.name for e in EventType}
         assert actual == expected

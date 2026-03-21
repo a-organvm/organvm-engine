@@ -19,6 +19,7 @@ Fifteen sub-layers:
     default_policies  Built-in governance policies
 """
 
+from organvm_engine.events.spine import EventType
 from organvm_engine.pulse.advisories import (
     Advisory,
     acknowledge_advisory,
@@ -177,6 +178,7 @@ __all__ = [
     "record_insight",
     # emitter
     "ALL_ENGINE_EVENT_TYPES",
+    "EventType",
     "emit_engine_event",
     # ecosystem_bridge
     "EcosystemCoverage",

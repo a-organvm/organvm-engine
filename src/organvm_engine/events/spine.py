@@ -29,13 +29,33 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 class EventType(str, enum.Enum):
-    """Canonical event types defined by the SPEC ladder.
+    """Canonical event types — the unified vocabulary for the entire system.
 
-    Each value maps to a specific system action that must be observable.
-    Adding a new type here is an intentional constitutional act.
+    Every event emitted anywhere in the engine (constitutional spine, pulse
+    bus, engine modules) MUST use a member of this enum.  The string value
+    follows the ``domain.action`` convention and is the wire format stored
+    in JSONL logs.
+
+    Adding a new member here is an intentional constitutional act — the enum
+    is the single source of truth for the event vocabulary.
+
+    Sections below group members by origin:
+      * Constitutional — original SPEC-ladder types
+      * Testament Protocol — chain/ledger additions
+      * Governance — promotion, audit, dependency enforcement
+      * Registry — load/update lifecycle
+      * Coordination — multi-agent punch-in/out, capacity
+      * Metrics / Organism — computed scores, staleness
+      * Seed — edge graph mutations
+      * Context — CLAUDE.md / AMMOI sync
+      * Sensor — filesystem change detection
+      * Pulse — heartbeat, AMMOI, inference, advisories, edges, variables
+      * Session — agent session lifecycle
+      * Density — interconnectedness computation
+      * Affective — system mood shifts
     """
 
-    # Original constitutional types
+    # -- Constitutional (original SPEC-ladder) --------------------------------
     PROMOTION = "governance.promotion"
     DEPENDENCY_CHANGE = "governance.dependency_change"
     SEED_UPDATE = "seed.update"
@@ -44,20 +64,92 @@ class EventType(str, enum.Enum):
     ENTITY_CREATED = "entity.created"
     ENTITY_ARCHIVED = "entity.archived"
     CONTEXT_SYNC = "context.sync"
-    # Testament Protocol additions
+
+    # -- Testament Protocol ---------------------------------------------------
     TESTAMENT_GENESIS = "testament.genesis"
     TESTAMENT_CHECKPOINT = "testament.checkpoint"
     TESTAMENT_VERIFIED = "testament.verified"
-    CI_HEALTH = "ci.health"
-    CONTENT_PUBLISHED = "content.published"
-    ECOSYSTEM_MUTATION = "ecosystem.mutation"
-    PITCH_GENERATED = "pitch.generated"
-    GIT_SYNC = "git.sync"
+
+    # -- Governance (engine) --------------------------------------------------
+    PROMOTION_CHANGED = "governance.promotion_changed"
+    GATE_EVALUATED = "governance.gate_evaluated"
+    DEPENDENCY_VIOLATION = "governance.dependency_violation"
+    AUDIT_COMPLETED = "governance.audit_completed"
+
+    # -- Registry -------------------------------------------------------------
+    REGISTRY_UPDATE = "registry.update"
+    REGISTRY_UPDATED = "registry.updated"
+    REGISTRY_LOADED = "registry.loaded"
+
+    # -- Coordination ---------------------------------------------------------
     AGENT_PUNCH_IN = "agent.punch_in"
     AGENT_PUNCH_OUT = "agent.punch_out"
     AGENT_TOOL_LOCK = "agent.tool_lock"
+    AGENT_PUNCHED_IN = "coordination.punch_in"
+    AGENT_PUNCHED_OUT = "coordination.punch_out"
+    CAPACITY_WARNING = "coordination.capacity_warning"
+
+    # -- Metrics / Organism ---------------------------------------------------
+    ORGANISM_COMPUTED = "metrics.organism_computed"
+    STALENESS_DETECTED = "metrics.staleness_detected"
+
+    # -- Seed -----------------------------------------------------------------
+    SEED_EDGE_ADDED = "seed.edge_added"
+    SEED_EDGE_REMOVED = "seed.edge_removed"
+    SEED_UNRESOLVED = "seed.unresolved_consumer"
+
+    # -- Context --------------------------------------------------------------
+    CONTEXT_SYNCED = "context.synced"
+    CONTEXT_AMMOI_DISTRIBUTED = "context.ammoi_distributed"
+
+    # -- Sensor ---------------------------------------------------------------
+    SENSOR_SCAN_COMPLETED = "sensor.scan_completed"
+    SENSOR_CHANGE_DETECTED = "sensor.change_detected"
+
+    # -- Pulse ----------------------------------------------------------------
+    PULSE_HEARTBEAT = "pulse.heartbeat"
+    AMMOI_COMPUTED = "pulse.ammoi_computed"
+    INFERENCE_COMPLETED = "pulse.inference_completed"
+    ADVISORY_GENERATED = "pulse.advisory_generated"
+    HEARTBEAT_DIFF = "pulse.heartbeat_diff"
+    EDGES_SYNCED = "pulse.edges_synced"
+    VARIABLES_SYNCED = "pulse.variables_synced"
+
+    # -- CI -------------------------------------------------------------------
+    CI_HEALTH = "ci.health"
+
+    # -- Content --------------------------------------------------------------
+    CONTENT_PUBLISHED = "content.published"
+
+    # -- Ecosystem ------------------------------------------------------------
+    ECOSYSTEM_MUTATION = "ecosystem.mutation"
+
+    # -- Pitch ----------------------------------------------------------------
+    PITCH_GENERATED = "pitch.generated"
+
+    # -- Git ------------------------------------------------------------------
+    GIT_SYNC = "git.sync"
+
+    # -- Ontologia ------------------------------------------------------------
     ONTOLOGIA_VARIABLE = "ontologia.variable"
-    REGISTRY_UPDATE = "registry.update"
+
+    # -- Session (pulse-origin) -----------------------------------------------
+    SESSION_STARTED = "session.started"
+    SESSION_ENDED = "session.ended"
+
+    # -- Density (pulse-origin) -----------------------------------------------
+    DENSITY_COMPUTED = "density.computed"
+
+    # -- Affective (pulse-origin) ---------------------------------------------
+    MOOD_SHIFTED = "mood.shifted"
+
+    # -- Legacy pulse aliases (kept for string-comparison compatibility) -------
+    #    These map to the same domain.action strings that the old
+    #    pulse/events.py constants used where they differed from the
+    #    engine types.py names.
+    GATE_CHANGED = "gate.changed"
+    REPO_PROMOTED = "repo.promoted"
+    SEED_CHANGED = "seed.changed"
 
 
 # ---------------------------------------------------------------------------

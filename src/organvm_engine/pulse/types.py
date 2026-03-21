@@ -1,57 +1,65 @@
-"""Engine-specific event type constants for the unified event bus.
+"""Engine-specific event type constants — aliases into the unified EventType enum.
 
-These extend ontologia's event types with engine-domain events.
-All engine modules emit through these constants via the emitter.
+All event types are canonically defined in ``organvm_engine.events.spine.EventType``.
+This module re-exports the subset used by engine domain modules as module-level
+constants so that existing ``from organvm_engine.pulse.types import X`` imports
+continue to work without modification.
+
+The string values are identical to ``EventType.<member>.value``, so code that
+compares against these constants (``if event_type == REGISTRY_UPDATED``) is
+fully backward-compatible.
 """
 
-# Governance
-PROMOTION_CHANGED = "governance.promotion_changed"
-GATE_EVALUATED = "governance.gate_evaluated"
-DEPENDENCY_VIOLATION = "governance.dependency_violation"
-AUDIT_COMPLETED = "governance.audit_completed"
+from organvm_engine.events.spine import EventType
 
-# Registry
-REGISTRY_UPDATED = "registry.updated"
-REGISTRY_LOADED = "registry.loaded"
+# -- Governance ---------------------------------------------------------------
+PROMOTION_CHANGED: str = EventType.PROMOTION_CHANGED
+GATE_EVALUATED: str = EventType.GATE_EVALUATED
+DEPENDENCY_VIOLATION: str = EventType.DEPENDENCY_VIOLATION
+AUDIT_COMPLETED: str = EventType.AUDIT_COMPLETED
 
-# Coordination
-AGENT_PUNCHED_IN = "coordination.punch_in"
-AGENT_PUNCHED_OUT = "coordination.punch_out"
-CAPACITY_WARNING = "coordination.capacity_warning"
+# -- Registry -----------------------------------------------------------------
+REGISTRY_UPDATED: str = EventType.REGISTRY_UPDATED
+REGISTRY_LOADED: str = EventType.REGISTRY_LOADED
 
-# Metrics / Organism
-ORGANISM_COMPUTED = "metrics.organism_computed"
-STALENESS_DETECTED = "metrics.staleness_detected"
+# -- Coordination -------------------------------------------------------------
+AGENT_PUNCHED_IN: str = EventType.AGENT_PUNCHED_IN
+AGENT_PUNCHED_OUT: str = EventType.AGENT_PUNCHED_OUT
+CAPACITY_WARNING: str = EventType.CAPACITY_WARNING
 
-# Seeds
-SEED_EDGE_ADDED = "seed.edge_added"
-SEED_EDGE_REMOVED = "seed.edge_removed"
-SEED_UNRESOLVED = "seed.unresolved_consumer"
+# -- Metrics / Organism -------------------------------------------------------
+ORGANISM_COMPUTED: str = EventType.ORGANISM_COMPUTED
+STALENESS_DETECTED: str = EventType.STALENESS_DETECTED
 
-# Context
-CONTEXT_SYNCED = "context.synced"
-CONTEXT_AMMOI_DISTRIBUTED = "context.ammoi_distributed"
+# -- Seeds --------------------------------------------------------------------
+SEED_EDGE_ADDED: str = EventType.SEED_EDGE_ADDED
+SEED_EDGE_REMOVED: str = EventType.SEED_EDGE_REMOVED
+SEED_UNRESOLVED: str = EventType.SEED_UNRESOLVED
 
-# Sensors
-SENSOR_SCAN_COMPLETED = "sensor.scan_completed"
-SENSOR_CHANGE_DETECTED = "sensor.change_detected"
+# -- Context ------------------------------------------------------------------
+CONTEXT_SYNCED: str = EventType.CONTEXT_SYNCED
+CONTEXT_AMMOI_DISTRIBUTED: str = EventType.CONTEXT_AMMOI_DISTRIBUTED
 
-# Pulse / AMMOI
-PULSE_HEARTBEAT = "pulse.heartbeat"
-AMMOI_COMPUTED = "pulse.ammoi_computed"
+# -- Sensors ------------------------------------------------------------------
+SENSOR_SCAN_COMPLETED: str = EventType.SENSOR_SCAN_COMPLETED
+SENSOR_CHANGE_DETECTED: str = EventType.SENSOR_CHANGE_DETECTED
 
-# Inference / Advisories
-INFERENCE_COMPLETED = "pulse.inference_completed"
-ADVISORY_GENERATED = "pulse.advisory_generated"
+# -- Pulse / AMMOI ------------------------------------------------------------
+PULSE_HEARTBEAT: str = EventType.PULSE_HEARTBEAT
+AMMOI_COMPUTED: str = EventType.AMMOI_COMPUTED
 
-# Heartbeat
-HEARTBEAT_DIFF = "pulse.heartbeat_diff"
+# -- Inference / Advisories ---------------------------------------------------
+INFERENCE_COMPLETED: str = EventType.INFERENCE_COMPLETED
+ADVISORY_GENERATED: str = EventType.ADVISORY_GENERATED
 
-# Edge sync
-EDGES_SYNCED = "pulse.edges_synced"
+# -- Heartbeat ----------------------------------------------------------------
+HEARTBEAT_DIFF: str = EventType.HEARTBEAT_DIFF
 
-# Variable bridge
-VARIABLES_SYNCED = "pulse.variables_synced"
+# -- Edge sync ----------------------------------------------------------------
+EDGES_SYNCED: str = EventType.EDGES_SYNCED
+
+# -- Variable bridge ----------------------------------------------------------
+VARIABLES_SYNCED: str = EventType.VARIABLES_SYNCED
 
 ALL_ENGINE_EVENT_TYPES: list[str] = [
     PROMOTION_CHANGED,

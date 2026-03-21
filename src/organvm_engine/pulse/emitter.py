@@ -14,6 +14,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from organvm_engine.events.spine import EventType
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,7 +45,7 @@ def _resolve_entity_uid(entity_name: str) -> str | None:
 
 
 def emit_engine_event(
-    event_type: str,
+    event_type: str | EventType,
     source: str,
     subject_entity: str | None = None,
     payload: dict[str, Any] | None = None,
@@ -55,7 +57,7 @@ def emit_engine_event(
     Non-blocking and fail-safe — never raises.
 
     Args:
-        event_type: Event type constant from pulse.types.
+        event_type: Event type — an ``EventType`` member or its string value.
         source: Engine module identifier (e.g., "governance", "metrics").
         subject_entity: Entity name or UID this event concerns.
             If a name is given and resolve_entity is True, it will
@@ -64,6 +66,10 @@ def emit_engine_event(
         resolve_entity: Whether to resolve entity names to UIDs.
     """
     try:
+        # Normalize enum to its string value for downstream consumers
+        if isinstance(event_type, EventType):
+            event_type = event_type.value
+
         resolved_uid = subject_entity
         if subject_entity and resolve_entity and not subject_entity.startswith("ent_"):
             uid = _resolve_entity_uid(subject_entity)
