@@ -63,23 +63,20 @@ class ChainVerificationResult:
     last_hash: str = ""
 
 
-def verify_chain(path: Path | str) -> ChainVerificationResult:
-    """Walk the entire chain from genesis, verifying every hash and link.
+def _verify_single_file(
+    path: Path,
+    result: ChainVerificationResult,
+    prev_hash: str,
+    prev_seq: int,
+    *,
+    file_label: str = "",
+) -> tuple[str, int]:
+    """Verify a single JSONL chain file, accumulating into *result*.
 
-    Args:
-        path: Path to the JSONL chain file.
-
-    Returns:
-        ChainVerificationResult with validity status and any errors found.
+    Returns the (prev_hash, prev_seq) state after the last event so the
+    caller can chain across multiple files.
     """
-    path = Path(path)
-    result = ChainVerificationResult()
-
-    if not path.is_file():
-        return result
-
-    prev_hash = GENESIS_PREV_HASH
-    prev_seq = -1
+    label = file_label or path.name
 
     for lineno, line in enumerate(path.read_text().splitlines(), start=1):
         line = line.strip()
@@ -89,7 +86,7 @@ def verify_chain(path: Path | str) -> ChainVerificationResult:
             event = _json.loads(line)
         except _json.JSONDecodeError:
             result.valid = False
-            result.errors.append(f"Line {lineno}: invalid JSON")
+            result.errors.append(f"{label} line {lineno}: invalid JSON")
             continue
 
         result.event_count += 1
@@ -118,6 +115,49 @@ def verify_chain(path: Path | str) -> ChainVerificationResult:
 
         prev_hash = event.get("hash", "")
         prev_seq = seq
+
+    return prev_hash, prev_seq
+
+
+def verify_chain(path: Path | str) -> ChainVerificationResult:
+    """Walk the entire chain from genesis, verifying every hash and link.
+
+    If rotated segment files exist alongside *path* (e.g.
+    ``chain.20260321-120000.jsonl``), they are verified first in
+    chronological order, then the active file.
+
+    Args:
+        path: Path to the JSONL chain file (the active ``chain.jsonl``).
+
+    Returns:
+        ChainVerificationResult with validity status and any errors found.
+    """
+    path = Path(path)
+    result = ChainVerificationResult()
+
+    # Collect all files to verify: rotated segments first, then active
+    from organvm_engine.ledger.rotation import all_chain_files
+
+    chain_dir = path.parent
+    files = all_chain_files(chain_dir)
+
+    # Fallback: if no rotated files exist and the path itself is a file,
+    # make sure it is included (handles the case where path is not named
+    # "chain.jsonl" — e.g., in tests).
+    if not files and path.is_file():
+        files = [path]
+    elif not files:
+        return result
+
+    prev_hash = GENESIS_PREV_HASH
+    prev_seq = -1
+
+    for fp in files:
+        if not fp.is_file():
+            continue
+        prev_hash, prev_seq = _verify_single_file(
+            fp, result, prev_hash, prev_seq,
+        )
 
     result.last_sequence = prev_seq
     result.last_hash = prev_hash

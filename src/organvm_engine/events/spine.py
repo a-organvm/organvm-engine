@@ -236,15 +236,30 @@ class EventSpine:
     The spine writes to a single JSONL file. It never modifies or deletes
     existing lines — append-only by constitutional mandate (INV-000-005).
 
+    When ``max_chain_bytes`` is set (default 100 MB), the chain file is
+    automatically rotated after each write that pushes it past the
+    threshold. See ``ledger.rotation`` for details.
+
     Args:
         path: Path to the JSONL file. Defaults to ~/.organvm/events.jsonl.
+        max_chain_bytes: Rotate chain.jsonl when it exceeds this size.
+            Set to 0 to disable rotation.
     """
 
-    def __init__(self, path: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | str | None = None,
+        max_chain_bytes: int | None = None,
+    ) -> None:
         self._path = Path(path) if path is not None else _DEFAULT_EVENTS_PATH
         # Cache for O(1) chain-linking on emit (avoids scanning the full file)
         self._last_hash: str | None = None
         self._last_seq: int | None = None
+        # Lazy-import default to avoid circular import at module level
+        if max_chain_bytes is None:
+            from organvm_engine.ledger.rotation import DEFAULT_MAX_BYTES
+            max_chain_bytes = DEFAULT_MAX_BYTES
+        self._max_chain_bytes = max_chain_bytes
 
     @property
     def path(self) -> Path:
@@ -320,6 +335,20 @@ class EventSpine:
                     except json.JSONDecodeError:
                         continue
 
+            # If active file is empty (post-rotation), consult the index
+            # for the last hash and sequence from the most recent segment.
+            # This runs regardless of max_chain_bytes because rotation may
+            # have been performed externally via rotate_chain().
+            if last_seq == -1:
+                from organvm_engine.ledger.rotation import load_index
+                idx = load_index(self._path.parent)
+                if idx.segments:
+                    tail = idx.segments[-1]
+                    if tail.last_hash:
+                        last_hash = tail.last_hash
+                    if tail.last_sequence >= 0:
+                        last_seq = tail.last_sequence
+
             record = EventRecord(
                 event_type=event_type,
                 entity_uid=entity_uid,
@@ -343,6 +372,12 @@ class EventSpine:
             # Update cache
             self._last_hash = record.hash
             self._last_seq = record.sequence
+
+            # Rotate chain file if it exceeds the threshold (while we
+            # still hold the lock so no other writer can interleave).
+            if self._max_chain_bytes > 0:
+                from organvm_engine.ledger.rotation import rotate_chain as _rotate
+                _rotate(self._path, max_bytes=self._max_chain_bytes)
 
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
