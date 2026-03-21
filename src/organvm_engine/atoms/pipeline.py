@@ -20,6 +20,8 @@ class PipelineResult:
     """Aggregate result of the full pipeline run."""
     atomize_count: int = 0
     plans_parsed: int = 0
+    research_docs_scanned: int = 0
+    research_directives: int = 0
     narrate_count: int = 0
     noise_skipped: int = 0
     sessions_processed: int = 0
@@ -48,6 +50,8 @@ def run_pipeline(
     skip_narrate: bool = False,
     skip_link: bool = False,
     skip_reconcile: bool = False,
+    skip_research: bool = False,
+    research_dir: Path | None = None,
     link_threshold: float = 0.30,
     dry_run: bool = True,
 ) -> PipelineResult:
@@ -60,6 +64,9 @@ def run_pipeline(
         skip_narrate: Skip prompt narration step.
         skip_link: Skip cross-system linking step.
         skip_reconcile: Skip git-based reconciliation step.
+        skip_research: Skip research activation step.
+        research_dir: Path to research docs directory. Defaults to
+            praxis-perpetua/research/ under the workspace.
         link_threshold: Minimum Jaccard similarity for links.
         dry_run: If True, compute results but don't write files.
 
@@ -85,26 +92,57 @@ def run_pipeline(
     }
 
     # Step 1: Atomize plans
+    all_tasks: list[dict] = []
     try:
         atomize_result = atomize_all(agent=agent, organ=organ)
+        all_tasks.extend(atomize_result.tasks)
         result.atomize_count = len(atomize_result.tasks)
         result.plans_parsed = atomize_result.plans_parsed
         result.errors.extend(("atomize", e) for _, e in atomize_result.errors)
+    except Exception as e:
+        result.errors.append(("atomize", str(e)))
 
+    # Step 1b: Research activation (optional)
+    if not skip_research:
+        try:
+            from organvm_engine.atoms.research import activate_research
+
+            r_dir = research_dir
+            if r_dir is None:
+                from organvm_engine.paths import workspace_root as _ws
+                r_dir = _ws() / "meta-organvm" / "praxis-perpetua" / "research"
+
+            if r_dir.is_dir():
+                research_result = activate_research(
+                    r_dir,
+                    mark_activated=not dry_run,
+                )
+                result.research_docs_scanned = research_result.docs_scanned
+                result.research_directives = research_result.total_directives
+                all_tasks.extend(research_result.tasks)
+                result.errors.extend(
+                    ("research", e) for _, e in research_result.errors
+                )
+        except Exception as e:
+            result.errors.append(("research", str(e)))
+
+    # Write combined task output (plans + research directives)
+    result.atomize_count = len(all_tasks)
+    try:
         if not dry_run:
             output_dir.mkdir(parents=True, exist_ok=True)
             tasks_path = output_dir / "atomized-tasks.jsonl"
-            write_tasks_jsonl(atomize_result.tasks, tasks_path)
+            write_tasks_jsonl(all_tasks, tasks_path)
             manifest["files"]["atomized-tasks.jsonl"] = {
-                "count": len(atomize_result.tasks),
+                "count": len(all_tasks),
                 "sha256": _sha256(tasks_path),
             }
 
-            summary = generate_summary(atomize_result.tasks, atomize_result.plans_parsed)
+            summary = generate_summary(all_tasks, result.plans_parsed)
             summary_path = output_dir / "ATOMIZED-SUMMARY.md"
             summary_path.write_text(summary, encoding="utf-8")
     except Exception as e:
-        result.errors.append(("atomize", str(e)))
+        result.errors.append(("write-tasks", str(e)))
 
     # Step 2: Narrate prompts
     narrate_result = None
@@ -232,6 +270,8 @@ def run_pipeline(
     # Step 6: Write manifest
     manifest["counts"] = {
         "plans_parsed": result.plans_parsed,
+        "research_docs_scanned": result.research_docs_scanned,
+        "research_directives": result.research_directives,
         "tasks": result.atomize_count,
         "prompts": result.narrate_count,
         "noise_skipped": result.noise_skipped,

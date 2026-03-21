@@ -104,8 +104,74 @@ def cmd_atoms_reconcile(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_atoms_research(args: argparse.Namespace) -> int:
+    """Scan research docs for actionable directives and emit atom tasks."""
+    from organvm_engine.atoms.research import activate_research
+    from organvm_engine.paths import workspace_root
+
+    research_dir_raw = getattr(args, "research_dir", None)
+    if research_dir_raw:
+        research_dir = Path(research_dir_raw)
+    else:
+        research_dir = workspace_root() / "meta-organvm" / "praxis-perpetua" / "research"
+
+    if not research_dir.is_dir():
+        print(f"Research directory not found: {research_dir}", file=sys.stderr)
+        return 1
+
+    write = getattr(args, "write", False)
+    min_confidence = getattr(args, "min_confidence", 0.4)
+    as_json = getattr(args, "json", False)
+
+    result = activate_research(
+        research_dir,
+        min_confidence=min_confidence,
+        mark_activated=write,
+    )
+
+    if as_json:
+        output = {
+            "docs_scanned": result.docs_scanned,
+            "docs_with_directives": result.docs_with_directives,
+            "docs_skipped": result.docs_skipped,
+            "total_directives": result.total_directives,
+            "tasks": result.tasks,
+            "errors": [{"file": f, "error": e} for f, e in result.errors],
+        }
+        print(json.dumps(output, indent=2, ensure_ascii=False))
+    else:
+        prefix = "[DRY RUN] " if not write else ""
+        print(f"{prefix}Research Activation")
+        print(f"  Directory: {research_dir}")
+        print(f"  Docs scanned:        {result.docs_scanned}")
+        print(f"  Docs with directives: {result.docs_with_directives}")
+        print(f"  Docs skipped:        {result.docs_skipped}")
+        print(f"  Directives extracted: {result.total_directives}")
+        print(f"  Min confidence:      {min_confidence}")
+
+        if result.tasks:
+            print(f"\n  {'ID':<14} {'Type':<14} {'Confidence':>10}  Title")
+            print(f"  {'─' * 14} {'─' * 14} {'─' * 10}  {'─' * 40}")
+            for task in result.tasks:
+                meta = task.get("research_metadata", {})
+                print(
+                    f"  {task['id']:<14} {meta.get('directive_type', '?'):<14} "
+                    f"{meta.get('confidence', 0):>10.2f}  {task['title'][:50]}",
+                )
+
+        if result.errors:
+            print(f"\nErrors ({len(result.errors)}):")
+            for filepath, err in result.errors[:10]:
+                print(f"  {filepath}: {err}")
+
+        if not write:
+            print(f"\n{prefix}Use --write to mark docs as activated")
+
+    return 0
+
+
 def cmd_atoms_pipeline(args: argparse.Namespace) -> int:
-    """Run the full atomization pipeline: atomize → narrate → link → index → manifest."""
+    """Run the full atomization pipeline: atomize → research → narrate → link → index."""
     from organvm_engine.atoms.pipeline import run_pipeline
 
     write = getattr(args, "write", False)
@@ -115,6 +181,9 @@ def cmd_atoms_pipeline(args: argparse.Namespace) -> int:
         output_dir = Path(output_dir)
 
     skip_reconcile = getattr(args, "skip_reconcile", False)
+    skip_research = getattr(args, "skip_research", False)
+    research_dir_raw = getattr(args, "research_dir", None)
+    research_dir = Path(research_dir_raw) if research_dir_raw else None
 
     result = run_pipeline(
         output_dir=output_dir,
@@ -123,27 +192,32 @@ def cmd_atoms_pipeline(args: argparse.Namespace) -> int:
         skip_narrate=getattr(args, "skip_narrate", False),
         skip_link=getattr(args, "skip_link", False),
         skip_reconcile=skip_reconcile,
+        skip_research=skip_research,
+        research_dir=research_dir,
         link_threshold=getattr(args, "threshold", 0.30),
         dry_run=dry_run,
     )
 
     prefix = "[DRY RUN] " if dry_run else ""
-    print(f"{prefix}[1/6] Atomize: {result.plans_parsed} plans → {result.atomize_count} tasks")
-    print(f"{prefix}[2/6] Narrate: {result.sessions_processed} sessions → "
+    print(f"{prefix}[1/7] Atomize: {result.plans_parsed} plans → "
+          f"{result.atomize_count - result.research_directives} plan tasks")
+    print(f"{prefix}[2/7] Research: {result.research_docs_scanned} docs → "
+          f"{result.research_directives} directives")
+    print(f"{prefix}[3/7] Narrate: {result.sessions_processed} sessions → "
           f"{result.narrate_count} prompts ({result.noise_skipped} noise skipped)")
-    print(f"{prefix}[3/6] Link: {result.link_count} matches "
+    print(f"{prefix}[4/7] Link: {result.link_count} matches "
           f"(threshold={getattr(args, 'threshold', 0.30)})")
     if not dry_run and not skip_reconcile:
-        print(f"{prefix}[4/6] Reconcile: {result.reconcile_completed} completed, "
+        print(f"{prefix}[5/7] Reconcile: {result.reconcile_completed} completed, "
               f"{result.reconcile_partial} partial")
     else:
-        print(f"{prefix}[4/6] Reconcile: skipped ({'dry-run' if dry_run else 'disabled'})")
+        print(f"{prefix}[5/7] Reconcile: skipped ({'dry-run' if dry_run else 'disabled'})")
     if not dry_run:
         idx_count = result.manifest.get("files", {}).get("plan-index.json", {}).get("count", "?")
-        print(f"{prefix}[5/6] Index: plan-index.json ({idx_count} plans)")
+        print(f"{prefix}[6/7] Index: plan-index.json ({idx_count} plans)")
     else:
-        print(f"{prefix}[5/6] Index: skipped (dry-run)")
-    print(f"{prefix}[6/6] Manifest: pipeline-manifest.json")
+        print(f"{prefix}[6/7] Index: skipped (dry-run)")
+    print(f"{prefix}[7/7] Manifest: pipeline-manifest.json")
 
     if result.errors:
         print(f"\nErrors ({len(result.errors)}):")

@@ -210,6 +210,9 @@ class TestCLIPipeline:
         args.organ = None
         args.skip_narrate = True
         args.skip_link = True
+        args.skip_research = True
+        args.skip_reconcile = False
+        args.research_dir = None
         args.threshold = 0.15
 
         ret = cmd_atoms_pipeline(args)
@@ -217,7 +220,8 @@ class TestCLIPipeline:
         assert ret == 0
         captured = capsys.readouterr()
         assert "[DRY RUN]" in captured.out
-        assert "[1/6] Atomize" in captured.out
+        assert "[1/7] Atomize" in captured.out
+        assert "[2/7] Research" in captured.out
 
 
 class TestPipelineReconcile:
