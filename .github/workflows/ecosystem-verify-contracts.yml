@@ -18,6 +18,8 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install
-        run: pip install -e .
+        run: |
+          pip install "organvm-ontologia @ git+https://github.com/meta-organvm/organvm-ontologia.git"
+          pip install -e .
       - name: Validate ecosystem profiles
         run: organvm ecosystem validate

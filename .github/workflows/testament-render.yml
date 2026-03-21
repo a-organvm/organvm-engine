@@ -25,7 +25,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install engine
-        run: pip install -e .
+        run: |
+          pip install "organvm-ontologia @ git+https://github.com/meta-organvm/organvm-ontologia.git"
+          pip install -e .
 
       - name: Render testament artifacts
         run: |
