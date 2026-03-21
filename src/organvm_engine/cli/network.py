@@ -35,7 +35,7 @@ def _count_active_repos(workspace: Path) -> int:
         registry = load_registry()
         all_repos = list_repos(registry)
         return sum(
-            1 for r in all_repos
+            1 for _organ, r in all_repos
             if r.get("status") not in ("ARCHIVED", "DEPRECATED")
         )
     except Exception:

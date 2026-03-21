@@ -133,6 +133,8 @@ class AtomicTask:
     tags: list = field(default_factory=list)
     domain_fingerprint: str = ""
     raw_text: str = ""
+    _organ: Optional[str] = field(default=None, repr=False)
+    _repo: Optional[str] = field(default=None, repr=False)
 
     def compute_id(self):
         key = f"{self.source_file}|{self.breadcrumb}|{self.title}"

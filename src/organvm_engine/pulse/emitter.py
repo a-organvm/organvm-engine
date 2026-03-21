@@ -23,8 +23,12 @@ def _resolve_entity_uid(entity_name: str) -> str | None:
     Returns None if ontologia is unavailable or the entity is unknown.
     """
     try:
-        from ontologia.entity.resolver import resolve as ontologia_resolve
-        from ontologia.registry.store import OntologiaStore
+        from ontologia.entity.resolver import (
+            resolve as ontologia_resolve,  # pyright: ignore[reportAttributeAccessIssue]
+        )
+        from ontologia.registry.store import (
+            OntologiaStore,  # pyright: ignore[reportAttributeAccessIssue]
+        )
 
         store = OntologiaStore()
         if not store.store_dir.exists():

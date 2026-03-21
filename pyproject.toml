@@ -52,6 +52,9 @@ known-first-party = ["organvm_engine"]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"
 include = ["src"]
+# ontologia is an optional dependency (not on PyPI) — imports are all
+# guarded with try/except but pyright still flags them as errors.
+reportMissingImports = "warning"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

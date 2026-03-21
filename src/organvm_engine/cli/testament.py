@@ -276,7 +276,7 @@ def _render_all_repos(
     total = 0
 
     for reg_key, organ_data in organs_data.items():
-        cli_key = reg_to_cli.get(reg_key, reg_key)
+        cli_key = reg_to_cli.get(str(reg_key), str(reg_key))
         for _repo in organ_data.get("repositories", []):
             total += 1
 
@@ -289,7 +289,7 @@ def _render_all_repos(
     repos_dir.mkdir(parents=True, exist_ok=True)
     rendered = 0
     for reg_key, organ_data in organs_data.items():
-        cli_key = reg_to_cli.get(reg_key, reg_key)
+        cli_key: str = reg_to_cli.get(str(reg_key), str(reg_key))
         for repo in organ_data.get("repositories", []):
             name = repo.get("name", "unknown")
             status = repo.get("promotion_status", repo.get("status", "unknown"))

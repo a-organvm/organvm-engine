@@ -12,6 +12,10 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from organvm_engine.seed.graph import SeedGraph
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -153,7 +157,7 @@ def _event_age_days(event_ts: str) -> float | None:
 # Public API
 # ---------------------------------------------------------------------------
 
-def compute_flow(graph: object, hours: int = 168) -> FlowProfile:
+def compute_flow(graph: SeedGraph, hours: int = 168) -> FlowProfile:
     """Annotate seed graph edges with activity levels.
 
     For each edge, checks:

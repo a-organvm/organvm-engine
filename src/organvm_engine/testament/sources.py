@@ -34,7 +34,7 @@ def topology_data(
             registry_to_cli[reg_key] = cli_key
 
     for reg_key, organ_data in organs_data.items():
-        cli_key = registry_to_cli.get(reg_key, reg_key)
+        cli_key: str = registry_to_cli.get(str(reg_key), str(reg_key))
         repos = organ_data.get("repositories", [])
         count = len(repos)
         organ_repo_counts[cli_key] = count
@@ -109,17 +109,20 @@ def density_data(
     Returns dict with keys: organ_densities (dict[str, float]).
     """
     try:
-        from organvm_engine.metrics.organism import SystemOrganism
-        organism = SystemOrganism()
-        organism.sense()
+        from organvm_engine.metrics.organism import compute_organism
+        from organvm_engine.pulse.density import compute_density
+        from organvm_engine.registry.loader import load_registry
+        from organvm_engine.seed.graph import build_seed_graph
+
+        registry = load_registry(registry_path)
+        organism = compute_organism(registry)
+        graph = build_seed_graph()
+        profile = compute_density(graph, organism)
 
         densities: dict[str, float] = {}
         for organ_key in ["I", "II", "III", "IV", "V", "VI", "VII", "META"]:
-            density = organism.organ_density(organ_key)
-            if density is not None:
-                densities[organ_key] = min(density / 100.0, 1.0)
-            else:
-                densities[organ_key] = 0.0
+            raw = profile.organ_density.get(organ_key, 0.0)
+            densities[organ_key] = min(raw / 100.0, 1.0)
         return {"organ_densities": densities}
     except Exception:
         # Fallback with reasonable defaults

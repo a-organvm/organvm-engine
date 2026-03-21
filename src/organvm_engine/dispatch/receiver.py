@@ -47,6 +47,12 @@ class WebhookReceiver:
         if not all([dispatch_id, event_type, source, target]):
             raise FormalVerificationError("Malformed envelope: missing mandatory routing fields.")
 
+        # Type narrowing: the guard above ensures these are truthy strings.
+        assert isinstance(dispatch_id, str)
+        assert isinstance(event_type, str)
+        assert isinstance(source, str)
+        assert isinstance(target, str)
+
         # 1. Stratum I: Pre-condition {P}
         contract_result = verify_contract(event_type, payload)
         if not contract_result.passed:

@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 try:
     from ontologia.governance.policies import (
@@ -327,7 +327,7 @@ def evaluate_all_policies(
             evaluated += 1
 
             if HAS_ONTOLOGIA:
-                matched = evaluate_policies(policies, entity_state, "repo")
+                matched = evaluate_policies(cast(list, policies), entity_state, "repo")
                 for policy in matched:
                     entry = {
                         "policy_id": policy.policy_id,
@@ -399,9 +399,9 @@ def _eval_condition(cond: dict[str, Any], state: dict[str, Any]) -> bool:
     if op == "lte":
         return field_val is not None and field_val <= expected
     if op == "in":
-        return field_val in expected
+        return field_val in expected if expected is not None else False
     if op == "not_in":
-        return field_val not in expected
+        return field_val not in expected if expected is not None else True
     if op == "contains":
         return expected in field_val if field_val else False
     return False

@@ -13,6 +13,10 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from organvm_engine.pulse.affective import MoodReading
 
 # ---------------------------------------------------------------------------
 # Dataclass
@@ -25,7 +29,7 @@ class SessionBriefing:
     recent_events: list = field(default_factory=list)  # list[Event]
     recent_claims: list[dict] = field(default_factory=list)
     active_agents: list[str] = field(default_factory=list)
-    last_mood: object | None = None  # MoodReading | None
+    last_mood: MoodReading | None = None
     system_delta: str = "stable"  # "improving" / "declining" / "stable"
     key_changes: list[str] = field(default_factory=list)
     active_tensions: list[dict] = field(default_factory=list)

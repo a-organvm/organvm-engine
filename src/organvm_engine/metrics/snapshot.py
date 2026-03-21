@@ -67,8 +67,8 @@ def build_system_snapshot(
     # Omega
     omega: dict[str, Any] = {"met": 0, "total": 17}
     try:
-        from organvm_engine.omega.scorecard import evaluate_omega
-        result = evaluate_omega(registry, workspace=workspace)
+        from organvm_engine.omega.scorecard import evaluate as evaluate_omega
+        result = evaluate_omega(registry=registry)
         omega = {"met": result.met_count, "total": result.total}
     except Exception:
         pass
@@ -231,7 +231,7 @@ def _scan_code_profile(workspace: Path) -> dict[str, Any]:
         "total_files": sum(all_lang_counts.values()),
         "total_code_files": sum(lang_counts.values()),
         "total_test_files": sum(test_lang_counts.values()),
-        "primary_language": max(lang_counts, key=lang_counts.get) if lang_counts else "",
+        "primary_language": max(lang_counts, key=lambda k: lang_counts[k]) if lang_counts else "",
         "test_functions": {
             "python": py_test_fns,
             "typescript": ts_test_fns,

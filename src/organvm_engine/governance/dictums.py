@@ -11,6 +11,7 @@ Each dictum declares an enforcement mode (automated/audit/manual) and severity
 
 from __future__ import annotations
 
+import typing
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -681,7 +682,7 @@ def validate_kerygma_consumer(
 # ── Master runner ────────────────────────────────────────────────
 
 # Maps validator names to functions
-_VALIDATORS: dict[str, callable] = {
+_VALIDATORS: dict[str, typing.Callable[..., list]] = {
     "validate_dag_invariant": lambda reg, rules, ws: validate_dag_invariant(reg),
     "validate_epistemic_membranes": lambda reg, rules, ws: validate_epistemic_membranes(reg, ws),
     "validate_ttl_eviction": lambda reg, rules, ws: validate_ttl_eviction(reg, rules),

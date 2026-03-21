@@ -30,9 +30,16 @@ jobs:
       - name: Render testament artifacts
         run: |
           mkdir -p testament-output
-          organvm testament render --write --output-dir testament-output
-          organvm testament cascade --write --json > testament-output/cascade-manifest.json
-          echo "Rendered $(ls testament-output/*.svg 2>/dev/null | wc -l) SVGs"
+          # Some renderers need the full workspace (corpus repo); partial success
+          # is expected in CI where only the engine repo is checked out.
+          organvm testament render --write --output-dir testament-output || true
+          organvm testament cascade --write --json > testament-output/cascade-manifest.json || true
+          COUNT=$(ls testament-output/*.svg 2>/dev/null | wc -l)
+          echo "Rendered $COUNT SVGs"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::No testament artifacts produced"
+            exit 1
+          fi
 
       - name: Upload testament artifacts
         uses: actions/upload-artifact@v4

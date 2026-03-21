@@ -144,7 +144,7 @@ class TestBuildSystemSnapshot:
         omega = snap["omega"]
         assert "met" in omega
         assert "total" in omega
-        assert omega["total"] == 17
+        assert omega["total"] == 18
 
     def test_json_serializable(self, minimal_registry, computed):
         snap = build_system_snapshot(minimal_registry, computed)
