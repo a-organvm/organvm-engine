@@ -1,0 +1,64 @@
+name: Monthly Infrastructure Audit
+
+on:
+  schedule:
+    - cron: "0 8 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  infrastructure-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "organvm-ontologia @ git+https://github.com/meta-organvm/organvm-ontologia.git"
+          pip install -e .
+
+      - name: Run infrastructure audit
+        id: audit
+        run: |
+          mkdir -p audit-results
+          organvm ci audit --json | tee audit-results/ci-audit.json
+          organvm ci audit | tee audit-results/ci-audit.txt
+
+      - name: Run CI health check
+        id: health
+        if: always()
+        run: |
+          organvm ci health | tee audit-results/ci-health.txt
+          organvm ci health --json | tee audit-results/ci-health.json
+
+      - name: Upload audit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: infrastructure-audit-${{ github.run_id }}
+          path: audit-results/
+          retention-days: 90
+
+      - name: Post summary
+        if: always()
+        run: |
+          echo "## Monthly Infrastructure Audit" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Date:** $(date -u +%Y-%m-%d)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### CI Audit" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat audit-results/ci-audit.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### CI Health" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat audit-results/ci-health.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
