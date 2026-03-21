@@ -48,7 +48,13 @@ from organvm_engine.cli.atoms import (
     cmd_atoms_pipeline,
     cmd_atoms_reconcile,
 )
-from organvm_engine.cli.ci import cmd_ci_audit, cmd_ci_mandate, cmd_ci_triage
+from organvm_engine.cli.ci import (
+    cmd_ci_audit,
+    cmd_ci_mandate,
+    cmd_ci_protect,
+    cmd_ci_scaffold,
+    cmd_ci_triage,
+)
 from organvm_engine.cli.cmd_audit import (
     cmd_audit_absorption,
     cmd_audit_full,
@@ -672,6 +678,85 @@ def build_parser() -> argparse.ArgumentParser:
         help="Verify CI workflows exist on disk",
     )
     ci_mandate.add_argument(
+        "--json",
+        action="store_true",
+        help="Output machine-readable JSON",
+    )
+    ci_scaffold = ci_sub.add_parser(
+        "scaffold",
+        help="Generate CI workflow YAML (lint/test/typecheck) for a repo",
+    )
+    ci_scaffold.add_argument(
+        "path",
+        help="Path to the repository root directory",
+    )
+    ci_scaffold.add_argument(
+        "--name",
+        help="Override the repo name (default: directory name)",
+    )
+    ci_scaffold.add_argument(
+        "--lint",
+        action="store_true",
+        help="Include linting step",
+    )
+    ci_scaffold.add_argument(
+        "--test",
+        action="store_true",
+        help="Include testing step",
+    )
+    ci_scaffold.add_argument(
+        "--typecheck",
+        action="store_true",
+        help="Include type-checking step",
+    )
+    ci_scaffold.add_argument(
+        "--all",
+        action="store_true",
+        default=True,
+        help="Include all steps (default)",
+    )
+    ci_scaffold.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Print workflow to stdout instead of writing (default)",
+    )
+    ci_scaffold.add_argument(
+        "--write",
+        action="store_true",
+        dest="write",
+        help="Write the workflow file to .github/workflows/ci.yml",
+    )
+    ci_scaffold.add_argument(
+        "--json",
+        action="store_true",
+        help="Output machine-readable JSON",
+    )
+    ci_protect = ci_sub.add_parser(
+        "protect",
+        help="Generate branch protection commands for GRADUATED repos",
+    )
+    ci_protect.add_argument(
+        "--organ",
+        help="Filter by organ key (e.g., ORGAN-I)",
+    )
+    ci_protect.add_argument(
+        "--repo",
+        help="Filter by repo name",
+    )
+    ci_protect.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Show plan without generating full commands (default)",
+    )
+    ci_protect.add_argument(
+        "--execute",
+        action="store_true",
+        dest="execute",
+        help="Generate full gh api commands",
+    )
+    ci_protect.add_argument(
         "--json",
         action="store_true",
         help="Output machine-readable JSON",
@@ -2423,6 +2508,8 @@ def main() -> int:
         ("ci", "triage"): cmd_ci_triage,
         ("ci", "audit"): cmd_ci_audit,
         ("ci", "mandate"): cmd_ci_mandate,
+        ("ci", "scaffold"): cmd_ci_scaffold,
+        ("ci", "protect"): cmd_ci_protect,
         ("pitch", "generate"): cmd_pitch_generate,
         ("pitch", "sync"): cmd_pitch_sync,
         ("context", "sync"): cmd_context_sync,
