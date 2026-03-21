@@ -60,6 +60,10 @@ class PathConfig:
     def atoms_dir(self) -> Path:
         return self.corpus_dir() / "data" / "atoms"
 
+    def irf_path(self) -> Path:
+        """Path to INST-INDEX-RERUM-FACIENDARUM.md."""
+        return self.corpus_dir() / "INST-INDEX-RERUM-FACIENDARUM.md"
+
     def content_dir(self) -> Path:
         """Content pipeline posts directory in praxis-perpetua."""
         return self.corpus_dir().parent / "praxis-perpetua" / "content-pipeline" / "posts"
@@ -87,6 +91,11 @@ def corpus_dir(config: PathConfig | None = None) -> Path:
 def registry_path(config: PathConfig | None = None) -> Path:
     """Return the path to registry-v2.json."""
     return resolve_path_config(config).registry_path()
+
+
+def irf_path(config: PathConfig | None = None) -> Path:
+    """Return the path to INST-INDEX-RERUM-FACIENDARUM.md."""
+    return resolve_path_config(config).irf_path()
 
 
 def registry_dir(config: PathConfig | None = None) -> Path:
