@@ -189,6 +189,8 @@ def execute_transition(
     org: str = "",
     tier: str = "standard",
     enforce_infrastructure: bool = True,
+    registry_entry: dict | None = None,
+    reason: str = "",
 ) -> tuple[bool, str]:
     """Validate and execute a state transition, emitting events on success.
 
@@ -209,6 +211,10 @@ def execute_transition(
         tier: Repository tier (for infrastructure audit).
         enforce_infrastructure: If True, block promotion when
             infrastructure requirements are not met. Default True.
+        registry_entry: Optional registry entry dict for the repo.
+            When provided, a ``promotion_history`` record is appended
+            on successful transition (F-002).
+        reason: Optional human-readable reason for the transition.
 
     Returns:
         (valid, message) tuple — same semantics as check_transition.
@@ -275,6 +281,17 @@ def execute_transition(
 
     # Also emit to the existing pulse bus (backward compat)
     emit_promotion_event(repo_name, current_state, target_state)
+
+    # Record promotion_history on the registry entry (F-002)
+    if registry_entry is not None:
+        try:
+            from organvm_engine.registry.updater import _record_promotion_history
+
+            _record_promotion_history(
+                registry_entry, current_state, target_state, reason=reason,
+            )
+        except Exception:
+            logger.debug("promotion_history recording failed (non-fatal)", exc_info=True)
 
     return ok, msg
 

@@ -330,3 +330,55 @@ class TestUpdater:
     def test_update_missing_repo(self, registry):
         ok, msg = update_repo(registry, "nonexistent", "tier", "standard")
         assert not ok
+
+    def test_promotion_status_records_history(self, registry):
+        """F-002: updating promotion_status appends to promotion_history."""
+        ok, msg = update_repo(
+            registry, "ontological-framework", "promotion_status", "CANDIDATE",
+        )
+        assert ok
+        _, repo = find_repo(registry, "ontological-framework")
+        history = repo.get("promotion_history", [])
+        assert len(history) == 1
+        assert history[0]["from_state"] == "LOCAL"
+        assert history[0]["to_state"] == "CANDIDATE"
+        assert "timestamp" in history[0]
+
+    def test_promotion_history_accumulates(self, registry):
+        """F-002: successive promotions append, not overwrite."""
+        update_repo(registry, "ontological-framework", "promotion_status", "CANDIDATE")
+        update_repo(registry, "ontological-framework", "promotion_status", "PUBLIC_PROCESS")
+        _, repo = find_repo(registry, "ontological-framework")
+        history = repo["promotion_history"]
+        assert len(history) == 2
+        assert history[0]["to_state"] == "CANDIDATE"
+        assert history[1]["from_state"] == "CANDIDATE"
+        assert history[1]["to_state"] == "PUBLIC_PROCESS"
+
+    def test_promotion_history_includes_reason(self, registry):
+        """F-002: reason is recorded when provided."""
+        update_repo(
+            registry, "ontological-framework", "promotion_status", "CANDIDATE",
+            reason="passed CI checks",
+        )
+        _, repo = find_repo(registry, "ontological-framework")
+        assert repo["promotion_history"][0]["reason"] == "passed CI checks"
+
+    def test_promotion_history_omits_empty_reason(self, registry):
+        """F-002: empty reason is not stored in the record."""
+        update_repo(registry, "ontological-framework", "promotion_status", "CANDIDATE")
+        _, repo = find_repo(registry, "ontological-framework")
+        assert "reason" not in repo["promotion_history"][0]
+
+    def test_no_history_for_non_promotion_fields(self, registry):
+        """F-002: only promotion_status changes trigger history recording."""
+        update_repo(registry, "recursive-engine", "tier", "standard")
+        _, repo = find_repo(registry, "recursive-engine")
+        assert "promotion_history" not in repo
+
+    def test_no_history_when_value_unchanged(self, registry):
+        """F-002: setting promotion_status to the same value is a no-op for history."""
+        _, repo = find_repo(registry, "recursive-engine")
+        current = repo["promotion_status"]
+        update_repo(registry, "recursive-engine", "promotion_status", current)
+        assert "promotion_history" not in repo

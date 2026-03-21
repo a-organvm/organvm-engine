@@ -84,6 +84,21 @@ def cmd_registry_list(args: argparse.Namespace) -> int:
     )
     results = sort_repo_results(results, field=args.sort_by, descending=args.desc)
 
+    if args.json:
+        payload = [
+            {
+                "name": repo["name"],
+                "organ": organ_key,
+                "status": repo.get("implementation_status", ""),
+                "tier": repo.get("tier", ""),
+                "promotion": repo.get("promotion_status", ""),
+                "org": repo.get("org", ""),
+            }
+            for organ_key, repo in results
+        ]
+        print(json.dumps(payload, indent=2))
+        return 0
+
     if not results:
         print("No repos match the given filters.")
         return 0
@@ -239,7 +254,8 @@ def cmd_registry_update(args: argparse.Namespace) -> int:
         with contextlib.suppress(ValueError):
             value = int(value)
 
-    ok, msg = update_repo(registry, args.repo, args.field, value)
+    reason = getattr(args, "reason", "") or ""
+    ok, msg = update_repo(registry, args.repo, args.field, value, reason=reason)
     print(f"  {msg}")
     if ok:
         save_registry(registry, args.registry)

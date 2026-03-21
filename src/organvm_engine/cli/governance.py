@@ -120,6 +120,8 @@ def cmd_governance_promote(args: argparse.Namespace) -> int:
     ws = workspace_root()
     repo_path = _resolve_repo_path(org, repo_name, organ_key, ws, key_to_dir)
 
+    reason = getattr(args, "reason", "") or ""
+
     ok, msg = execute_transition(
         repo_name=repo_name,
         current_state=current,
@@ -128,6 +130,8 @@ def cmd_governance_promote(args: argparse.Namespace) -> int:
         organ=organ_key,
         org=org,
         tier=tier,
+        registry_entry=repo,
+        reason=reason,
     )
     print(f"  {msg}")
 

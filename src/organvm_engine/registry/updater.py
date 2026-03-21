@@ -1,5 +1,9 @@
 """Programmatic registry updates with validation gates."""
 
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
 from organvm_engine.registry.query import find_repo
 from organvm_engine.registry.validator import (
     VALID_PROMOTION_STATES,
@@ -24,14 +28,22 @@ def update_repo(
     repo_name: str,
     field: str,
     value: str | bool | int,
+    *,
+    reason: str = "",
 ) -> tuple[bool, str]:
     """Update a single field on a registry entry with validation.
+
+    When *field* is ``promotion_status``, a record is appended to the
+    entry's ``promotion_history`` array (created if absent).  This feeds
+    the van der Aalst conformance checker in ``governance.conformance``.
 
     Args:
         registry: Loaded registry dict (mutated in place).
         repo_name: Repository name.
         field: Field name to update.
         value: New value.
+        reason: Optional human-readable reason for the change
+            (recorded in promotion_history when field is promotion_status).
 
     Returns:
         (success, message) tuple.
@@ -50,6 +62,10 @@ def update_repo(
 
     old_value = repo.get(field, "<unset>")
     repo[field] = value
+
+    # Record promotion_history on promotion_status changes (F-002)
+    if field == "promotion_status" and old_value != value:
+        _record_promotion_history(repo, str(old_value), str(value), reason=reason)
 
     # Emit registry update event
     try:
@@ -81,3 +97,42 @@ def update_repo(
     )
 
     return True, f"{repo_name}.{field}: {old_value} -> {value}"
+
+
+# ---------------------------------------------------------------------------
+# Promotion history recording (F-002)
+# ---------------------------------------------------------------------------
+
+def _record_promotion_history(
+    repo: dict,
+    from_state: str,
+    to_state: str,
+    *,
+    reason: str = "",
+    _now: datetime | None = None,
+) -> None:
+    """Append a transition record to a repo's ``promotion_history``.
+
+    The record shape matches what ``governance.conformance.extract_promotion_trace``
+    reads: ``from_state``, ``to_state``, ``timestamp``, and optionally ``reason``.
+
+    Args:
+        repo: Registry entry dict (mutated in place).
+        from_state: Previous promotion_status value.
+        to_state: New promotion_status value.
+        reason: Optional human-readable reason for the transition.
+        _now: Injection point for deterministic timestamps in tests.
+    """
+    if not isinstance(repo.get("promotion_history"), list):
+        repo["promotion_history"] = []
+
+    now = _now or datetime.now(timezone.utc)
+    record: dict[str, str] = {
+        "from_state": from_state,
+        "to_state": to_state,
+        "timestamp": now.isoformat(),
+    }
+    if reason:
+        record["reason"] = reason
+
+    repo["promotion_history"].append(record)

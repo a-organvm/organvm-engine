@@ -10,7 +10,11 @@ from organvm_engine.governance.rules import (
     get_promotion_rules,
     load_governance_rules,
 )
-from organvm_engine.governance.state_machine import check_transition, get_valid_transitions
+from organvm_engine.governance.state_machine import (
+    check_transition,
+    execute_transition,
+    get_valid_transitions,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -37,6 +41,48 @@ class TestStateMachine:
     def test_unknown_state(self):
         ok, msg = check_transition("BOGUS", "LOCAL")
         assert not ok
+
+    def test_execute_transition_records_promotion_history(self):
+        """F-002: execute_transition writes promotion_history when registry_entry given."""
+        entry = {"name": "test-repo", "promotion_status": "LOCAL"}
+        ok, msg = execute_transition(
+            repo_name="test-repo",
+            current_state="LOCAL",
+            target_state="CANDIDATE",
+            enforce_infrastructure=False,
+            registry_entry=entry,
+            reason="initial promotion",
+        )
+        assert ok
+        history = entry.get("promotion_history", [])
+        assert len(history) == 1
+        assert history[0]["from_state"] == "LOCAL"
+        assert history[0]["to_state"] == "CANDIDATE"
+        assert history[0]["reason"] == "initial promotion"
+        assert "timestamp" in history[0]
+
+    def test_execute_transition_no_history_without_entry(self):
+        """F-002: no error when registry_entry is None (backward compat)."""
+        ok, msg = execute_transition(
+            repo_name="test-repo",
+            current_state="LOCAL",
+            target_state="CANDIDATE",
+            enforce_infrastructure=False,
+        )
+        assert ok
+
+    def test_execute_transition_no_history_on_failure(self):
+        """F-002: failed transitions do not record history."""
+        entry = {"name": "test-repo", "promotion_status": "LOCAL"}
+        ok, msg = execute_transition(
+            repo_name="test-repo",
+            current_state="LOCAL",
+            target_state="GRADUATED",
+            enforce_infrastructure=False,
+            registry_entry=entry,
+        )
+        assert not ok
+        assert "promotion_history" not in entry
 
 
 class TestDependencyGraph:

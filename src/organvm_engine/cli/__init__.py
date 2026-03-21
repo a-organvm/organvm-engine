@@ -306,6 +306,7 @@ def build_parser() -> argparse.ArgumentParser:
     ls_archived = ls.add_mutually_exclusive_group()
     ls_archived.add_argument("--archived", action="store_true")
     ls_archived.add_argument("--unarchived", action="store_true")
+    ls.add_argument("--json", action="store_true", help="Output JSON")
 
     search = reg_sub.add_parser("search", help="Search repos by text query")
     search.add_argument("query")
@@ -344,6 +345,7 @@ def build_parser() -> argparse.ArgumentParser:
     upd.add_argument("repo")
     upd.add_argument("field")
     upd.add_argument("value")
+    upd.add_argument("--reason", default="", help="Reason for the change (recorded for promotion_status)")
 
     rsplit = reg_sub.add_parser("split", help="Split registry into per-organ files")
     rsplit.add_argument("output_dir", help="Directory for per-organ files")
@@ -373,6 +375,7 @@ def build_parser() -> argparse.ArgumentParser:
     prom = gov_sub.add_parser("promote", help="Check promotion eligibility")
     prom.add_argument("repo")
     prom.add_argument("target", help="Target promotion state")
+    prom.add_argument("--reason", default="", help="Reason for the promotion (recorded in history)")
 
     imp = gov_sub.add_parser(
         "impact",
