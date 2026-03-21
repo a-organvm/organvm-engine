@@ -108,6 +108,7 @@ def register_components(
 
     if store is None:
         store = open_store()
+    assert store is not None  # guaranteed by open_store()
 
     existing_tags = _existing_component_tags(store)
     repo_uids = _repo_uid_map(store)

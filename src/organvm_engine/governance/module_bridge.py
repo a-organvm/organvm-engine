@@ -95,6 +95,7 @@ def sync_modules_from_excavation(
     if store is None:
         from ontologia.registry.store import open_store
         store = open_store()
+    assert store is not None  # guaranteed by open_store()
 
     # Filter to sub_package findings only
     sub_packages = [f for f in findings if f.entity_type == "sub_package"]
