@@ -266,8 +266,8 @@ class TestCanonicalSignalTypes:
 
     def test_known_types_present(self):
         assert "ONT_FRAGMENT" in CANONICAL_SIGNAL_TYPES
-        assert "GOVERNANCE_EVENT" in CANONICAL_SIGNAL_TYPES
-        assert "CODE_ARTIFACT" in CANONICAL_SIGNAL_TYPES
+        assert "RULE_PROPOSAL" in CANONICAL_SIGNAL_TYPES
+        assert "ANNOTATED_CORPUS" in CANONICAL_SIGNAL_TYPES
 
     def test_count(self):
         assert len(CANONICAL_SIGNAL_TYPES) == 14

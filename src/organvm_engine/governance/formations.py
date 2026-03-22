@@ -39,39 +39,42 @@ class FormationType(str, enum.Enum):
 
 
 class SignalClass(str, enum.Enum):
-    """Canonical signal classes flowing between formations."""
+    """Canonical signal classes — Formation Protocol §8.1 (post-flood)."""
 
+    RESEARCH_QUESTION = "RESEARCH_QUESTION"
     ONT_FRAGMENT = "ONT_FRAGMENT"
     RULE_PROPOSAL = "RULE_PROPOSAL"
     STATE_MODEL = "STATE_MODEL"
-    METRIC_OBSERVATION = "METRIC_OBSERVATION"
-    CODE_ARTIFACT = "CODE_ARTIFACT"
-    DOC_ARTIFACT = "DOC_ARTIFACT"
-    EVENT_PAYLOAD = "EVENT_PAYLOAD"
-    GOVERNANCE_DECISION = "GOVERNANCE_DECISION"
-    SCHEMA_DEFINITION = "SCHEMA_DEFINITION"
-    TEST_RESULT = "TEST_RESULT"
-    MIGRATION_PLAN = "MIGRATION_PLAN"
-    AUDIT_REPORT = "AUDIT_REPORT"
-    QUERY_RESULT = "QUERY_RESULT"
-    USER_INPUT = "USER_INPUT"
+    ARCHIVE_PACKET = "ARCHIVE_PACKET"
+    ANNOTATED_CORPUS = "ANNOTATED_CORPUS"
+    PEDAGOGICAL_UNIT = "PEDAGOGICAL_UNIT"
+    EXECUTION_TRACE = "EXECUTION_TRACE"
+    FAILURE_REPORT = "FAILURE_REPORT"
+    MIGRATION_CANDIDATE = "MIGRATION_CANDIDATE"
+    AESTHETIC_PROFILE = "AESTHETIC_PROFILE"
+    INTERFACE_CONTRACT = "INTERFACE_CONTRACT"
+    SYNTHESIS_PACKET = "SYNTHESIS_PACKET"
+    VALIDATION_RECORD = "VALIDATION_RECORD"
 
 
 # Signals each formation type is expected to produce
 _EXPECTED_OUTPUTS: dict[FormationType, set[str]] = {
-    FormationType.GENERATOR: {"CODE_ARTIFACT", "DOC_ARTIFACT", "ONT_FRAGMENT"},
-    FormationType.TRANSFORMER: {"CODE_ARTIFACT", "DOC_ARTIFACT", "SCHEMA_DEFINITION"},
-    FormationType.ROUTER: {"EVENT_PAYLOAD"},
-    FormationType.RESERVOIR: {"STATE_MODEL", "QUERY_RESULT"},
-    FormationType.INTERFACE: {"USER_INPUT", "EVENT_PAYLOAD"},
-    FormationType.LABORATORY: {"CODE_ARTIFACT", "TEST_RESULT"},
-    FormationType.SYNTHESIZER: {"AUDIT_REPORT", "GOVERNANCE_DECISION"},
+    FormationType.GENERATOR: {"ONT_FRAGMENT", "RULE_PROPOSAL", "STATE_MODEL"},
+    FormationType.TRANSFORMER: {"ANNOTATED_CORPUS", "STATE_MODEL"},
+    FormationType.ROUTER: {"EXECUTION_TRACE"},
+    FormationType.RESERVOIR: {"ARCHIVE_PACKET", "PEDAGOGICAL_UNIT", "ANNOTATED_CORPUS", "FAILURE_REPORT"},
+    FormationType.INTERFACE: {"INTERFACE_CONTRACT", "EXECUTION_TRACE"},
+    FormationType.LABORATORY: {"FAILURE_REPORT", "VALIDATION_RECORD"},
+    FormationType.SYNTHESIZER: {"SYNTHESIS_PACKET", "MIGRATION_CANDIDATE"},
 }
+
+RESERVOIR_ALLOWED_OUTPUTS = _EXPECTED_OUTPUTS[FormationType.RESERVOIR]
 
 # Prohibited couplings: (from_type, to_type) pairs that are not allowed
 _PROHIBITED_COUPLINGS: set[tuple[str, str]] = {
-    ("ROUTER", "ONT_FRAGMENT"),      # routers must not invent theory
-    ("RESERVOIR", "RULE_PROPOSAL"),   # archives must not propose rules
+    ("ROUTER", "ONT_FRAGMENT"),      # routers must not invent theory (§10.3)
+    ("RESERVOIR", "RULE_PROPOSAL"),   # archives must not propose rules (§15)
+    ("RESERVOIR", "ONT_FRAGMENT"),    # archives must not redefine ontology (§15)
 }
 
 

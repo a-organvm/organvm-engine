@@ -17,20 +17,20 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 CANONICAL_SIGNAL_TYPES: frozenset[str] = frozenset({
+    "RESEARCH_QUESTION",
     "ONT_FRAGMENT",
     "RULE_PROPOSAL",
     "STATE_MODEL",
-    "METRIC_STREAM",
-    "THEORY_ARTIFACT",
-    "CREATIVE_ARTIFACT",
-    "CODE_ARTIFACT",
-    "DATA_ARTIFACT",
-    "GOVERNANCE_EVENT",
-    "DISTRIBUTION_PAYLOAD",
-    "COMMUNITY_SIGNAL",
-    "INSIGHT_REPORT",
-    "CONFIGURATION",
-    "MIGRATION_RECORD",
+    "ARCHIVE_PACKET",
+    "ANNOTATED_CORPUS",
+    "PEDAGOGICAL_UNIT",
+    "EXECUTION_TRACE",
+    "FAILURE_REPORT",
+    "MIGRATION_CANDIDATE",
+    "AESTHETIC_PROFILE",
+    "INTERFACE_CONTRACT",
+    "SYNTHESIS_PACKET",
+    "VALIDATION_RECORD",
 })
 
 

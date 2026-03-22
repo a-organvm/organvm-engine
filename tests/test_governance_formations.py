@@ -17,13 +17,13 @@ from organvm_engine.governance.formations import (
 
 @pytest.fixture
 def valid_formation():
-    """A complete, valid formation dict."""
+    """A complete, valid formation dict using post-flood signal vocabulary."""
     return {
         "formation_type": "GENERATOR",
         "host_organ": "ORGAN-I",
         "host_repo": "theory-core",
-        "signals_in": ["USER_INPUT"],
-        "signals_out": ["CODE_ARTIFACT", "DOC_ARTIFACT"],
+        "signals_in": ["RESEARCH_QUESTION"],
+        "signals_out": ["ONT_FRAGMENT", "STATE_MODEL"],
         "maturity": 0.7,
         "exit_modes": ["deprecate", "merge"],
     }
@@ -47,9 +47,24 @@ class TestFormationType:
 
 
 class TestSignalClass:
-    def test_canonical_14(self):
+    def test_canonical_14_post_flood(self):
+        """Post-flood Formation Protocol §8.1 defines exactly 14 signal classes."""
         assert len(SignalClass) == 14
         assert SignalClass.ONT_FRAGMENT.value == "ONT_FRAGMENT"
+        assert SignalClass.RULE_PROPOSAL.value == "RULE_PROPOSAL"
+        assert SignalClass.STATE_MODEL.value == "STATE_MODEL"
+        assert SignalClass.ANNOTATED_CORPUS.value == "ANNOTATED_CORPUS"
+        assert SignalClass.ARCHIVE_PACKET.value == "ARCHIVE_PACKET"
+        assert SignalClass.EXECUTION_TRACE.value == "EXECUTION_TRACE"
+        assert SignalClass.RESEARCH_QUESTION.value == "RESEARCH_QUESTION"
+
+    def test_pre_flood_signals_removed(self):
+        """Pre-flood signals (CODE_ARTIFACT, etc.) must not exist."""
+        names = {s.value for s in SignalClass}
+        assert "CODE_ARTIFACT" not in names
+        assert "DOC_ARTIFACT" not in names
+        assert "USER_INPUT" not in names
+        assert "QUERY_RESULT" not in names
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +107,7 @@ class TestValidateFormation:
             "formation_type": "INVALID",
             "host_organ": "ORGAN-I",
             "host_repo": "test",
-            "signals_out": ["CODE_ARTIFACT"],
+            "signals_out": ["ONT_FRAGMENT"],
         }
         valid, errors = validate_formation(data)
         assert valid is False
@@ -115,7 +130,7 @@ class TestValidateFormation:
         assert valid is False
         assert any("signals_out" in e for e in errors)
 
-    def test_prohibited_coupling(self):
+    def test_prohibited_coupling_router_ont(self):
         data = {
             "formation_type": "ROUTER",
             "host_organ": "ORGAN-IV",
@@ -126,6 +141,31 @@ class TestValidateFormation:
         valid, errors = validate_formation(data)
         assert valid is False
         assert any("prohibited" in e.lower() for e in errors)
+
+    def test_prohibited_coupling_reservoir_ont(self):
+        """Reservoir Law §15: RESERVOIR may not emit ONT_FRAGMENT."""
+        data = {
+            "formation_type": "RESERVOIR",
+            "host_organ": "ORGAN-I",
+            "host_repo": "memory-corpus",
+            "signals_out": ["ONT_FRAGMENT"],
+            "maturity": 0.5,
+        }
+        valid, errors = validate_formation(data)
+        assert valid is False
+        assert any("prohibited" in e.lower() for e in errors)
+
+    def test_reservoir_allowed_outputs(self):
+        """Reservoir Law §15: RESERVOIR may emit ANNOTATED_CORPUS."""
+        data = {
+            "formation_type": "RESERVOIR",
+            "host_organ": "ORGAN-I",
+            "host_repo": "memory-corpus",
+            "signals_out": ["ANNOTATED_CORPUS", "ARCHIVE_PACKET"],
+            "maturity": 0.5,
+        }
+        valid, errors = validate_formation(data)
+        assert valid is True
 
     def test_maturity_out_of_range(self, valid_formation):
         valid_formation["maturity"] = 1.5
