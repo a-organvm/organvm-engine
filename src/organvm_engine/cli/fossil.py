@@ -1,10 +1,12 @@
 """CLI handler for the fossil command group.
 
 Commands:
-    fossil excavate   -- Crawl git history and produce fossil-record.jsonl
-    fossil chronicle  -- Generate Jungian-voiced epoch narratives
-    fossil epochs     -- List all declared epochs
-    fossil stratum    -- Query the fossil record
+    fossil excavate    -- Crawl git history and produce fossil-record.jsonl
+    fossil chronicle   -- Generate Jungian-voiced epoch narratives
+    fossil intentions  -- Browse and extract unique prompt intentions
+    fossil drift       -- Analyze intention-reality divergence
+    fossil epochs      -- List all declared epochs
+    fossil stratum     -- Query the fossil record
 """
 
 from __future__ import annotations
@@ -311,5 +313,133 @@ def cmd_fossil_stratum(args) -> int:
     print("─" * 40)
     for organ, count in sorted(organ_counts.items(), key=lambda x: -x[1]):
         print(f"  {organ:<14} {count:>5}")
+
+    return 0
+
+
+def cmd_fossil_intentions(args) -> int:
+    """Browse and extract unique prompt intentions."""
+    from organvm_engine.fossil.archivist import (
+        extract_intentions,
+        load_intentions,
+        save_intention,
+    )
+    from organvm_engine.paths import fossil_dir
+
+    intentions_dir = fossil_dir() / "intentions"
+    write = getattr(args, "write", False)
+    scan_dir = getattr(args, "scan", None)
+
+    if scan_dir:
+        # Extract new intentions from session files
+        scan_path = Path(scan_dir).expanduser()
+        if not scan_path.is_dir():
+            print(f"Directory not found: {scan_path}", file=sys.stderr)
+            return 1
+
+        existing = load_intentions(intentions_dir) if intentions_dir.exists() else []
+        new_intentions = extract_intentions(scan_path, existing)
+
+        if not new_intentions:
+            print("No new unique intentions found.")
+            return 0
+
+        if write:
+            intentions_dir.mkdir(parents=True, exist_ok=True)
+            for intention in new_intentions:
+                save_intention(intention, intentions_dir)
+            print(f"Saved {len(new_intentions)} new intention(s) to {intentions_dir}/")
+        else:
+            print(f"Dry-run: {len(new_intentions)} new unique intention(s) found.")
+            for i in new_intentions:
+                preview = i.raw_text[:80].replace("\n", " ")
+                print(f"  {i.id}  [{i.archetypes[0].value}]  {i.uniqueness_score:.2f}  {preview}...")
+            print("Use --write to save.")
+        return 0
+
+    # List existing intentions
+    if not intentions_dir.exists():
+        print("No intentions directory. Use --scan <dir> --write to extract.")
+        return 0
+
+    intentions = load_intentions(intentions_dir)
+    if not intentions:
+        print("No intentions found.")
+        return 0
+
+    as_json = getattr(args, "json", False)
+    if as_json:
+        data = [
+            {"id": i.id, "timestamp": i.timestamp.isoformat(),
+             "uniqueness": i.uniqueness_score,
+             "archetype": i.archetypes[0].value if i.archetypes else "unknown",
+             "preview": i.raw_text[:120]}
+            for i in intentions
+        ]
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+    else:
+        print(f"Intentions Archive — {len(intentions)} intention(s)\n")
+        for i in sorted(intentions, key=lambda x: x.timestamp):
+            arch = i.archetypes[0].value if i.archetypes else "?"
+            preview = i.raw_text[:70].replace("\n", " ")
+            print(f"  {i.id}  [{arch:13s}]  u={i.uniqueness_score:.2f}  {preview}...")
+
+    return 0
+
+
+def cmd_fossil_drift(args) -> int:
+    """Analyze intention-reality divergence."""
+    from organvm_engine.fossil.archivist import load_intentions
+    from organvm_engine.fossil.drift import analyze_all_drift
+    from organvm_engine.fossil.stratum import deserialize_record
+    from organvm_engine.paths import fossil_dir, fossil_record_path
+
+    intentions_dir = fossil_dir() / "intentions"
+    record_path = fossil_record_path()
+
+    if not intentions_dir.exists():
+        print("No intentions found. Run: organvm fossil intentions --scan <dir> --write")
+        return 1
+    if not record_path.exists():
+        print("No fossil record. Run: organvm fossil excavate --write")
+        return 1
+
+    intentions = load_intentions(intentions_dir)
+    if not intentions:
+        print("No intentions to analyze.")
+        return 0
+
+    records = []
+    with record_path.open() as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                with contextlib.suppress(Exception):
+                    records.append(deserialize_record(line))
+
+    drift_records = analyze_all_drift(intentions, records)
+
+    as_json = getattr(args, "json", False)
+    if as_json:
+        data = [
+            {"intention_id": d.intention_id,
+             "convergence": round(d.convergence, 3),
+             "drift_archetype": d.drift_archetype.value,
+             "mutations": d.mutations, "shadows": d.shadows}
+            for d in drift_records
+        ]
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+    else:
+        print(f"Drift Analysis — {len(drift_records)} intention(s)\n")
+        for d in drift_records:
+            icon = {
+                "animus": "->", "anima": "~>", "shadow": "!>",
+                "trickster": "?>", "individuation": "*>",
+            }.get(d.drift_archetype.value, "=>")
+            print(f"  {d.intention_id}  {icon} {d.drift_archetype.value:13s}  "
+                  f"convergence={d.convergence:.2f}  "
+                  f"mutations={len(d.mutations)}  shadows={len(d.shadows)}")
 
     return 0

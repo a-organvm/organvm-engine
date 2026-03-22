@@ -2595,6 +2595,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fossil_stratum.add_argument("--json", action="store_true", help="Output JSON")
 
+    fossil_intentions = fossil_sub.add_parser(
+        "intentions", help="Browse and extract unique prompt intentions",
+    )
+    fossil_intentions.add_argument("--scan", default=None, help="Directory to scan for session files")
+    fossil_intentions.add_argument("--write", action="store_true", help="Save extracted intentions")
+    fossil_intentions.add_argument("--json", action="store_true", help="Output JSON")
+
+    fossil_drift = fossil_sub.add_parser("drift", help="Analyze intention-reality divergence")
+    fossil_drift.add_argument("--json", action="store_true", help="Output JSON")
+
     # taxonomy — functional classification
     tax = sub.add_parser("taxonomy", help="Functional taxonomy commands")
     tax_sub = tax.add_subparsers(dest="subcommand")
@@ -3000,13 +3010,17 @@ def main() -> int:
     if args.command == "fossil":
         from organvm_engine.cli.fossil import (
             cmd_fossil_chronicle,
+            cmd_fossil_drift,
             cmd_fossil_epochs,
             cmd_fossil_excavate,
+            cmd_fossil_intentions,
             cmd_fossil_stratum,
         )
         fossil_dispatch = {
             "excavate": cmd_fossil_excavate,
             "chronicle": cmd_fossil_chronicle,
+            "intentions": cmd_fossil_intentions,
+            "drift": cmd_fossil_drift,
             "epochs": cmd_fossil_epochs,
             "stratum": cmd_fossil_stratum,
         }
