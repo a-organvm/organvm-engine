@@ -255,6 +255,7 @@ from organvm_engine.cli.testament import (
     cmd_testament_catalog,
     cmd_testament_gallery,
     cmd_testament_play,
+    cmd_testament_record_session,
     cmd_testament_render,
     cmd_testament_status,
 )
@@ -1632,6 +1633,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     testament_play.add_argument("--registry", default=None, help="Registry path override")
 
+    testament_record = testament_sub.add_parser(
+        "record-session",
+        help="Detect self-referential changes and emit testament events",
+    )
+    testament_record.add_argument(
+        "--from-commit", default="HEAD~1", help="Start commit (default: HEAD~1)",
+    )
+    testament_record.add_argument(
+        "--to-commit", default="HEAD", help="End commit (default: HEAD)",
+    )
+    testament_record.add_argument(
+        "--write", action="store_true", help="Actually emit events (default: dry-run)",
+    )
+    testament_record.add_argument(
+        "--spine-path", default=None, help="Custom spine JSONL path",
+    )
+
     # ledger (Testament Protocol — hash-linked event chain)
     ledger = sub.add_parser(
         "ledger", help="Testament Protocol — native hash-linked event chain",
@@ -2706,6 +2724,7 @@ def main() -> int:
             "catalog": cmd_testament_catalog,
             "gallery": cmd_testament_gallery,
             "play": cmd_testament_play,
+            "record-session": cmd_testament_record_session,
         }
         handler = testament_dispatch.get(getattr(args, "subcommand", "") or "")
         if handler:

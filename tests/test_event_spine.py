@@ -48,6 +48,9 @@ class TestEventType:
             # Session, Density, Affective (pulse-origin)
             "SESSION_STARTED", "SESSION_ENDED",
             "DENSITY_COMPUTED", "MOOD_SHIFTED",
+            # Self-referential (testament chain)
+            "ARCHITECTURE_CHANGED", "SCORECARD_EXPANDED",
+            "VOCABULARY_EXPANDED", "MODULE_ADDED", "SESSION_RECORDED",
             # Legacy pulse aliases
             "GATE_CHANGED", "REPO_PROMOTED", "SEED_CHANGED",
         }
@@ -332,3 +335,196 @@ class TestEventSpinePath:
     def test_string_path_converted(self, tmp_path):
         spine = EventSpine(path=str(tmp_path / "events.jsonl"))
         assert isinstance(spine.path, type(tmp_path / "events.jsonl"))
+
+
+class TestSelfReferentialEventTypes:
+    """Self-referential testament event types are registered and usable."""
+
+    def test_architecture_changed_value(self):
+        assert EventType.ARCHITECTURE_CHANGED == "architecture.changed"
+
+    def test_scorecard_expanded_value(self):
+        assert EventType.SCORECARD_EXPANDED == "scorecard.expanded"
+
+    def test_vocabulary_expanded_value(self):
+        assert EventType.VOCABULARY_EXPANDED == "vocabulary.expanded"
+
+    def test_module_added_value(self):
+        assert EventType.MODULE_ADDED == "module.added"
+
+    def test_session_recorded_value(self):
+        assert EventType.SESSION_RECORDED == "session.recorded"
+
+    def test_self_referential_types_are_str(self):
+        for etype in [
+            EventType.ARCHITECTURE_CHANGED,
+            EventType.SCORECARD_EXPANDED,
+            EventType.VOCABULARY_EXPANDED,
+            EventType.MODULE_ADDED,
+            EventType.SESSION_RECORDED,
+        ]:
+            assert isinstance(etype, str)
+            assert "." in etype
+
+    def test_emit_self_referential_events(self, tmp_path):
+        spine = EventSpine(path=tmp_path / "events.jsonl")
+        for etype in [
+            EventType.ARCHITECTURE_CHANGED,
+            EventType.SCORECARD_EXPANDED,
+            EventType.VOCABULARY_EXPANDED,
+            EventType.MODULE_ADDED,
+            EventType.SESSION_RECORDED,
+        ]:
+            record = spine.emit(etype, "organvm-engine", payload={"test": True})
+            assert record.event_type == etype.value
+
+
+class TestRecordSession:
+    """Tests for cmd_testament_record_session with mock git output."""
+
+    def _mock_git_diff(self, output: str, returncode: int = 0):
+        """Create a mock for subprocess.run that returns fixed git diff output."""
+        import subprocess
+        from unittest.mock import MagicMock
+
+        mock_result = MagicMock(spec=subprocess.CompletedProcess)
+        mock_result.stdout = output
+        mock_result.stderr = ""
+        mock_result.returncode = returncode
+        return mock_result
+
+    def test_record_session_dry_run_new_module(self, tmp_path, monkeypatch):
+        import argparse
+        from unittest.mock import patch
+
+        from organvm_engine.cli.testament import cmd_testament_record_session
+
+        diff_output = (
+            "A\tsrc/organvm_engine/newmod/__init__.py\n"
+            "M\tsrc/organvm_engine/events/spine.py\n"
+            "M\tsrc/organvm_engine/omega/scorecard.py\n"
+        )
+        mock_result = self._mock_git_diff(diff_output)
+
+        args = argparse.Namespace(
+            from_commit="abc123",
+            to_commit="def456",
+            write=False,
+            spine_path=None,
+        )
+
+        with patch("subprocess.run", return_value=mock_result):
+            rc = cmd_testament_record_session(args)
+
+        assert rc == 0
+
+    def test_record_session_write_emits_events(self, tmp_path, monkeypatch):
+        import argparse
+        from unittest.mock import patch
+
+        from organvm_engine.cli.testament import cmd_testament_record_session
+
+        diff_output = (
+            "A\tsrc/organvm_engine/newmod/__init__.py\n"
+            "M\tsrc/organvm_engine/events/spine.py\n"
+            "M\tsrc/organvm_engine/omega/scorecard.py\n"
+        )
+        mock_result = self._mock_git_diff(diff_output)
+        spine_path = str(tmp_path / "test-events.jsonl")
+
+        args = argparse.Namespace(
+            from_commit="abc123",
+            to_commit="def456",
+            write=True,
+            spine_path=spine_path,
+        )
+
+        with patch("subprocess.run", return_value=mock_result):
+            rc = cmd_testament_record_session(args)
+
+        assert rc == 0
+
+        # Verify events were written
+        spine = EventSpine(path=spine_path)
+        records = spine.query(limit=100)
+        # Expected: MODULE_ADDED + VOCABULARY_EXPANDED + SCORECARD_EXPANDED
+        #           + ARCHITECTURE_CHANGED + SESSION_RECORDED = 5
+        assert len(records) == 5
+
+        types_emitted = {r.event_type for r in records}
+        assert "module.added" in types_emitted
+        assert "vocabulary.expanded" in types_emitted
+        assert "scorecard.expanded" in types_emitted
+        assert "architecture.changed" in types_emitted
+        assert "session.recorded" in types_emitted
+
+    def test_record_session_no_changes(self, tmp_path, monkeypatch):
+        import argparse
+        from unittest.mock import patch
+
+        from organvm_engine.cli.testament import cmd_testament_record_session
+
+        mock_result = self._mock_git_diff("")
+
+        args = argparse.Namespace(
+            from_commit="abc123",
+            to_commit="abc123",
+            write=True,
+            spine_path=str(tmp_path / "events.jsonl"),
+        )
+
+        with patch("subprocess.run", return_value=mock_result):
+            rc = cmd_testament_record_session(args)
+
+        assert rc == 0
+
+    def test_record_session_git_failure(self, tmp_path, monkeypatch):
+        import argparse
+        import subprocess
+        from unittest.mock import patch
+
+        from organvm_engine.cli.testament import cmd_testament_record_session
+
+        args = argparse.Namespace(
+            from_commit="bad",
+            to_commit="bad",
+            write=False,
+            spine_path=None,
+        )
+
+        with patch(
+            "subprocess.run",
+            side_effect=subprocess.CalledProcessError(128, "git"),
+        ):
+            rc = cmd_testament_record_session(args)
+
+        assert rc == 1
+
+    def test_record_session_only_regular_files(self, tmp_path, monkeypatch):
+        """Changes to non-special files emit only ARCHITECTURE_CHANGED + SESSION_RECORDED."""
+        import argparse
+        from unittest.mock import patch
+
+        from organvm_engine.cli.testament import cmd_testament_record_session
+
+        diff_output = "M\tsrc/organvm_engine/registry/loader.py\n"
+        mock_result = self._mock_git_diff(diff_output)
+        spine_path = str(tmp_path / "events.jsonl")
+
+        args = argparse.Namespace(
+            from_commit="aaa",
+            to_commit="bbb",
+            write=True,
+            spine_path=spine_path,
+        )
+
+        with patch("subprocess.run", return_value=mock_result):
+            rc = cmd_testament_record_session(args)
+
+        assert rc == 0
+        spine = EventSpine(path=spine_path)
+        records = spine.query(limit=100)
+        assert len(records) == 2
+        types_emitted = {r.event_type for r in records}
+        assert "architecture.changed" in types_emitted
+        assert "session.recorded" in types_emitted

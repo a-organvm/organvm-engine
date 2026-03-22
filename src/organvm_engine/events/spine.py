@@ -143,6 +143,13 @@ class EventType(str, enum.Enum):
     # -- Affective (pulse-origin) ---------------------------------------------
     MOOD_SHIFTED = "mood.shifted"
 
+    # -- Self-referential (testament chain) ------------------------------------
+    ARCHITECTURE_CHANGED = "architecture.changed"
+    SCORECARD_EXPANDED = "scorecard.expanded"
+    VOCABULARY_EXPANDED = "vocabulary.expanded"
+    MODULE_ADDED = "module.added"
+    SESSION_RECORDED = "session.recorded"
+
     # -- Legacy pulse aliases (kept for string-comparison compatibility) -------
     #    These map to the same domain.action strings that the old
     #    pulse/events.py constants used where they differed from the

@@ -61,6 +61,13 @@ EDGES_SYNCED: str = EventType.EDGES_SYNCED
 # -- Variable bridge ----------------------------------------------------------
 VARIABLES_SYNCED: str = EventType.VARIABLES_SYNCED
 
+# -- Self-referential (testament chain) ---------------------------------------
+ARCHITECTURE_CHANGED: str = EventType.ARCHITECTURE_CHANGED
+SCORECARD_EXPANDED: str = EventType.SCORECARD_EXPANDED
+VOCABULARY_EXPANDED: str = EventType.VOCABULARY_EXPANDED
+MODULE_ADDED: str = EventType.MODULE_ADDED
+SESSION_RECORDED: str = EventType.SESSION_RECORDED
+
 ALL_ENGINE_EVENT_TYPES: list[str] = [
     PROMOTION_CHANGED,
     GATE_EVALUATED,
@@ -87,4 +94,9 @@ ALL_ENGINE_EVENT_TYPES: list[str] = [
     HEARTBEAT_DIFF,
     EDGES_SYNCED,
     VARIABLES_SYNCED,
+    ARCHITECTURE_CHANGED,
+    SCORECARD_EXPANDED,
+    VOCABULARY_EXPANDED,
+    MODULE_ADDED,
+    SESSION_RECORDED,
 ]

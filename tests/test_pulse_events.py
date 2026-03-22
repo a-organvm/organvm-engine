@@ -198,8 +198,8 @@ class TestEventCounts:
 
 class TestConstants:
     def test_all_event_types(self):
-        """ALL_EVENT_TYPES contains exactly 10 entries."""
-        assert len(ALL_EVENT_TYPES) == 10
+        """ALL_EVENT_TYPES contains exactly 15 entries."""
+        assert len(ALL_EVENT_TYPES) == 15
         assert REGISTRY_UPDATED in ALL_EVENT_TYPES
         assert ORGANISM_COMPUTED in ALL_EVENT_TYPES
         assert PULSE_HEARTBEAT in ALL_EVENT_TYPES

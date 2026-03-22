@@ -376,6 +376,151 @@ def cmd_testament_play(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_testament_record_session(args: argparse.Namespace) -> int:
+    """Detect self-referential changes between commits and emit testament events.
+
+    Scans ``git diff --name-status`` for:
+      - New ``__init__.py`` files  -> MODULE_ADDED events
+      - Changes to scorecard files -> SCORECARD_EXPANDED events
+      - Changes to ``events/spine.py`` -> VOCABULARY_EXPANDED events
+      - Any structural change      -> ARCHITECTURE_CHANGED event (summary)
+      - Always emits               -> SESSION_RECORDED event
+    """
+    import subprocess
+
+    from organvm_engine.events.spine import EventSpine, EventType
+
+    from_commit = getattr(args, "from_commit", "HEAD~1")
+    to_commit = getattr(args, "to_commit", "HEAD")
+    spine_path = getattr(args, "spine_path", None)
+    dry_run = not getattr(args, "write", False)
+
+    # Run git diff --name-status between the two commits
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-status", from_commit, to_commit],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=Path(__file__).resolve().parent.parent.parent.parent,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        print(f"  Error running git diff: {exc}")
+        return 1
+
+    diff_output = result.stdout.strip()
+    if not diff_output:
+        print("  No changes detected between commits.")
+        return 0
+
+    # Parse the diff output into (status, path) pairs
+    changes: list[tuple[str, str]] = []
+    for line in diff_output.splitlines():
+        parts = line.split("\t", 1)
+        if len(parts) == 2:
+            changes.append((parts[0].strip(), parts[1].strip()))
+
+    # Classify changes
+    new_modules: list[str] = []
+    scorecard_changes: list[str] = []
+    vocabulary_changes: list[str] = []
+    all_paths: list[str] = []
+
+    for status, path in changes:
+        all_paths.append(path)
+        if path.endswith("__init__.py") and status.startswith("A"):
+            new_modules.append(path)
+        if "scorecard" in path.lower():
+            scorecard_changes.append(path)
+        if "events/spine.py" in path:
+            vocabulary_changes.append(path)
+
+    events_to_emit: list[tuple[EventType, str, dict]] = []
+
+    for mod_path in new_modules:
+        # Extract module name from the path (parent directory of __init__.py)
+        module_name = str(Path(mod_path).parent)
+        events_to_emit.append((
+            EventType.MODULE_ADDED,
+            f"module:{module_name}",
+            {"path": mod_path, "commit_range": f"{from_commit}..{to_commit}"},
+        ))
+
+    for sc_path in scorecard_changes:
+        events_to_emit.append((
+            EventType.SCORECARD_EXPANDED,
+            f"scorecard:{sc_path}",
+            {"path": sc_path, "commit_range": f"{from_commit}..{to_commit}"},
+        ))
+
+    for vc_path in vocabulary_changes:
+        events_to_emit.append((
+            EventType.VOCABULARY_EXPANDED,
+            f"vocabulary:{vc_path}",
+            {"path": vc_path, "commit_range": f"{from_commit}..{to_commit}"},
+        ))
+
+    if changes:
+        events_to_emit.append((
+            EventType.ARCHITECTURE_CHANGED,
+            "organvm-engine",
+            {
+                "files_changed": len(changes),
+                "new_modules": len(new_modules),
+                "commit_range": f"{from_commit}..{to_commit}",
+            },
+        ))
+
+    # Always record the session itself
+    events_to_emit.append((
+        EventType.SESSION_RECORDED,
+        "organvm-engine",
+        {
+            "from_commit": from_commit,
+            "to_commit": to_commit,
+            "files_changed": len(changes),
+            "events_detected": len(events_to_emit),  # count before this one
+        },
+    ))
+
+    # Print summary
+    print(f"\n  Testament Record-Session: {from_commit}..{to_commit}")
+    print(f"  {'=' * 50}")
+    print(f"  Files changed:      {len(changes)}")
+    print(f"  New modules:        {len(new_modules)}")
+    print(f"  Scorecard changes:  {len(scorecard_changes)}")
+    print(f"  Vocabulary changes: {len(vocabulary_changes)}")
+    print(f"  Events to emit:     {len(events_to_emit)}")
+
+    if dry_run:
+        print("\n  [dry-run] Events that would be emitted:")
+        for etype, entity, _payload in events_to_emit:
+            print(f"    {etype.value:<28} {entity}")
+        print("\n  Run with --write to emit events.\n")
+        return 0
+
+    # Emit events to the spine
+    spine = EventSpine(path=spine_path) if spine_path else EventSpine()
+    emitted = 0
+    for etype, entity, payload in events_to_emit:
+        spine.emit(
+            event_type=etype,
+            entity_uid=entity,
+            payload=payload,
+            source_spec="IRF-TST-002",
+            actor="cli:testament:record-session",
+            source_organ="META-ORGANVM",
+            source_repo="organvm-engine",
+        )
+        emitted += 1
+
+    print(f"\n  Emitted {emitted} events to {spine.path}")
+    for etype, entity, _payload in events_to_emit:
+        print(f"    {etype.value:<28} {entity}")
+    print()
+    return 0
+
+
 def _resolve_output_dir(args: argparse.Namespace) -> Path:
     """Resolve the output directory for testament artifacts."""
     output = getattr(args, "output_dir", None)
