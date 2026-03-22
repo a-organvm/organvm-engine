@@ -123,6 +123,16 @@ def content_dir(config: PathConfig | None = None) -> Path:
     return resolve_path_config(config).content_dir()
 
 
+def fossil_dir(config: PathConfig | None = None) -> Path:
+    """Directory for fossil record artifacts."""
+    return corpus_dir(config) / "data" / "fossil"
+
+
+def fossil_record_path(config: PathConfig | None = None) -> Path:
+    """Path to the fossil-record.jsonl file."""
+    return fossil_dir(config) / "fossil-record.jsonl"
+
+
 def resolve_workspace(
     args: "argparse.Namespace | None" = None,
     config: PathConfig | None = None,
