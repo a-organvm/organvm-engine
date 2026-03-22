@@ -1,9 +1,10 @@
 """CLI handler for the fossil command group.
 
 Commands:
-    fossil excavate  -- Crawl git history and produce fossil-record.jsonl
-    fossil epochs    -- List all declared epochs
-    fossil stratum   -- Query the fossil record
+    fossil excavate   -- Crawl git history and produce fossil-record.jsonl
+    fossil chronicle  -- Generate Jungian-voiced epoch narratives
+    fossil epochs     -- List all declared epochs
+    fossil stratum    -- Query the fossil record
 """
 
 from __future__ import annotations
@@ -98,6 +99,65 @@ def cmd_fossil_excavate(args) -> int:
         print(f"  Existing SHAs skipped: {len(existing_shas)}")
         print(f"  Target path: {record_path}")
         print("  Use --write to persist.")
+
+    return 0
+
+
+def cmd_fossil_chronicle(args) -> int:
+    """Generate Jungian-voiced epoch narratives from the fossil record."""
+    from organvm_engine.fossil.narrator import generate_all_chronicles
+    from organvm_engine.fossil.stratum import deserialize_record
+    from organvm_engine.paths import fossil_dir, fossil_record_path
+
+    record_path = fossil_record_path()
+    if not record_path.exists():
+        print(f"Fossil record not found: {record_path}", file=sys.stderr)
+        print("Run: organvm fossil excavate --write", file=sys.stderr)
+        return 1
+
+    write = getattr(args, "write", False)
+    regenerate = getattr(args, "regenerate", False)
+    epoch_filter = getattr(args, "epoch", None)
+
+    # Load all records
+    records = []
+    with record_path.open() as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                with contextlib.suppress(Exception):
+                    records.append(deserialize_record(line))
+
+    if not records:
+        print("Fossil record is empty.")
+        return 0
+
+    # Filter to specific epoch if requested
+    if epoch_filter:
+        records = [r for r in records if r.epoch == epoch_filter.upper()]
+        if not records:
+            print(f"No records found for epoch {epoch_filter}")
+            return 1
+
+    output_dir = fossil_dir() / "chronicle"
+
+    if write:
+        paths = generate_all_chronicles(records, output_dir, regenerate=regenerate)
+        print(f"Generated {len(paths)} chronicle(s) in {output_dir}/")
+        for p in paths:
+            print(f"  {p.name}")
+    else:
+        # Dry run: count how many would be generated
+        from organvm_engine.fossil.epochs import DECLARED_EPOCHS
+        from organvm_engine.fossil.narrator import compute_epoch_stats
+
+        epoch_ids = {r.epoch for r in records if r.epoch}
+        matching = [e for e in DECLARED_EPOCHS if e.id in epoch_ids]
+        print(f"Dry-run: would generate {len(matching)} chronicle(s) in {output_dir}/")
+        for e in matching:
+            stats = compute_epoch_stats(e, [r for r in records if r.epoch == e.id])
+            print(f"  {e.id}  {e.name} ({stats.commit_count} commits, {stats.dominant_archetype.value})")
+        print("Use --write to generate.")
 
     return 0
 

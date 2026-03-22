@@ -2570,6 +2570,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Append new records to fossil-record.jsonl (default is dry-run)",
     )
 
+    fossil_chronicle = fossil_sub.add_parser(
+        "chronicle", help="Generate Jungian-voiced epoch narratives",
+    )
+    fossil_chronicle.add_argument("--epoch", default=None, help="Generate for specific epoch ID")
+    fossil_chronicle.add_argument(
+        "--regenerate", action="store_true", help="Overwrite existing chronicles",
+    )
+    fossil_chronicle.add_argument("--write", action="store_true", help="Write chronicle files")
+
     fossil_epochs = fossil_sub.add_parser("epochs", help="List all declared epochs")
     fossil_epochs.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -2990,12 +2999,14 @@ def main() -> int:
         return 0
     if args.command == "fossil":
         from organvm_engine.cli.fossil import (
+            cmd_fossil_chronicle,
             cmd_fossil_epochs,
             cmd_fossil_excavate,
             cmd_fossil_stratum,
         )
         fossil_dispatch = {
             "excavate": cmd_fossil_excavate,
+            "chronicle": cmd_fossil_chronicle,
             "epochs": cmd_fossil_epochs,
             "stratum": cmd_fossil_stratum,
         }

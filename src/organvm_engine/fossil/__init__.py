@@ -15,6 +15,12 @@ Public API::
 from organvm_engine.fossil.classifier import classify_commit
 from organvm_engine.fossil.epochs import DECLARED_EPOCHS, Epoch, assign_epoch
 from organvm_engine.fossil.excavator import excavate_repo
+from organvm_engine.fossil.narrator import (
+    EpochStats,
+    compute_epoch_stats,
+    generate_all_chronicles,
+    generate_epoch_chronicle,
+)
 from organvm_engine.fossil.stratum import (
     Archetype,
     FossilRecord,
@@ -28,12 +34,16 @@ __all__ = [
     "Archetype",
     "DECLARED_EPOCHS",
     "Epoch",
+    "EpochStats",
     "FossilRecord",
     "Provenance",
     "assign_epoch",
     "classify_commit",
+    "compute_epoch_stats",
     "compute_record_hash",
     "deserialize_record",
     "excavate_repo",
+    "generate_all_chronicles",
+    "generate_epoch_chronicle",
     "serialize_record",
 ]
