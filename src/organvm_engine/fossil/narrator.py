@@ -192,12 +192,41 @@ def _pick_subject(arch: Archetype, index: int = 0) -> str:
     return subjects[index % len(subjects)]
 
 
-def _format_opening(arch: Archetype, stats: EpochStats) -> str:
-    """Render the opening sentence for the dominant archetype."""
-    template = ARCHETYPE_VOICE[arch]["opening"]
-    verb = _pick_verb(arch, 0)
+# Per-epoch custom openings that override the generic template.
+# These give each epoch a unique voice instead of repeating the archetype's
+# default. Written as oracular present tense.
+_EPOCH_OPENINGS: dict[str, str] = {
+    "EPOCH-001": "Before naming, before organs, before the system knows it is a system — there is only raw creation",
+    "EPOCH-002": "The Father speaks the names into existence. Eight organs. Eight Greek suffixes. The ontology is declared",
+    "EPOCH-003": "The Mother lays foundations at speed — seven flagships documented in a single day",
+    "EPOCH-004": "The Animus arrives with structure: 58 READMEs, 202,000 words, cross-validation against every link",
+    "EPOCH-005": "The Anima adorns what the Animus built — essays, visual identity, the aesthetic layer that makes infrastructure feel alive",
+    "EPOCH-006": "The organism becomes itself. All eight organs operational. The system crosses the threshold from collection to living thing",
+    "EPOCH-007": "The Shadow surfaces the morning after launch. What was skipped, what was deferred, what was left hollow — it all demands attention now",
+    "EPOCH-008": "Quiet. The Mother sustains. No sprints, no launches — just steady growth, day after day, the kind of work that doesn't announce itself",
+    "EPOCH-009": "The Anima seizes the organism. For thirteen days the Work bleeds words — 170,000 of them. Sleep dissolves. Naming discipline fractures. The Trickster grins",
+    "EPOCH-010": "The Self turns to face what the Anima produced. Twenty-two sessions. A reckoning with the distance between what was built and what was recorded",
+    "EPOCH-011": "The Animus returns to make sense of what the Anima left behind. Forty-two modules. Omega expansion. CI remediation. The engine hardens",
+    "EPOCH-012": "For the first time, the organism reaches outward. Contribution workspaces. A PR to a stranger's codebase. The system discovers it can give, not only build",
+}
 
-    # Provide organ context for templates that reference {organ}
+
+def _format_opening(arch: Archetype, stats: EpochStats) -> str:
+    """Render the opening sentence for the dominant archetype.
+
+    Uses per-epoch custom openings when available, falling back to
+    the archetype vocabulary with verb selection varied by epoch hash
+    to prevent repetition across epochs with the same dominant archetype.
+    """
+    # Custom opening overrides generic template
+    if stats.epoch_id in _EPOCH_OPENINGS:
+        return _EPOCH_OPENINGS[stats.epoch_id]
+
+    template = ARCHETYPE_VOICE[arch]["opening"]
+    # Vary verb by epoch hash so same-archetype epochs don't repeat
+    verb_index = hash(stats.epoch_id) % len(ARCHETYPE_VOICE[arch]["verbs"])
+    verb = _pick_verb(arch, verb_index)
+
     organ_str = ", ".join(stats.organs_touched[:3]) if stats.organs_touched else "the Work"
 
     return template.format(verb=verb, organ=organ_str)
@@ -209,24 +238,42 @@ def _format_presence(arch: Archetype, detail: str) -> str:
     return template.format(detail=detail)
 
 
+def _duration_phrase(stats: EpochStats) -> str:
+    """Human-readable duration for the epoch."""
+    days = (stats.end - stats.start).days
+    if days == 0:
+        return "in a single day"
+    if days == 1:
+        return "across two days"
+    if days <= 7:
+        return f"across {days + 1} days"
+    return f"across {days + 1} days ({(days + 1) // 7} weeks)"
+
+
 def _build_body_paragraph(stats: EpochStats) -> str:
     """Compose the descriptive body of the chronicle."""
     parts: list[str] = []
 
-    # Volume and character
+    duration = _duration_phrase(stats)
+
+    # Volume and character — with temporal context
     if stats.commit_count == 1:
         parts.append("A single commit marks this epoch")
     elif stats.commit_count < 10:
         parts.append(
-            f"In {stats.commit_count} deliberate acts, the Work advances",
+            f"In {stats.commit_count} deliberate acts {duration}, the Work advances",
         )
     elif stats.commit_count < 50:
         parts.append(
-            f"Across {stats.commit_count} commits, the organism builds steadily",
+            f"Across {stats.commit_count} commits {duration}, the organism builds steadily",
+        )
+    elif stats.commit_count < 200:
+        parts.append(
+            f"{stats.commit_count} commits {duration} — a sustained current of work",
         )
     else:
         parts.append(
-            f"A torrent of {stats.commit_count} commits floods the record",
+            f"A torrent of {stats.commit_count} commits {duration} floods the record",
         )
 
     # Top repos
@@ -298,17 +345,51 @@ def _build_shadow_note(stats: EpochStats) -> str:
     )
 
 
+_ARCHETYPE_CLOSINGS: dict[Archetype, list[str]] = {
+    Archetype.SHADOW: [
+        "The debt is not resolved — only acknowledged. The Shadow will return.",
+        "What was confronted does not vanish. It transforms.",
+    ],
+    Archetype.ANIMA: [
+        "The creative flood recedes, leaving new material the Animus must now shape.",
+        "What emerged cannot be un-dreamed. The organism is larger than before.",
+    ],
+    Archetype.ANIMUS: [
+        "The structure holds. What was fluid is now load-bearing.",
+        "The blueprint is laid. Future epochs will build on these foundations.",
+    ],
+    Archetype.SELF: [
+        "The mirror reflects clearly now. The organism knows what it is — and what it is not.",
+        "Self-knowledge is not comfort. It is the beginning of the next transformation.",
+    ],
+    Archetype.TRICKSTER: [
+        "The Trickster never explains. What was disrupted stays disrupted. The system must adapt.",
+        "Chaos leaves gifts — but they're wrapped in confusion.",
+    ],
+    Archetype.MOTHER: [
+        "The ground is firm. Whatever comes next has a foundation to stand on.",
+        "The infrastructure hums. Quietly. As infrastructure should.",
+    ],
+    Archetype.FATHER: [
+        "The law is spoken. The gates are set. Now the system must live within them.",
+        "Authority has been exercised. The question is whether it was wise.",
+    ],
+    Archetype.INDIVIDUATION: [
+        "The system is more whole than when this epoch began. Integration is irreversible.",
+        "What was separate is now connected. The organism remembers this shape.",
+    ],
+}
+
+
 def _build_closing(stats: EpochStats) -> str:
     """A sentence about what the epoch leaves for the next."""
     if stats.commit_count == 0:
         return "Silence. The organism waits."
     dominant = stats.dominant_archetype
-    subject = _pick_subject(dominant, 2)
-    return (
-        f"What remains: {subject}. "
-        f"The epoch closes with {stats.commit_count} marks in the record, "
-        f"and the organism carries forward what it has become."
-    )
+    closings = _ARCHETYPE_CLOSINGS.get(dominant, ["The epoch closes."])
+    # Vary by epoch hash
+    idx = hash(stats.epoch_id) % len(closings)
+    return closings[idx]
 
 
 def _build_archetype_table(stats: EpochStats) -> str:
