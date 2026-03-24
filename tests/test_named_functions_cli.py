@@ -8,7 +8,6 @@ import json
 from organvm_engine.cli.functions import cmd_functions_list, cmd_functions_resolve
 from organvm_engine.organ_config import FUNCTION_DIR_MAP, resolve_function
 
-
 # ---------------------------------------------------------------------------
 # resolve_function (organ_config bridge)
 # ---------------------------------------------------------------------------

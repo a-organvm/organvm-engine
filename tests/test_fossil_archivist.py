@@ -63,7 +63,7 @@ def test_uniqueness_identical():
             provenance=Provenance.RECONSTRUCTED,
             source_file=None,
             tags=[],
-        )
+        ),
     ]
     score = compute_uniqueness(
         fingerprint_prompt("build governance module"),
@@ -87,7 +87,7 @@ def test_uniqueness_different():
             provenance=Provenance.RECONSTRUCTED,
             source_file=None,
             tags=[],
-        )
+        ),
     ]
     score = compute_uniqueness(
         fingerprint_prompt("design generative art pipeline for organ aesthetics"),

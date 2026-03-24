@@ -1,7 +1,6 @@
 """Integration test: excavate a fixture workspace and verify the full pipeline."""
 
 import subprocess
-from pathlib import Path
 
 import pytest
 
@@ -20,25 +19,25 @@ def mini_workspace(tmp_path):
     # ORGAN-I repo
     repo1 = tmp_path / "organvm-i-theoria" / "test-theory"
     repo1.mkdir(parents=True)
-    subprocess.run(["git", "init"], cwd=repo1, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo1, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=repo1, capture_output=True)
+    subprocess.run(["git", "init"], cwd=repo1, capture_output=True, check=False)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo1, capture_output=True, check=False)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=repo1, capture_output=True, check=False)
     (repo1 / "a.py").write_text("x=1\n")
-    subprocess.run(["git", "add", "."], cwd=repo1, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "feat: initial theory"], cwd=repo1, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=repo1, capture_output=True, check=False)
+    subprocess.run(["git", "commit", "-m", "feat: initial theory"], cwd=repo1, capture_output=True, check=False)
 
     # META repo
     repo2 = tmp_path / "meta-organvm" / "test-engine"
     repo2.mkdir(parents=True)
-    subprocess.run(["git", "init"], cwd=repo2, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo2, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=repo2, capture_output=True)
+    subprocess.run(["git", "init"], cwd=repo2, capture_output=True, check=False)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo2, capture_output=True, check=False)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=repo2, capture_output=True, check=False)
     (repo2 / "b.py").write_text("y=1\n")
-    subprocess.run(["git", "add", "."], cwd=repo2, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "feat: governance state machine"], cwd=repo2, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=repo2, capture_output=True, check=False)
+    subprocess.run(["git", "commit", "-m", "feat: governance state machine"], cwd=repo2, capture_output=True, check=False)
     (repo2 / "b.py").write_text("y=2\n")
-    subprocess.run(["git", "add", "."], cwd=repo2, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "fix: lint errors"], cwd=repo2, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=repo2, capture_output=True, check=False)
+    subprocess.run(["git", "commit", "-m", "fix: lint errors"], cwd=repo2, capture_output=True, check=False)
 
     return tmp_path
 

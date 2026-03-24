@@ -1,15 +1,14 @@
 """Tests for the git history excavator."""
 
 import subprocess
-from pathlib import Path
 
 import pytest
 
 from organvm_engine.fossil.excavator import (
+    detect_organ_from_path,
     excavate_repo,
     parse_commit_type,
     parse_numstat,
-    detect_organ_from_path,
 )
 from organvm_engine.fossil.stratum import Archetype, Provenance
 
@@ -63,21 +62,21 @@ def fixture_repo(tmp_path):
     """Create a tiny git repo with 3 commits for testing."""
     repo = tmp_path / "organvm-i-theoria" / "test-repo"
     repo.mkdir(parents=True)
-    subprocess.run(["git", "init"], cwd=repo, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True)
+    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=False)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True, check=False)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True, check=False)
 
     (repo / "foo.py").write_text("x = 1\n")
-    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "feat: initial"], cwd=repo, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=False)
+    subprocess.run(["git", "commit", "-m", "feat: initial"], cwd=repo, capture_output=True, check=False)
 
     (repo / "foo.py").write_text("x = 2\n")
-    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "fix: correct value"], cwd=repo, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=False)
+    subprocess.run(["git", "commit", "-m", "fix: correct value"], cwd=repo, capture_output=True, check=False)
 
     (repo / "bar.py").write_text("y = 1\n")
-    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "yolo"], cwd=repo, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=False)
+    subprocess.run(["git", "commit", "-m", "yolo"], cwd=repo, capture_output=True, check=False)
 
     return repo
 

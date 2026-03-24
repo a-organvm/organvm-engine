@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 
 from organvm_engine.fossil.archivist import Intention
 from organvm_engine.fossil.drift import (
-    DriftRecord,
     compute_drift,
     extract_scope_from_text,
     find_following_commits,

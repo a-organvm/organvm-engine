@@ -16,7 +16,6 @@ from organvm_engine.governance.signal_algebra import (
     validate_reservoir_signature,
 )
 
-
 # ---------------------------------------------------------------------------
 # Mapping integrity
 # ---------------------------------------------------------------------------
@@ -41,7 +40,7 @@ class TestSignalVariables:
 
     def test_valid_variables_frozenset(self):
         assert isinstance(VALID_VARIABLES, frozenset)
-        assert VALID_VARIABLES == set(SIGNAL_VARIABLES.keys())
+        assert set(SIGNAL_VARIABLES.keys()) == VALID_VARIABLES
 
 
 # ---------------------------------------------------------------------------

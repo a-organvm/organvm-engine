@@ -1,12 +1,10 @@
 """Tests for the Jungian chronicle narrator."""
 
-from datetime import date, datetime, timezone
-from pathlib import Path
+from datetime import datetime, timezone
 
 from organvm_engine.fossil.epochs import DECLARED_EPOCHS
 from organvm_engine.fossil.narrator import (
     ARCHETYPE_VOICE,
-    EpochStats,
     compute_epoch_stats,
     generate_all_chronicles,
     generate_epoch_chronicle,

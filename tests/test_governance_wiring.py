@@ -15,15 +15,14 @@ from pathlib import Path
 import pytest
 
 from organvm_engine.governance.audit import (
-    check_functional_classification,
     audit_formation_signals,
+    check_functional_classification,
 )
+from organvm_engine.governance.placement import compute_affinity
 from organvm_engine.governance.state_machine import (
     execute_transition,
     reset_loaded_transitions,
 )
-from organvm_engine.governance.placement import compute_affinity
-
 
 # ---------------------------------------------------------------------------
 # Part A: check_functional_classification
@@ -275,7 +274,7 @@ class TestAuditFormationSignals:
             "  - RESEARCH_QUESTION\n"
             "signal_outputs:\n"
             "  - ONT_FRAGMENT\n"
-            "maturity: 0.5\n"
+            "maturity: 0.5\n",
         )
         issues = audit_formation_signals(tmp_path)
         assert issues == []
@@ -287,7 +286,7 @@ class TestAuditFormationSignals:
             "formation_type: BOGUS\n"
             "host_organ_primary: ORGAN-I\n"
             "signal_outputs:\n"
-            "  - ONT_FRAGMENT\n"
+            "  - ONT_FRAGMENT\n",
         )
         issues = audit_formation_signals(tmp_path)
         assert any("FORMATION_SIGNAL" in i for i in issues)
@@ -298,7 +297,7 @@ class TestAuditFormationSignals:
         fyaml.parent.mkdir()
         fyaml.write_text(
             "formation_type: GENERATOR\n"
-            "host_organ_primary: ORGAN-I\n"
+            "host_organ_primary: ORGAN-I\n",
         )
         issues = audit_formation_signals(tmp_path)
         assert any("FORMATION_SIGNAL" in i for i in issues)
@@ -310,7 +309,7 @@ class TestAuditFormationSignals:
             "formation_type: ROUTER\n"
             "host_organ_primary: ORGAN-IV\n"
             "signal_outputs:\n"
-            "  - ONT_FRAGMENT\n"
+            "  - ONT_FRAGMENT\n",
         )
         issues = audit_formation_signals(tmp_path)
         assert any("Prohibited coupling" in i for i in issues)

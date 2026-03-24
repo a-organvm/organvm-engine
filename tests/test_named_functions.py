@@ -14,7 +14,6 @@ from organvm_engine.governance.named_functions import (
     validate_participation,
 )
 
-
 # ---------------------------------------------------------------------------
 # Registry integrity
 # ---------------------------------------------------------------------------

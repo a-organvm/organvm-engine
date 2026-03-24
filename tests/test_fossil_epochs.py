@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 
 from organvm_engine.fossil.epochs import (
     DECLARED_EPOCHS,
-    Epoch,
     assign_epoch,
     detect_session_boundaries,
 )

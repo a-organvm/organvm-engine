@@ -7,8 +7,8 @@ from organvm_engine.fossil.stratum import (
     FossilRecord,
     Provenance,
     compute_record_hash,
-    serialize_record,
     deserialize_record,
+    serialize_record,
 )
 
 
