@@ -188,9 +188,9 @@ class TestHistory:
 class TestTemporalDeltas:
     def test_empty_history(self):
         d24, d7, d30 = _compute_temporal_deltas(0.5, [])
-        assert d24 == 0.0
-        assert d7 == 0.0
-        assert d30 == 0.0
+        assert d24 is None
+        assert d7 is None
+        assert d30 is None
 
     def test_with_matching_snapshot(self):
         """When history has a snapshot close to 24h ago, delta is computed."""
@@ -203,9 +203,9 @@ class TestTemporalDeltas:
         )
         d24, d7, d30 = _compute_temporal_deltas(0.5, [snap_24h])
         assert d24 == pytest.approx(0.2)
-        # 7d and 30d have no matching snapshots → 0
-        assert d7 == 0.0
-        assert d30 == 0.0
+        # 7d and 30d have no matching snapshots → None
+        assert d7 is None
+        assert d30 is None
 
 
 # ---------------------------------------------------------------------------
@@ -240,8 +240,15 @@ class TestCompressedText:
         text = _build_compressed_text(a)
         assert "d24h:+2.0%" in text
 
-    def test_no_delta_when_zero(self):
+    def test_delta_shown_when_zero(self):
+        """Zero delta means stable — should render as 'd24h:0.0%', not be hidden."""
         a = AMMOI(system_density=0.5, density_delta_24h=0.0)
+        text = _build_compressed_text(a)
+        assert "d24h:0.0%" in text
+
+    def test_no_delta_when_none(self):
+        """None delta means no historical data — should not render."""
+        a = AMMOI(system_density=0.5, density_delta_24h=None)
         text = _build_compressed_text(a)
         assert "d24h" not in text
 

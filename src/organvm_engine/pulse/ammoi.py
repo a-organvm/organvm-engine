@@ -85,10 +85,10 @@ class AMMOI:
     overcoupled_count: int = 0
     inference_score: float = 0.0
 
-    # Temporal vectors
-    density_delta_24h: float = 0.0
-    density_delta_7d: float = 0.0
-    density_delta_30d: float = 0.0
+    # Temporal vectors (None = no historical data; 0.0 = genuinely unchanged)
+    density_delta_24h: float | None = None
+    density_delta_7d: float | None = None
+    density_delta_30d: float | None = None
 
     # Meso: per-organ
     organs: dict[str, OrganDensity] = field(default_factory=dict)
@@ -157,9 +157,9 @@ class AMMOI:
             orphan_count=data.get("orphan_count", 0),
             overcoupled_count=data.get("overcoupled_count", 0),
             inference_score=data.get("inference_score", 0.0),
-            density_delta_24h=data.get("density_delta_24h", 0.0),
-            density_delta_7d=data.get("density_delta_7d", 0.0),
-            density_delta_30d=data.get("density_delta_30d", 0.0),
+            density_delta_24h=data.get("density_delta_24h"),
+            density_delta_7d=data.get("density_delta_7d"),
+            density_delta_30d=data.get("density_delta_30d"),
             organs=organs,
             pulse_count=data.get("pulse_count", 0),
             pulse_interval=data.get("pulse_interval", 900),
@@ -257,10 +257,15 @@ def _count_recent_events(hours: int = 24) -> int:
 def _compute_temporal_deltas(
     current_density: float,
     history: list[AMMOI],
-) -> tuple[float, float, float]:
-    """Compute density deltas against 24h, 7d, and 30d ago."""
+) -> tuple[float | None, float | None, float | None]:
+    """Compute density deltas against 24h, 7d, and 30d ago.
+
+    Returns None for each window where no suitable historical snapshot
+    exists (distinguishing "no data" from "genuinely unchanged" which
+    returns 0.0).
+    """
     if not history:
-        return 0.0, 0.0, 0.0
+        return None, None, None
 
     now = datetime.now(timezone.utc)
 
@@ -284,9 +289,9 @@ def _compute_temporal_deltas(
     d7 = _find_closest(168)
     d30 = _find_closest(720)
 
-    delta_24h = current_density - d24 if d24 is not None else 0.0
-    delta_7d = current_density - d7 if d7 is not None else 0.0
-    delta_30d = current_density - d30 if d30 is not None else 0.0
+    delta_24h = current_density - d24 if d24 is not None else None
+    delta_7d = current_density - d7 if d7 is not None else None
+    delta_30d = current_density - d30 if d30 is not None else None
 
     return delta_24h, delta_7d, delta_30d
 
@@ -303,7 +308,7 @@ def _build_compressed_text(ammoi: AMMOI) -> str:
     )
 
     delta_str = ""
-    if ammoi.density_delta_24h:
+    if ammoi.density_delta_24h is not None:
         sign = "+" if ammoi.density_delta_24h > 0 else ""
         delta_str = f" | d24h:{sign}{ammoi.density_delta_24h:.1%}"
 
@@ -490,9 +495,9 @@ def compute_ammoi(
         orphan_count=inference_data.get("orphan_count", 0),
         overcoupled_count=inference_data.get("overcoupled_count", 0),
         inference_score=inference_data.get("inference_score", 0.0),
-        density_delta_24h=round(d24h, 4),
-        density_delta_7d=round(d7d, 4),
-        density_delta_30d=round(d30d, 4),
+        density_delta_24h=round(d24h, 4) if d24h is not None else None,
+        density_delta_7d=round(d7d, 4) if d7d is not None else None,
+        density_delta_30d=round(d30d, 4) if d30d is not None else None,
         organs=organ_densities,
         pulse_count=pulse_count,
         flow_score=flow_data.get("flow_score", 0.0),
