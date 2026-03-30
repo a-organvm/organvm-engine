@@ -359,7 +359,9 @@ def build_parser() -> argparse.ArgumentParser:
     upd.add_argument("repo")
     upd.add_argument("field")
     upd.add_argument("value")
-    upd.add_argument("--reason", default="", help="Reason for the change (recorded for promotion_status)")
+    upd.add_argument(
+        "--reason", default="", help="Reason for the change (recorded for promotion_status)"
+    )
 
     rsplit = reg_sub.add_parser("split", help="Split registry into per-organ files")
     rsplit.add_argument("output_dir", help="Directory for per-organ files")
@@ -377,6 +379,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Path to governance-rules.json",
     )
+    aud.add_argument(
+        "--signal-closure",
+        action="store_true",
+        help="Run signal closure validation (AX-6)",
+    )
+    aud.add_argument(
+        "--workspace",
+        default=None,
+        help="Workspace root directory",
+    )
+    aud.add_argument(
+        "--json",
+        action="store_true",
+        help="Output JSON",
+    )
 
     gov_sub.add_parser("check-deps", help="Validate dependency graph")
 
@@ -385,24 +402,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Temporal dependency graph: snapshots, point-in-time queries, diffs",
     )
     gh_p.add_argument(
-        "--snapshot", action="store_true",
+        "--snapshot",
+        action="store_true",
         help="Record the current registry state as a temporal snapshot",
     )
     gh_p.add_argument(
-        "--at", default=None,
+        "--at",
+        default=None,
         help="Show the graph as it was at this ISO-8601 timestamp",
     )
     gh_p.add_argument(
-        "--from", dest="from_ts", default=None,
+        "--from",
+        dest="from_ts",
+        default=None,
         help="Start timestamp for diff (use with --to)",
     )
     gh_p.add_argument(
-        "--to", dest="to_ts", default=None,
+        "--to",
+        dest="to_ts",
+        default=None,
         help="End timestamp for diff (use with --from)",
     )
     gh_p.add_argument("--json", action="store_true", help="JSON output")
     gh_p.add_argument(
-        "--data", default=None,
+        "--data",
+        default=None,
         help="Path to temporal-graph.json (default: corpus/data/temporal-graph.json)",
     )
 
@@ -466,7 +490,8 @@ def build_parser() -> argparse.ArgumentParser:
     exc_p.add_argument("--families", action="store_true", help="Only show cross-organ families")
     exc_p.add_argument("--workspace", default=None, help="Workspace root directory")
     exc_p.add_argument(
-        "--register", action="store_true",
+        "--register",
+        action="store_true",
         help="Register sub-packages as ontologia MODULE entities",
     )
 
@@ -1581,7 +1606,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     # testament
     testament = sub.add_parser(
-        "testament", help="Generative self-portrait — the system renders itself",
+        "testament",
+        help="Generative self-portrait — the system renders itself",
     )
     testament_sub = testament.add_subparsers(dest="subcommand")
 
@@ -1589,16 +1615,20 @@ def build_parser() -> argparse.ArgumentParser:
     testament_status.add_argument("--json", action="store_true", help="JSON output")
 
     testament_render = testament_sub.add_parser(
-        "render", help="Render artifacts from live system data",
+        "render",
+        help="Render artifacts from live system data",
     )
     testament_render.add_argument("--organ", default=None, help="Filter to organ")
     testament_render.add_argument("--write", action="store_true", help="Actually produce files")
     testament_render.add_argument(
-        "--output-dir", default=None, help="Output directory for artifacts",
+        "--output-dir",
+        default=None,
+        help="Output directory for artifacts",
     )
     testament_render.add_argument("--registry", default=None, help="Registry path override")
     testament_render.add_argument(
-        "--all-repos", action="store_true",
+        "--all-repos",
+        action="store_true",
         help="Render SVG identity cards for all repos",
     )
 
@@ -1607,31 +1637,42 @@ def build_parser() -> argparse.ArgumentParser:
     testament_catalog.add_argument("--json", action="store_true", help="JSON output")
 
     testament_gallery = testament_sub.add_parser(
-        "gallery", help="Generate static HTML gallery",
+        "gallery",
+        help="Generate static HTML gallery",
     )
     testament_gallery.add_argument("--write", action="store_true", help="Actually generate")
     testament_gallery.add_argument(
-        "--output-dir", default=None, help="Output directory for gallery",
+        "--output-dir",
+        default=None,
+        help="Output directory for gallery",
     )
 
     testament_cascade = testament_sub.add_parser(
-        "cascade", help="Execute feedback network — renderers feed each other",
+        "cascade",
+        help="Execute feedback network — renderers feed each other",
     )
     testament_cascade.add_argument(
-        "--write", action="store_true", help="Actually execute (default: manifest only)",
+        "--write",
+        action="store_true",
+        help="Actually execute (default: manifest only)",
     )
     testament_cascade.add_argument("--json", action="store_true", help="JSON output")
     testament_cascade.add_argument("--registry", default=None, help="Registry path override")
 
     testament_play = testament_sub.add_parser(
-        "play", help="Render system as sonic parameters — OSC bridge to alchemical-synthesizer",
+        "play",
+        help="Render system as sonic parameters — OSC bridge to alchemical-synthesizer",
     )
     testament_play.add_argument("--json", action="store_true", help="JSON output")
     testament_play.add_argument(
-        "--osc", action="store_true", help="Output OSC messages only (for piping to SC)",
+        "--osc",
+        action="store_true",
+        help="Output OSC messages only (for piping to SC)",
     )
     testament_play.add_argument(
-        "--yaml", action="store_true", help="Output YAML only (for BrahmaModBus.sc)",
+        "--yaml",
+        action="store_true",
+        help="Output YAML only (for BrahmaModBus.sc)",
     )
     testament_play.add_argument("--registry", default=None, help="Registry path override")
 
@@ -1640,21 +1681,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Detect self-referential changes and emit testament events",
     )
     testament_record.add_argument(
-        "--from-commit", default="HEAD~1", help="Start commit (default: HEAD~1)",
+        "--from-commit",
+        default="HEAD~1",
+        help="Start commit (default: HEAD~1)",
     )
     testament_record.add_argument(
-        "--to-commit", default="HEAD", help="End commit (default: HEAD)",
+        "--to-commit",
+        default="HEAD",
+        help="End commit (default: HEAD)",
     )
     testament_record.add_argument(
-        "--write", action="store_true", help="Actually emit events (default: dry-run)",
+        "--write",
+        action="store_true",
+        help="Actually emit events (default: dry-run)",
     )
     testament_record.add_argument(
-        "--spine-path", default=None, help="Custom spine JSONL path",
+        "--spine-path",
+        default=None,
+        help="Custom spine JSONL path",
     )
 
     # ledger (Testament Protocol — hash-linked event chain)
     ledger = sub.add_parser(
-        "ledger", help="Testament Protocol — native hash-linked event chain",
+        "ledger",
+        help="Testament Protocol — native hash-linked event chain",
     )
     ledger_sub = ledger.add_subparsers(dest="subcommand")
 
@@ -1705,14 +1755,16 @@ def build_parser() -> argparse.ArgumentParser:
     eco_sub.add_parser("audit", help="Show gaps and suggestions")
 
     eco_scaffold = eco_sub.add_parser(
-        "scaffold", help="Generate ecosystem scaffold for a repo",
+        "scaffold",
+        help="Generate ecosystem scaffold for a repo",
     )
     eco_scaffold.add_argument("repo", help="Repository name")
     eco_scaffold.add_argument("--dry-run", action="store_true", default=True)
     eco_scaffold.add_argument("--write", action="store_true", help="Write file")
 
     eco_sync = eco_sub.add_parser(
-        "sync", help="Scaffold ecosystem.yaml for all missing products",
+        "sync",
+        help="Scaffold ecosystem.yaml for all missing products",
     )
     eco_sync.add_argument("--dry-run", action="store_true", default=True)
     eco_sync.add_argument("--write", action="store_true", help="Actually write files")
@@ -1733,20 +1785,23 @@ def build_parser() -> argparse.ArgumentParser:
     eco_dna.add_argument("--json", action="store_true", help="Output JSON")
 
     eco_scaffold_dna = eco_sub.add_parser(
-        "scaffold-dna", help="Generate pillar DNA from ecosystem.yaml",
+        "scaffold-dna",
+        help="Generate pillar DNA from ecosystem.yaml",
     )
     eco_scaffold_dna.add_argument("repo", help="Repository name")
     eco_scaffold_dna.add_argument("--dry-run", action="store_true", default=True)
     eco_scaffold_dna.add_argument("--write", action="store_true", help="Write files")
 
     eco_sync_dna = eco_sub.add_parser(
-        "sync-dna", help="Scaffold pillar DNA for all repos with ecosystem.yaml",
+        "sync-dna",
+        help="Scaffold pillar DNA for all repos with ecosystem.yaml",
     )
     eco_sync_dna.add_argument("--dry-run", action="store_true", default=True)
     eco_sync_dna.add_argument("--write", action="store_true", help="Actually write files")
 
     eco_staleness = eco_sub.add_parser(
-        "staleness", help="Staleness report for pillar DNA artifacts",
+        "staleness",
+        help="Staleness report for pillar DNA artifacts",
     )
     eco_staleness.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -1777,7 +1832,8 @@ def build_parser() -> argparse.ArgumentParser:
     net_log.add_argument("project", help="External project identifier")
     net_log.add_argument("--lens", required=True, choices=["technical", "parallel", "kinship"])
     net_log.add_argument(
-        "--action", required=True,
+        "--action",
+        required=True,
         choices=["presence", "contribution", "dialogue", "invitation"],
     )
     net_log.add_argument("--detail", required=True, help="Description of the action")
@@ -1790,7 +1846,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     net_synth = net_sub.add_parser("synthesize", help="Generate narrative testament")
     net_synth.add_argument(
-        "--period", default="monthly", choices=["weekly", "monthly", "all-time"],
+        "--period",
+        default="monthly",
+        choices=["weekly", "monthly", "all-time"],
     )
     net_synth.add_argument("--write", action="store_true", help="Write to testament directory")
 
@@ -1829,7 +1887,8 @@ def build_parser() -> argparse.ArgumentParser:
     trv_essays.add_argument("--write", action="store_true", help="Write catalog to disk")
     trv_essays.add_argument("--output-dir", default=None, help="Output directory")
     trv_essays.add_argument(
-        "--tier", default="analogical",
+        "--tier",
+        default="analogical",
         choices=["formal", "structural", "analogical", "all"],
         help="Minimum tier to include (default: analogical)",
     )
@@ -2187,10 +2246,15 @@ def build_parser() -> argparse.ArgumentParser:
     ont_split = ont_sub.add_parser("split", help="Split one entity into multiple descendants")
     ont_split.add_argument("source", help="Source entity UID to split")
     ont_split.add_argument(
-        "--descendants", nargs="+", required=True, help="Display names for descendant entities",
+        "--descendants",
+        nargs="+",
+        required=True,
+        help="Display names for descendant entities",
     )
     ont_split.add_argument(
-        "--deprecate", action="store_true", help="Deprecate the source entity after split",
+        "--deprecate",
+        action="store_true",
+        help="Deprecate the source entity after split",
     )
     ont_split.add_argument("--json", action="store_true", help="JSON output")
 
@@ -2207,7 +2271,8 @@ def build_parser() -> argparse.ArgumentParser:
     idx_scan.add_argument("--organ", default=None, help="Filter to specific organ")
     idx_scan.add_argument("--json", action="store_true", help="Output JSON")
     idx_scan.add_argument(
-        "--write", action="store_true",
+        "--write",
+        action="store_true",
         help="Write deep-index.json to corpus",
     )
 
@@ -2467,10 +2532,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pulse_temporal.add_argument("--json", action="store_true", help="Output JSON")
     pulse_temporal.add_argument(
-        "--window", type=int, default=7, help="Lookback window for derivatives",
+        "--window",
+        type=int,
+        default=7,
+        help="Lookback window for derivatives",
     )
     pulse_temporal.add_argument(
-        "--limit", type=int, default=50, help="Max history snapshots to read",
+        "--limit",
+        type=int,
+        default=50,
+        help="Max history snapshots to read",
     )
 
     pulse_relations = pulse_sub.add_parser(
@@ -2547,11 +2618,14 @@ def build_parser() -> argparse.ArgumentParser:
     functions_sub = functions.add_subparsers(dest="subcommand")
 
     functions_sub.add_parser("list", help="List all named functions").add_argument(
-        "--json", action="store_true", help="Output JSON",
+        "--json",
+        action="store_true",
+        help="Output JSON",
     )
 
     fn_resolve = functions_sub.add_parser(
-        "resolve", help="Resolve any identifier to a canonical function name",
+        "resolve",
+        help="Resolve any identifier to a canonical function name",
     )
     fn_resolve.add_argument("key", help="Organ key, function name, or display name")
     fn_resolve.add_argument("--json", action="store_true", help="Output JSON")
@@ -2589,11 +2663,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     fossil_chronicle = fossil_sub.add_parser(
-        "chronicle", help="Generate Jungian-voiced epoch narratives",
+        "chronicle",
+        help="Generate Jungian-voiced epoch narratives",
     )
     fossil_chronicle.add_argument("--epoch", default=None, help="Generate for specific epoch ID")
     fossil_chronicle.add_argument(
-        "--regenerate", action="store_true", help="Overwrite existing chronicles",
+        "--regenerate",
+        action="store_true",
+        help="Overwrite existing chronicles",
     )
     fossil_chronicle.add_argument("--write", action="store_true", help="Write chronicle files")
 
@@ -2614,9 +2691,12 @@ def build_parser() -> argparse.ArgumentParser:
     fossil_stratum.add_argument("--json", action="store_true", help="Output JSON")
 
     fossil_intentions = fossil_sub.add_parser(
-        "intentions", help="Browse and extract unique prompt intentions",
+        "intentions",
+        help="Browse and extract unique prompt intentions",
     )
-    fossil_intentions.add_argument("--scan", default=None, help="Directory to scan for session files")
+    fossil_intentions.add_argument(
+        "--scan", default=None, help="Directory to scan for session files"
+    )
     fossil_intentions.add_argument("--write", action="store_true", help="Save extracted intentions")
     fossil_intentions.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -2624,39 +2704,57 @@ def build_parser() -> argparse.ArgumentParser:
     fossil_drift.add_argument("--json", action="store_true", help="Output JSON")
 
     fossil_witness = fossil_sub.add_parser(
-        "witness", help="Real-time capture: install hooks, check status, record commits",
+        "witness",
+        help="Real-time capture: install hooks, check status, record commits",
     )
     fossil_witness_sub = fossil_witness.add_subparsers(dest="witness_subcommand")
 
     fossil_witness_install = fossil_witness_sub.add_parser(
-        "install", help="Install post-commit hooks across workspace (dry-run by default)",
+        "install",
+        help="Install post-commit hooks across workspace (dry-run by default)",
     )
     fossil_witness_install.add_argument(
-        "--workspace", default=None, help="Workspace root directory",
+        "--workspace",
+        default=None,
+        help="Workspace root directory",
     )
     fossil_witness_install.add_argument(
-        "--write", action="store_true", help="Actually install hooks (default is dry-run)",
+        "--write",
+        action="store_true",
+        help="Actually install hooks (default is dry-run)",
     )
 
     fossil_witness_status_p = fossil_witness_sub.add_parser(
-        "status", help="Show witness coverage across repos",
+        "status",
+        help="Show witness coverage across repos",
     )
     fossil_witness_status_p.add_argument(
-        "--workspace", default=None, help="Workspace root directory",
+        "--workspace",
+        default=None,
+        help="Workspace root directory",
     )
     fossil_witness_status_p.add_argument("--json", action="store_true", help="Output JSON")
 
     fossil_witness_record = fossil_witness_sub.add_parser(
-        "record", help="Record a single witnessed commit (called by hook)",
+        "record",
+        help="Record a single witnessed commit (called by hook)",
     )
     fossil_witness_record.add_argument(
-        "--repo-path", dest="repo_path", default=None, help="Path to the git repo",
+        "--repo-path",
+        dest="repo_path",
+        default=None,
+        help="Path to the git repo",
     )
     fossil_witness_record.add_argument(
-        "--workspace", default=None, help="Workspace root directory",
+        "--workspace",
+        default=None,
+        help="Workspace root directory",
     )
     fossil_witness_record.add_argument(
-        "--fossil-path", dest="fossil_path", default=None, help="Path to fossil-record.jsonl",
+        "--fossil-path",
+        dest="fossil_path",
+        default=None,
+        help="Path to fossil-record.jsonl",
     )
 
     # taxonomy — functional classification
@@ -3081,6 +3179,7 @@ def main() -> int:
             cmd_fossil_stratum,
             cmd_fossil_witness,
         )
+
         fossil_dispatch = {
             "excavate": cmd_fossil_excavate,
             "chronicle": cmd_fossil_chronicle,

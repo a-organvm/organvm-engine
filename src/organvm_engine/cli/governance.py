@@ -9,6 +9,9 @@ from organvm_engine.registry.query import find_repo, resolve_entity
 def cmd_governance_audit(args: argparse.Namespace) -> int:
     from organvm_engine.governance.audit import run_audit
 
+    if getattr(args, "signal_closure", False):
+        return cmd_signal_closure(args)
+
     registry = load_registry(args.registry)
     rules_path = args.rules if hasattr(args, "rules") and args.rules else None
 
@@ -22,6 +25,39 @@ def cmd_governance_audit(args: argparse.Namespace) -> int:
     result = run_audit(registry, rules)
     print(result.summary())
     return 0 if result.passed else 1
+
+
+def cmd_signal_closure(args: argparse.Namespace) -> int:
+    """Run signal closure validation (AX-6)."""
+    import json
+    from pathlib import Path
+
+    from organvm_engine.governance.dictums import (
+        DictumReport,
+        check_all_dictums,
+    )
+    from organvm_engine.governance.rules import load_governance_rules
+
+    registry = load_registry(args.registry)
+    rules_path = args.rules if hasattr(args, "rules") and args.rules else None
+    rules = load_governance_rules(rules_path) if rules_path else load_governance_rules()
+
+    workspace = getattr(args, "workspace", None)
+    ws = Path(workspace) if workspace else None
+
+    if ws is None:
+        from organvm_engine.paths import workspace_root
+
+        ws = workspace_root()
+
+    report = check_all_dictums(registry, rules, ws)
+
+    if getattr(args, "json", False):
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(report.summary())
+
+    return 0 if report.all_passed else 1
 
 
 def cmd_governance_authorize(args: argparse.Namespace) -> int:
@@ -163,6 +199,7 @@ def cmd_governance_dictums(args: argparse.Namespace) -> int:
         registry = load_registry(args.registry)
         workspace = getattr(args, "workspace", None)
         from pathlib import Path
+
         ws = Path(workspace) if workspace else None
         report = check_all_dictums(registry, rules, ws)
         if getattr(args, "json", False):
@@ -297,7 +334,8 @@ def cmd_governance_placement(args: argparse.Namespace) -> int:
         for rec in audit.misplaced:
             top = rec.scores[0] if rec.scores else None
             cur = next(
-                (s for s in rec.scores if s.organ == rec.current_organ), None,
+                (s for s in rec.scores if s.organ == rec.current_organ),
+                None,
             )
             cur_score = cur.score if cur else 0
             top_info = f" → best: {top.organ} ({top.score})" if top else ""
@@ -309,7 +347,8 @@ def cmd_governance_placement(args: argparse.Namespace) -> int:
         for rec in audit.questionable:
             top = rec.scores[0] if rec.scores else None
             cur = next(
-                (s for s in rec.scores if s.organ == rec.current_organ), None,
+                (s for s in rec.scores if s.organ == rec.current_organ),
+                None,
             )
             cur_score = cur.score if cur else 0
             top_info = f" → best: {top.organ} ({top.score})" if top else ""
@@ -345,10 +384,7 @@ def cmd_governance_excavate(args: argparse.Namespace) -> int:
     if severity:
         sev_order = {"info": 0, "warning": 1, "critical": 2}
         min_sev = sev_order.get(severity, 0)
-        findings = [
-            f for f in findings
-            if sev_order.get(f.severity, 0) >= min_sev
-        ]
+        findings = [f for f in findings if sev_order.get(f.severity, 0) >= min_sev]
 
     if getattr(args, "json", False):
         out = report.to_dict()
@@ -456,10 +492,12 @@ def cmd_governance_graph_history(args: argparse.Namespace) -> int:
     if at_ts:
         edges = graph.graph_at(at_ts)
         if getattr(args, "json", False):
-            print(json_mod.dumps(
-                {"timestamp": at_ts, "edges": [e.to_dict() for e in edges]},
-                indent=2,
-            ))
+            print(
+                json_mod.dumps(
+                    {"timestamp": at_ts, "edges": [e.to_dict() for e in edges]},
+                    indent=2,
+                )
+            )
         else:
             print(f"Graph at {at_ts}: {len(edges)} active edges")
             print("=" * 60)
@@ -504,9 +542,7 @@ def cmd_governance_graph_history(args: argparse.Namespace) -> int:
         print(f"  Active edges:  {len(active)}")
         print(f"  Removed edges: {removed_count}")
         if graph.edges:
-            timestamps = sorted(set(
-                e.created_at for e in graph.edges
-            ))
+            timestamps = sorted(set(e.created_at for e in graph.edges))
             print(f"  First snapshot: {timestamps[0]}")
             print(f"  Last snapshot:  {timestamps[-1]}")
             print(f"  Snapshots:      {len(timestamps)}")

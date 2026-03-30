@@ -121,22 +121,26 @@ def validate_dag_invariant(registry: dict) -> list[DictumViolation]:
     violations: list[DictumViolation] = []
 
     for _from, _to, from_org, to_org in dep_result.back_edges:
-        violations.append(DictumViolation(
-            dictum_id="AX-1",
-            dictum_name="DAG Invariant",
-            severity="critical",
-            message=f"Back-edge: {_from} → {_to} ({from_org} → {to_org})",
-            organ=from_org,
-            repo=_from.split("/", 1)[-1] if "/" in _from else _from,
-        ))
+        violations.append(
+            DictumViolation(
+                dictum_id="AX-1",
+                dictum_name="DAG Invariant",
+                severity="critical",
+                message=f"Back-edge: {_from} → {_to} ({from_org} → {to_org})",
+                organ=from_org,
+                repo=_from.split("/", 1)[-1] if "/" in _from else _from,
+            )
+        )
 
     for cycle in dep_result.cycles:
-        violations.append(DictumViolation(
-            dictum_id="AX-1",
-            dictum_name="DAG Invariant",
-            severity="critical",
-            message=f"Cycle detected: {' → '.join(cycle)}",
-        ))
+        violations.append(
+            DictumViolation(
+                dictum_id="AX-1",
+                dictum_name="DAG Invariant",
+                severity="critical",
+                message=f"Cycle detected: {' → '.join(cycle)}",
+            )
+        )
 
     return violations
 
@@ -181,17 +185,19 @@ def validate_epistemic_membranes(
 
         seed_path = workspace / org / name / "seed.yaml"
         if not seed_path.exists():
-            violations.append(DictumViolation(
-                dictum_id="AX-2",
-                dictum_name="Epistemic Membranes",
-                severity="critical",
-                message=(
-                    f"Cross-organ dependencies {cross_organ_deps} "
-                    "not declared — no seed.yaml found"
-                ),
-                organ=organ_key,
-                repo=name,
-            ))
+            violations.append(
+                DictumViolation(
+                    dictum_id="AX-2",
+                    dictum_name="Epistemic Membranes",
+                    severity="critical",
+                    message=(
+                        f"Cross-organ dependencies {cross_organ_deps} "
+                        "not declared — no seed.yaml found"
+                    ),
+                    organ=organ_key,
+                    repo=name,
+                )
+            )
             continue
 
         # Check seed.yaml consumes edges cover the cross-organ deps
@@ -215,16 +221,16 @@ def validate_epistemic_membranes(
             dep_org = dep.split("/")[0]
             # Check if the dep org is mentioned in any consumes entry
             if not any(dep_org in s for s in declared_sources):
-                violations.append(DictumViolation(
-                    dictum_id="AX-2",
-                    dictum_name="Epistemic Membranes",
-                    severity="critical",
-                    message=(
-                        f"Dependency on {dep} not declared in seed.yaml consumes"
-                    ),
-                    organ=organ_key,
-                    repo=name,
-                ))
+                violations.append(
+                    DictumViolation(
+                        dictum_id="AX-2",
+                        dictum_name="Epistemic Membranes",
+                        severity="critical",
+                        message=(f"Dependency on {dep} not declared in seed.yaml consumes"),
+                        organ=organ_key,
+                        repo=name,
+                    )
+                )
 
     return violations
 
@@ -262,28 +268,31 @@ def validate_ttl_eviction(
 
         # INCUBATOR 14-day TTL
         if promo_status == "INCUBATOR" and days_ago > 14:
-            violations.append(DictumViolation(
-                dictum_id="AX-3",
-                dictum_name="TTL Eviction",
-                severity="warning",
-                message=(
-                    f"INCUBATOR TTL expired ({days_ago} days, max 14). "
-                    "Graduate or archive."
-                ),
-                organ=organ_key,
-                repo=name,
-            ))
+            violations.append(
+                DictumViolation(
+                    dictum_id="AX-3",
+                    dictum_name="TTL Eviction",
+                    severity="warning",
+                    message=(
+                        f"INCUBATOR TTL expired ({days_ago} days, max 14). Graduate or archive."
+                    ),
+                    organ=organ_key,
+                    repo=name,
+                )
+            )
 
         # General staleness
         if days_ago > stale_days:
-            violations.append(DictumViolation(
-                dictum_id="AX-3",
-                dictum_name="TTL Eviction",
-                severity="warning",
-                message=f"Stale — {days_ago} days since validation (threshold: {stale_days})",
-                organ=organ_key,
-                repo=name,
-            ))
+            violations.append(
+                DictumViolation(
+                    dictum_id="AX-3",
+                    dictum_name="TTL Eviction",
+                    severity="warning",
+                    message=f"Stale — {days_ago} days since validation (threshold: {stale_days})",
+                    organ=organ_key,
+                    repo=name,
+                )
+            )
 
     return violations
 
@@ -302,24 +311,28 @@ def validate_organ_iii_factory(registry: dict) -> list[DictumViolation]:
         name = repo.get("name", "?")
 
         if not repo.get("revenue_model"):
-            violations.append(DictumViolation(
-                dictum_id="OD-III",
-                dictum_name="Ergon Factory Gate",
-                severity="warning",
-                message="Missing revenue_model",
-                organ="ORGAN-III",
-                repo=name,
-            ))
+            violations.append(
+                DictumViolation(
+                    dictum_id="OD-III",
+                    dictum_name="Ergon Factory Gate",
+                    severity="warning",
+                    message="Missing revenue_model",
+                    organ="ORGAN-III",
+                    repo=name,
+                )
+            )
 
         if not repo.get("ci_workflow"):
-            violations.append(DictumViolation(
-                dictum_id="OD-III",
-                dictum_name="Ergon Factory Gate",
-                severity="warning",
-                message="Missing CI workflow",
-                organ="ORGAN-III",
-                repo=name,
-            ))
+            violations.append(
+                DictumViolation(
+                    dictum_id="OD-III",
+                    dictum_name="Ergon Factory Gate",
+                    severity="warning",
+                    message="Missing CI workflow",
+                    organ="ORGAN-III",
+                    repo=name,
+                )
+            )
 
     return violations
 
@@ -343,14 +356,16 @@ def validate_seed_mandate(
         name = repo.get("name", "")
         seed_path = workspace / org / name / "seed.yaml"
         if not seed_path.exists():
-            violations.append(DictumViolation(
-                dictum_id="RR-1",
-                dictum_name="Seed Contract Mandate",
-                severity="warning",
-                message="No seed.yaml found",
-                organ=organ_key,
-                repo=name,
-            ))
+            violations.append(
+                DictumViolation(
+                    dictum_id="RR-1",
+                    dictum_name="Seed Contract Mandate",
+                    severity="warning",
+                    message="No seed.yaml found",
+                    organ=organ_key,
+                    repo=name,
+                )
+            )
 
     return violations
 
@@ -387,14 +402,16 @@ def validate_event_handshake(
         for sub in subs:
             event_type = sub if isinstance(sub, str) else sub.get("event", "")
             if event_type and "." not in event_type:
-                violations.append(DictumViolation(
-                    dictum_id="RR-3",
-                    dictum_name="Event Handshake",
-                    severity="warning",
-                    message=f"Subscription '{event_type}' has no dotted namespace",
-                    organ=organ_key,
-                    repo=name,
-                ))
+                violations.append(
+                    DictumViolation(
+                        dictum_id="RR-3",
+                        dictum_name="Event Handshake",
+                        severity="warning",
+                        message=f"Subscription '{event_type}' has no dotted namespace",
+                        organ=organ_key,
+                        repo=name,
+                    )
+                )
 
     return violations
 
@@ -417,25 +434,29 @@ def validate_registry_coherence(registry: dict) -> list[DictumViolation]:
         name = repo.get("name", "")
 
         if not name:
-            violations.append(DictumViolation(
-                dictum_id="AX-4",
-                dictum_name="Registry Coherence",
-                severity="critical",
-                message="Repo entry with empty name",
-                organ=organ_key,
-            ))
+            violations.append(
+                DictumViolation(
+                    dictum_id="AX-4",
+                    dictum_name="Registry Coherence",
+                    severity="critical",
+                    message="Repo entry with empty name",
+                    organ=organ_key,
+                )
+            )
             continue
 
         key = f"{org}/{name}"
         if key in seen_repos:
-            violations.append(DictumViolation(
-                dictum_id="AX-4",
-                dictum_name="Registry Coherence",
-                severity="critical",
-                message=f"Duplicate repo: also in {seen_repos[key]}",
-                organ=organ_key,
-                repo=name,
-            ))
+            violations.append(
+                DictumViolation(
+                    dictum_id="AX-4",
+                    dictum_name="Registry Coherence",
+                    severity="critical",
+                    message=f"Duplicate repo: also in {seen_repos[key]}",
+                    organ=organ_key,
+                    repo=name,
+                )
+            )
         else:
             seen_repos[key] = organ_key
 
@@ -444,15 +465,15 @@ def validate_registry_coherence(registry: dict) -> list[DictumViolation]:
         declared = organ_data.get("repository_count")
         actual = len(organ_data.get("repositories", []))
         if declared is not None and declared != actual:
-            violations.append(DictumViolation(
-                dictum_id="AX-4",
-                dictum_name="Registry Coherence",
-                severity="warning",
-                message=(
-                    f"repository_count={declared} but actual count={actual}"
-                ),
-                organ=organ_key,
-            ))
+            violations.append(
+                DictumViolation(
+                    dictum_id="AX-4",
+                    dictum_name="Registry Coherence",
+                    severity="warning",
+                    message=(f"repository_count={declared} but actual count={actual}"),
+                    organ=organ_key,
+                )
+            )
 
     return violations
 
@@ -469,14 +490,16 @@ def validate_readme_mandate(registry: dict) -> list[DictumViolation]:
         name = repo.get("name", "?")
         doc_status = repo.get("documentation_status", "")
         if not doc_status or doc_status == "EMPTY":
-            violations.append(DictumViolation(
-                dictum_id="RR-4",
-                dictum_name="README Mandate",
-                severity="warning",
-                message="Missing or empty documentation_status",
-                organ=organ_key,
-                repo=name,
-            ))
+            violations.append(
+                DictumViolation(
+                    dictum_id="RR-4",
+                    dictum_name="README Mandate",
+                    severity="warning",
+                    message="Missing or empty documentation_status",
+                    organ=organ_key,
+                    repo=name,
+                )
+            )
 
     return violations
 
@@ -488,22 +511,28 @@ def validate_promotion_integrity(registry: dict) -> list[DictumViolation]:
     from organvm_engine.registry.query import all_repos
 
     valid_states = {
-        "INCUBATOR", "LOCAL", "CANDIDATE",
-        "PUBLIC_PROCESS", "GRADUATED", "ARCHIVED",
+        "INCUBATOR",
+        "LOCAL",
+        "CANDIDATE",
+        "PUBLIC_PROCESS",
+        "GRADUATED",
+        "ARCHIVED",
     }
 
     for organ_key, repo in all_repos(registry):
         name = repo.get("name", "?")
         status = repo.get("promotion_status", "")
         if status and status not in valid_states:
-            violations.append(DictumViolation(
-                dictum_id="RR-5",
-                dictum_name="Promotion Integrity",
-                severity="warning",
-                message=f"Invalid promotion_status: '{status}'",
-                organ=organ_key,
-                repo=name,
-            ))
+            violations.append(
+                DictumViolation(
+                    dictum_id="RR-5",
+                    dictum_name="Promotion Integrity",
+                    severity="warning",
+                    message=f"Invalid promotion_status: '{status}'",
+                    organ=organ_key,
+                    repo=name,
+                )
+            )
 
     return violations
 
@@ -546,14 +575,16 @@ def validate_logos_write_scope(
 
             for target in targets:
                 if target and "ORGAN-V" not in target and "organvm-v-logos" not in target:
-                    violations.append(DictumViolation(
-                        dictum_id="OD-V",
-                        dictum_name="Logos Write Scope",
-                        severity="warning",
-                        message=f"Produces to external target: {target}",
-                        organ="ORGAN-V",
-                        repo=name,
-                    ))
+                    violations.append(
+                        DictumViolation(
+                            dictum_id="OD-V",
+                            dictum_name="Logos Write Scope",
+                            severity="warning",
+                            message=f"Produces to external target: {target}",
+                            organ="ORGAN-V",
+                            repo=name,
+                        )
+                    )
 
     return violations
 
@@ -592,17 +623,16 @@ def validate_organ_placement(
         # Check: revenue model outside ORGAN-III
         revenue = repo.get("revenue_model")
         if revenue and revenue not in ("none", "internal") and organ_key != "ORGAN-III":
-            violations.append(DictumViolation(
-                dictum_id="AX-5",
-                dictum_name="Organ Placement",
-                severity="warning",
-                message=(
-                    f"Has revenue_model='{revenue}' but is in {organ_key}, "
-                    "not ORGAN-III"
-                ),
-                organ=organ_key,
-                repo=name,
-            ))
+            violations.append(
+                DictumViolation(
+                    dictum_id="AX-5",
+                    dictum_name="Organ Placement",
+                    severity="warning",
+                    message=(f"Has revenue_model='{revenue}' but is in {organ_key}, not ORGAN-III"),
+                    organ=organ_key,
+                    repo=name,
+                )
+            )
 
         # Check: ORGAN-I repos with no consumers may be misplaced
         if organ_key == "ORGAN-I":
@@ -618,19 +648,22 @@ def validate_organ_placement(
                 if deps_pointing_here:
                     break
             if not deps_pointing_here and repo.get("promotion_status") not in (
-                "LOCAL", "INCUBATOR",
+                "LOCAL",
+                "INCUBATOR",
             ):
-                violations.append(DictumViolation(
-                    dictum_id="AX-5",
-                    dictum_name="Organ Placement",
-                    severity="warning",
-                    message=(
-                        "ORGAN-I repo with no cross-organ consumers — "
-                        "may not be producing theory consumed by other organs"
-                    ),
-                    organ=organ_key,
-                    repo=name,
-                ))
+                violations.append(
+                    DictumViolation(
+                        dictum_id="AX-5",
+                        dictum_name="Organ Placement",
+                        severity="warning",
+                        message=(
+                            "ORGAN-I repo with no cross-organ consumers — "
+                            "may not be producing theory consumed by other organs"
+                        ),
+                        organ=organ_key,
+                        repo=name,
+                    )
+                )
 
     return violations
 
@@ -664,17 +697,171 @@ def validate_kerygma_consumer(
 
         produces = seed.get("produces", []) or []
         if produces:
-            violations.append(DictumViolation(
-                dictum_id="OD-VII",
-                dictum_name="Kerygma Consumer",
-                severity="warning",
-                message=(
-                    f"Has {len(produces)} produces edge(s) — "
-                    "ORGAN-VII should be a pure consumer"
-                ),
-                organ="ORGAN-VII",
-                repo=name,
-            ))
+            violations.append(
+                DictumViolation(
+                    dictum_id="OD-VII",
+                    dictum_name="Kerygma Consumer",
+                    severity="warning",
+                    message=(
+                        f"Has {len(produces)} produces edge(s) — "
+                        "ORGAN-VII should be a pure consumer"
+                    ),
+                    organ="ORGAN-VII",
+                    repo=name,
+                )
+            )
+
+    return violations
+
+
+def get_entailment_flows(rules: dict) -> list[dict]:
+    """Extract entailment_flows.organ_entailments from governance rules."""
+    return rules.get("entailment_flows", {}).get("organ_entailments", [])
+
+
+def _extract_organ_from_produces_entry(entry: str) -> str | None:
+    """Extract target organ from a produces entry.
+
+    Handles formats like:
+    - "ORGAN-V"
+    - "organvm-v-logos/some-repo"
+    - "organvm-v-logos"
+    """
+    entry = entry.strip()
+
+    if entry.startswith("ORGAN-"):
+        return entry
+
+    if "/" in entry:
+        org_part = entry.split("/")[0]
+    else:
+        org_part = entry
+
+    if not org_part.startswith("organvm-"):
+        return None
+
+    suffix = org_part.replace("organvm-", "", 1).lower()
+
+    organ_mapping = {
+        "vii": "ORGAN-VII",
+        "vi": "ORGAN-VI",
+        "v": "ORGAN-V",
+        "iv": "ORGAN-IV",
+        "iii": "ORGAN-III",
+        "ii": "ORGAN-II",
+        "i": "ORGAN-I",
+    }
+
+    for key, value in organ_mapping.items():
+        if suffix.startswith(key):
+            rest = suffix[len(key) :]
+            if not rest or not rest[0].isalpha():
+                return value
+
+    return None
+
+    return None
+
+
+def validate_signal_closure(
+    registry: dict,
+    rules: dict,
+    workspace: Path | None = None,
+) -> list[DictumViolation]:
+    """AX-6: Validate signal closure - all entailed targets have produces edges.
+
+    For each organ with active repos (non-ARCHIVED), check that all entailed
+    target organs per the entailment matrix have at least one seed.yaml
+    produces edge pointing at them.
+    """
+    violations: list[DictumViolation] = []
+
+    if workspace is None:
+        return violations
+
+    from organvm_engine.registry.query import all_repos
+    from organvm_engine.seed.reader import read_seed
+
+    entailments = get_entailment_flows(rules)
+    if not entailments:
+        return violations
+
+    active_organs: set[str] = set()
+    for organ_key, repo in all_repos(registry):
+        if repo.get("implementation_status") != "ARCHIVED":
+            active_organs.add(organ_key)
+
+    for ent in entailments:
+        source_organ = ent.get("source", "")
+        if source_organ not in active_organs:
+            continue
+
+        entailed_targets = ent.get("entails", [])
+        if not entailed_targets:
+            continue
+
+        target_organs: set[str] = set()
+        for t in entailed_targets:
+            target = t.get("target", "")
+            if target:
+                target_organs.add(target)
+
+        if not target_organs:
+            continue
+
+        source_repos = registry.get("organs", {}).get(source_organ, {}).get("repositories", [])
+        active_source_repos = [
+            r
+            for r in source_repos
+            if r.get("implementation_status") != "ARCHIVED" and r.get("name")
+        ]
+
+        produces_targets: set[str] = set()
+        for repo in active_source_repos:
+            org = repo.get("org", "")
+            name = repo.get("name", "")
+            if not org or not name:
+                continue
+            seed_path = workspace / org / name / "seed.yaml"
+            if not seed_path.exists():
+                continue
+
+            try:
+                seed = read_seed(seed_path)
+            except Exception:
+                continue
+
+            produces = seed.get("produces", []) or []
+            for entry in produces:
+                if isinstance(entry, str):
+                    target_organ = _extract_organ_from_produces_entry(entry)
+                    if target_organ:
+                        produces_targets.add(target_organ)
+                elif isinstance(entry, dict):
+                    targets = entry.get("targets", [])
+                    for t in targets:
+                        target_organ = _extract_organ_from_produces_entry(t)
+                        if target_organ:
+                            produces_targets.add(target_organ)
+
+        missing_targets = target_organs - produces_targets
+        for missing in missing_targets:
+            signal = next(
+                (t.get("signal", "") for t in entailed_targets if t.get("target") == missing),
+                "unknown",
+            )
+            violations.append(
+                DictumViolation(
+                    dictum_id="AX-6",
+                    dictum_name="Signal Closure",
+                    severity="critical",
+                    message=(
+                        f"Missing produces edge to {missing} (signal: {signal}) "
+                        f"required by {source_organ} activity"
+                    ),
+                    organ=source_organ,
+                )
+            )
 
     return violations
 
@@ -695,6 +882,7 @@ _VALIDATORS: dict[str, typing.Callable[..., list]] = {
     "validate_logos_write_scope": lambda reg, rules, ws: validate_logos_write_scope(reg, ws),
     "validate_kerygma_consumer": lambda reg, rules, ws: validate_kerygma_consumer(reg, ws),
     "validate_organ_placement": lambda reg, rules, ws: validate_organ_placement(reg, ws),
+    "validate_signal_closure": lambda reg, rules, ws: validate_signal_closure(reg, rules, ws),
 }
 
 
@@ -709,6 +897,7 @@ def check_all_dictums(
     """
     if rules is None:
         from organvm_engine.governance.rules import load_governance_rules
+
         rules = load_governance_rules()
 
     report = DictumReport()
