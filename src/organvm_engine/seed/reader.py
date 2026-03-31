@@ -43,6 +43,14 @@ def get_subscriptions(seed: dict) -> list[dict]:
     return seed.get("subscriptions", []) or []
 
 
+def get_breathing_paths(seed: dict, cadence: str | None = None) -> list[str]:
+    """Extract breathing file paths from a seed, optionally filtered by cadence."""
+    entries = seed.get("breathing", []) or []
+    if cadence:
+        entries = [e for e in entries if e.get("cadence") == cadence]
+    return [e["path"] for e in entries if "path" in e]
+
+
 def seed_identity(seed: dict) -> str:
     """Get org/repo identity string from a seed."""
     org = seed.get("org", "unknown")
