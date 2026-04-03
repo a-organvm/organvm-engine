@@ -144,7 +144,7 @@ All pipeline outputs go to `corpus_dir/data/atoms/` with a `pipeline-manifest.js
 ### Governance
 - *Standard ORGANVM governance applies*
 
-*Last synced: 2026-04-02T17:06:50Z*
+*Last synced: 2026-04-03T15:19:55Z*
 
 ## Session Review Protocol
 
@@ -226,6 +226,7 @@ Transcripts are on-demand (never committed):
 | unknown | any | ira-grade-norming | SOP: Diagnostic Inter-Rater Agreement (IRA) Grade Norming |
 | unknown | any | ira-grade-norming | ira-grade-norming |
 | unknown | any | pitch-deck-rollout | SOP: Pitch Deck Generation & Rollout |
+| unknown | any | SOP-GENESIS-TEMPLATE | SOP: Genesis Template (SPEC-023) |
 | unknown | any | SOP-TRIADIC-REVIEW-PROTOCOL | Triadic Review Protocol (TRP) |
 
 Linked skills: cicd-resilience-and-recovery, continuous-learning-agent, cross-agent-handoff, evaluation-to-growth, genesis-dna, multi-agent-workforce-planner, promotion-and-state-transitions, quality-gate-baseline-calibration, repo-onboarding-and-habitat-creation, session-self-critique, structural-integrity-audit
@@ -271,9 +272,9 @@ Run: `organvm atoms pipeline --write && organvm atoms fanout --write`
 
 ## System Density (auto-generated)
 
-AMMOI: 56% | Edges: 41 | Tensions: 0 | Clusters: 0 | Adv: 11 | Events(24h): 26946
+AMMOI: 56% | Edges: 41 | Tensions: 0 | Clusters: 0 | Adv: 12 | Events(24h): 27428
 Structure: 8 organs / 128 repos / 1654 components (depth 17) | Inference: 0% | Organs: META-ORGANVM:64%, ORGAN-I:55%, ORGAN-II:47%, ORGAN-III:55% +4 more
-Last pulse: 2026-04-02T17:06:50 | Δ24h: -0.0% | Δ7d: n/a
+Last pulse: 2026-04-03T15:19:54 | Δ24h: -0.0% | Δ7d: n/a
 
 
 ## Dialect Identity (Trivium)
@@ -305,6 +306,15 @@ Nature demands a documentation counterpart. This formation maintains its narrati
 *Compliance: Nature and Counterpart are in balance.*
 
 <!-- ORGANVM:AUTO:END -->
+
+## Active Handoff Protocol
+
+If `.conductor/active-handoff.md` exists, **READ IT FIRST** before doing any work.
+It contains constraints, locked files, conventions, and completed work from the
+originating agent. You MUST honor all constraints listed there.
+
+If the handoff says "CROSS-VERIFICATION REQUIRED", your self-assessment will
+NOT be trusted. A different agent will verify your output against these constraints.
 
 ## Active Handoff Protocol
 
