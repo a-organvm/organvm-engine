@@ -154,6 +154,17 @@ Transcripts are on-demand (never committed):
 - `organvm session prompts <id>` — human prompts only
 """
 
+# ── System library (injected into repo-level context) ─────────────
+
+SYSTEM_LIBRARY_SECTION = """\
+
+## System Library
+
+Plans: {plans_count} indexed | Chains: {chains_count} available | SOPs: {sops_count} active
+Discover: `organvm plans search <query>` | `organvm chains list` | `organvm sop lifecycle`
+Library: `{library_path}`
+"""
+
 # ── Plan context (injected into repo-level context) ───────────────
 
 PLAN_CONTEXT_SECTION = """\

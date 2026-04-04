@@ -40,6 +40,7 @@ class TestGenerator:
         seed = {"repo": "repo-a", "produces": [{"target": "repo-b", "artifact": "docs"}]}
         section = generate_repo_section("repo-a", "organvm-i-theoria", mock_registry, seed)
         assert "## System Context" in section
+        assert "## System Library" in section
         assert "**Organ:** ORGAN-I" in section
         assert "Produces" in section
         assert "repo-b" in section

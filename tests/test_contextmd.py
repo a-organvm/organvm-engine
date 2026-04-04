@@ -94,6 +94,13 @@ class TestGenerateRepoSection:
         assert "Produces" in section
         assert "Consumes" in section
 
+    def test_includes_system_library(self, registry):
+        section = generate_repo_section("recursive-engine", "organvm-i-theoria", registry)
+        assert "## System Library" in section
+        assert "organvm plans search <query>" in section
+        assert "organvm chains list" in section
+        assert "organvm sop lifecycle" in section
+
 
 class TestGenerateOrganSection:
     def test_generates_valid_organ_section(self, registry):
@@ -101,6 +108,7 @@ class TestGenerateOrganSection:
         assert AUTO_START in section
         assert "Theory" in section
         assert "recursive-engine" in section
+        assert "## System Library" in section
 
     def test_returns_error_for_missing_organ(self, registry):
         section = generate_organ_section("ORGAN-IX", registry)
@@ -113,6 +121,7 @@ class TestGenerateWorkspaceSection:
         assert AUTO_START in section
         assert "repos" in section
         assert "organs" in section
+        assert "## System Library" in section
 
     def test_seed_coverage_reflects_count(self, registry):
         section = generate_workspace_section(registry, seeds=[{}, {}])

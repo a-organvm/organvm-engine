@@ -9,6 +9,7 @@ for auto-generated sections at each level (repo, organ, workspace).
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -28,6 +29,7 @@ from organvm_engine.contextmd.templates import (
     REPO_SECTION,
     SESSION_REVIEW_SECTION,
     SOP_DIRECTIVES_SECTION,
+    SYSTEM_LIBRARY_SECTION,
     TRIVIUM_SECTION,
     VARIABLE_STATUS_SECTION,
     WORKSPACE_SECTION,
@@ -114,6 +116,7 @@ def generate_repo_section(
     end_marker = "<!-- ORGANVM:AUTO:END -->"
     if end_marker in section:
         # Build plan context if plan_index is provided
+        system_library_section = _build_system_library_context()
         plan_section = _build_plan_context(repo_name, organ_key, plan_index)
         atoms_section = _build_atoms_context(repo_name, organ_key)
         sop_section = _build_sop_directives(sop_entries)
@@ -122,6 +125,8 @@ def generate_repo_section(
         network_section = _build_network_context(repo_name, organ_key)
         ontologia_section = _build_ontologia_context(repo_name)
         injected = SESSION_REVIEW_SECTION
+        if system_library_section:
+            injected += "\n" + system_library_section
         if sop_section:
             injected += "\n" + sop_section
         if prompting_hint:
@@ -265,7 +270,7 @@ def generate_organ_section(
         dist[s] = dist.get(s, 0) + 1
     promotion_block = ", ".join(f"{k}: {v}" for k, v in sorted(dist.items()))
 
-    return ORGAN_SECTION.format(
+    section = ORGAN_SECTION.format(
         organ_key=organ_key,
         organ_name=organ_data.get("name", organ_key),
         repo_count=len(repos),
@@ -277,6 +282,11 @@ def generate_organ_section(
         promotion_block=promotion_block,
         timestamp=_timestamp(),
     )
+    end_marker = "<!-- ORGANVM:AUTO:END -->"
+    system_library_section = _build_system_library_context()
+    if system_library_section and end_marker in section:
+        section = section.replace(end_marker, system_library_section + "\n" + end_marker)
+    return section
 
 
 def generate_workspace_section(
@@ -304,7 +314,7 @@ def generate_workspace_section(
 
     omega_met, omega_total = _read_omega_counts()
 
-    return WORKSPACE_SECTION.format(
+    section = WORKSPACE_SECTION.format(
         total_repos=total_repos,
         organ_count=len(organs),
         organ_table_rows="\n".join(rows),
@@ -314,6 +324,11 @@ def generate_workspace_section(
         omega_total=omega_total,
         timestamp=_timestamp(),
     )
+    end_marker = "<!-- ORGANVM:AUTO:END -->"
+    system_library_section = _build_system_library_context()
+    if system_library_section and end_marker in section:
+        section = section.replace(end_marker, system_library_section + "\n" + end_marker)
+    return section
 
 
 def _build_sop_directives(sop_entries: list | None) -> str:
@@ -403,6 +418,72 @@ def _build_plan_context(
     return PLAN_CONTEXT_SECTION.format(
         plan_list=plan_list,
         related_plans=related_plans,
+    )
+
+
+@lru_cache(maxsize=1)
+def _system_library_stats() -> tuple[str, str, str, str]:
+    """Return cached counts and path for the system library."""
+    import re
+
+    from organvm_engine.paths import corpus_dir, workspace_root
+
+    plan_count = "unknown"
+    chain_count = "unknown"
+    sop_count = "unknown"
+    library_path = "meta-organvm/praxis-perpetua/library/"
+
+    try:
+        ws = workspace_root()
+        library_root = corpus_dir().parent / "praxis-perpetua" / "library"
+    except Exception:
+        return plan_count, chain_count, sop_count, library_path
+
+    try:
+        library_path = f"{library_root.relative_to(ws).as_posix()}/"
+    except ValueError:
+        library_path = str(library_root)
+
+    if not library_root.exists():
+        return plan_count, chain_count, sop_count, library_path
+
+    chains_dir = library_root / "chains"
+    if chains_dir.is_dir():
+        chain_count = str(len(list(chains_dir.glob("*.yaml"))))
+
+    plans_index = library_root / "plans" / "INDEX.md"
+    if plans_index.is_file():
+        text = plans_index.read_text(encoding="utf-8", errors="replace")
+        match = re.search(r"\*\*Plan files discovered:\*\*\s*(\d+)", text)
+        if match:
+            plan_count = match.group(1)
+
+    if plan_count == "unknown":
+        try:
+            from organvm_engine.session.plans import discover_plans
+
+            plan_count = str(len(discover_plans(workspace=ws)))
+        except Exception:
+            pass
+
+    try:
+        from organvm_engine.sop.discover import discover_sops
+
+        sop_count = str(len(discover_sops(workspace=ws)))
+    except Exception:
+        pass
+
+    return plan_count, chain_count, sop_count, library_path
+
+
+def _build_system_library_context() -> str:
+    """Build the system library discovery section for repo context files."""
+    plans_count, chains_count, sops_count, library_path = _system_library_stats()
+    return SYSTEM_LIBRARY_SECTION.format(
+        plans_count=plans_count,
+        chains_count=chains_count,
+        sops_count=sops_count,
+        library_path=library_path,
     )
 
 
