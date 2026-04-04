@@ -234,6 +234,7 @@ def sync_repo(
 
 def _inject_section(file_path: Path, new_section: str, dry_run: bool = False) -> str:
     """Inject or replace the auto-generated section in a markdown file."""
+    import re
     if not file_path.exists():
         if not dry_run:
             file_path.write_text(new_section + "\n")
@@ -241,11 +242,21 @@ def _inject_section(file_path: Path, new_section: str, dry_run: bool = False) ->
 
     content = file_path.read_text()
 
-    if AUTO_START in content and AUTO_END in content:
-        # Replace existing section
-        import re
+    # Pre-emptive strike: remove redundant handoff blocks that were previously stacked
+    # outside the auto-managed block. This heals files from the non-idempotent bug.
+    # We remove ALL instances from the existing content; the new sync will re-inject
+    # exactly one instance inside the AUTO markers.
+    # We stop before the next header, the AUTO_END marker, or end of string.
+    handoff_pattern = r"\n+## Active Handoff Protocol.*?(?=\n+##|" + re.escape(AUTO_END) + r"|$)"
+    content = re.sub(handoff_pattern, "", content, flags=re.DOTALL)
 
-        pattern = re.escape(AUTO_START) + r".*?" + re.escape(AUTO_END)
+    # Clean up any trailing whitespace left by the removal
+    content = content.strip()
+
+    if AUTO_START in content and AUTO_END in content:
+        # Replace existing section. Using greedy match '.*' instead of '.*?' to ensure
+        # that if multiple START/END blocks exist, the entire range is collapsed.
+        pattern = re.escape(AUTO_START) + r".*" + re.escape(AUTO_END)
         new_content = re.sub(pattern, new_section, content, flags=re.DOTALL)
         if new_content == content:
             return "unchanged"
