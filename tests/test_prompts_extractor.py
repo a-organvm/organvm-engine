@@ -129,16 +129,18 @@ class TestExtractGemini:
             "startTime": "2026-03-01T10:00:00Z",
             "messages": [
                 {
-                    "role": "user",
-                    "parts": [{"text": "implement the feature for me"}],
+                    "type": "user",
+                    "timestamp": "2026-03-01T10:01:00Z",
+                    "content": [{"text": "implement the feature for me"}],
                 },
                 {
-                    "role": "model",
-                    "parts": [{"text": "Working on it..."}],
+                    "type": "gemini",
+                    "content": [{"text": "Working on it..."}],
                 },
                 {
-                    "role": "user",
-                    "parts": [{"text": "add tests for it too"}],
+                    "type": "user",
+                    "timestamp": "2026-03-01T10:05:00Z",
+                    "content": [{"text": "add tests for it too"}],
                 },
             ],
         }
@@ -150,14 +152,50 @@ class TestExtractGemini:
         assert prompts is not None
         assert len(prompts) == 2
         assert prompts[0].text == "implement the feature for me"
-        assert prompts[0].timestamp == "2026-03-01T10:00:00Z"
+        assert prompts[0].timestamp == "2026-03-01T10:01:00Z"
+        assert prompts[1].text == "add tests for it too"
+        assert prompts[1].timestamp == "2026-03-01T10:05:00Z"
         assert prompts[1].index == 1
+
+    def test_falls_back_to_session_timestamp(self, tmp_path):
+        session_file = tmp_path / "session.json"
+        data = {
+            "startTime": "2026-03-01T10:00:00Z",
+            "messages": [
+                {
+                    "type": "user",
+                    "content": [{"text": "no per-message timestamp here"}],
+                },
+            ],
+        }
+        session_file.write_text(json.dumps(data))
+
+        session = _make_session(session_file, "gemini")
+        prompts = extract_prompts(session)
+        assert len(prompts) == 1
+        assert prompts[0].timestamp == "2026-03-01T10:00:00Z"
+
+    def test_skips_non_user_types(self, tmp_path):
+        session_file = tmp_path / "session.json"
+        data = {
+            "startTime": "2026-03-01T10:00:00Z",
+            "messages": [
+                {"type": "info", "content": "MCP issues detected."},
+                {"type": "error", "content": "Server name required."},
+                {"type": "gemini", "content": [{"text": "assistant response text here"}]},
+            ],
+        }
+        session_file.write_text(json.dumps(data))
+
+        session = _make_session(session_file, "gemini")
+        prompts = extract_prompts(session)
+        assert prompts == []
 
     def test_skips_short_text(self, tmp_path):
         session_file = tmp_path / "session.json"
         data = {
             "startTime": "2026-03-01T10:00:00Z",
-            "messages": [{"role": "user", "parts": [{"text": "yes"}]}],
+            "messages": [{"type": "user", "content": [{"text": "yes"}]}],
         }
         session_file.write_text(json.dumps(data))
 

@@ -68,7 +68,7 @@ def _extract_claude(path: Path) -> list[RawPrompt]:
 
 
 def _extract_gemini(path: Path) -> list[RawPrompt]:
-    """Extract prompts from Gemini JSON (session-level timestamps only)."""
+    """Extract prompts from Gemini JSON with per-message timestamps."""
     prompts: list[RawPrompt] = []
 
     with path.open(encoding="utf-8") as f:
@@ -78,16 +78,17 @@ def _extract_gemini(path: Path) -> list[RawPrompt]:
     index = 0
 
     for msg in data.get("messages", []):
-        if msg.get("role") != "user":
+        if msg.get("type") != "user":
             continue
-        parts = msg.get("parts", [])
+        timestamp = msg.get("timestamp") or session_ts
+        parts = msg.get("content", [])
         for part in parts:
             if isinstance(part, dict) and part.get("text"):
                 text = part["text"].strip()
                 if len(text) > 5:
                     prompts.append(RawPrompt(
                         text=text,
-                        timestamp=session_ts,
+                        timestamp=timestamp,
                         index=index,
                     ))
                     index += 1
