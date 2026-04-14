@@ -204,11 +204,13 @@ class OmegaScorecard:
 
 # Criteria that are known to be MET from the roadmap (with evidence)
 _KNOWN_MET = {
+    1: ("30-day soak test passes", "32/30 days, 0 incidents, passed 2026-03-18"),
     5: ("≥1 application submitted", "Doris Duke / Mozilla AMT, submitted 2026-02-24"),
     6: ("AI-conductor essay published", "public-process essay #9, 2026-02-12"),
     8: ("≥1 ORGAN-III product live", "12 products live across Netlify/Render, 2026-02-28"),
     13: ("≥1 organic inbound link", "LobeHub organic indexing of ORGAN-IV skills, 2026-02-28"),
     15: ("Portfolio updated with validation", "validation page at 4444j99.github.io/portfolio/validation/, 2026-03-19"),
+    17: ("System operates 30+ days autonomously", "58+ days autonomous as of 2026-04-14, passed 2026-03-18"),
 }
 
 
