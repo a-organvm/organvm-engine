@@ -18,6 +18,11 @@ from organvm_engine.fabrica.models import (  # noqa: F401
     RelayPacket,
     RelayPhase,
 )
+from organvm_engine.fabrica.router import (  # noqa: F401
+    DEFAULT_ROUTING_TABLE,
+    RoutingRule,
+    route_task,
+)
 from organvm_engine.fabrica.state import (  # noqa: F401
     PHASE_TRANSITIONS,
     valid_transition,
@@ -25,11 +30,14 @@ from organvm_engine.fabrica.state import (  # noqa: F401
 
 __all__ = [
     "ApproachVector",
+    "DEFAULT_ROUTING_TABLE",
     "DispatchRecord",
     "DispatchStatus",
     "RelayIntent",
     "RelayPacket",
     "RelayPhase",
+    "RoutingRule",
     "PHASE_TRANSITIONS",
+    "route_task",
     "valid_transition",
 ]
