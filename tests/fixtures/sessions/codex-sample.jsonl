@@ -1,0 +1,5 @@
+{"type": "session_meta", "timestamp": "2026-04-10T16:00:00Z", "payload": {"instructions": "Implement the caching layer for the query optimizer with TTL support", "timestamp": "2026-04-10T16:00:00Z"}}
+{"type": "response_item", "payload": {"text": "Starting implementation of the caching layer..."}}
+{"type": "tool_call", "payload": {"name": "write_file", "args": {"path": "src/cache.py"}}}
+{"type": "session_meta", "timestamp": "2026-04-10T16:15:00Z", "payload": {"instructions": "Add LRU eviction policy with configurable max entries", "timestamp": "2026-04-10T16:15:00Z"}}
+{"type": "response_item", "payload": {"text": "Adding LRU eviction..."}}

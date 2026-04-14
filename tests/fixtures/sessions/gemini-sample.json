@@ -1,0 +1,34 @@
+{
+  "startTime": "2026-04-10T14:00:00Z",
+  "messages": [
+    {
+      "type": "user",
+      "timestamp": "2026-04-10T14:01:00Z",
+      "content": [{"text": "Refactor the authentication middleware to support JWT rotation"}]
+    },
+    {
+      "type": "gemini",
+      "timestamp": "2026-04-10T14:02:00Z",
+      "content": [{"text": "I will restructure the middleware to handle token rotation..."}]
+    },
+    {
+      "type": "user",
+      "timestamp": "2026-04-10T14:05:00Z",
+      "content": [{"text": "Add a fallback for expired refresh tokens"}]
+    },
+    {
+      "type": "user",
+      "timestamp": "2026-04-10T14:08:00Z",
+      "content": [{"text": "yes"}]
+    },
+    {
+      "type": "gemini",
+      "timestamp": "2026-04-10T14:09:00Z",
+      "content": [{"text": "Updated the fallback logic..."}]
+    },
+    {
+      "type": "user",
+      "content": [{"text": "Now run the test suite and check for regressions"}]
+    }
+  ]
+}

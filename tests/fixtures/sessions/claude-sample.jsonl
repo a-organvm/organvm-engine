@@ -1,0 +1,7 @@
+{"type": "user", "timestamp": "2026-04-10T09:00:00Z", "message": {"content": "Create a data model for the inventory tracking module"}}
+{"type": "assistant", "timestamp": "2026-04-10T09:01:00Z", "message": {"content": "I will design the data model with three core entities..."}}
+{"type": "user", "timestamp": "2026-04-10T09:05:00Z", "message": {"content": [{"type": "text", "text": "Add validation constraints to the quantity field"}]}}
+{"type": "system", "timestamp": "2026-04-10T09:00:00Z", "message": {"content": "Session initialized with project context"}}
+{"type": "user", "timestamp": "2026-04-10T09:10:00Z", "message": {"content": "ok"}}
+{"type": "user", "timestamp": "2026-04-10T09:12:00Z", "message": {"content": "Write integration tests covering the edge cases for negative stock levels"}}
+{"type": "assistant", "timestamp": "2026-04-10T09:13:00Z", "message": {"content": "Here are the integration tests..."}}
