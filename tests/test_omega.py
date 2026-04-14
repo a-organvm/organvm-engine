@@ -65,6 +65,7 @@ def soak_dir_with_incident(tmp_path):
             "validation": {
                 "registry_pass": validation_pass,
                 "dependency_pass": True,
+                **({"registry_issues": ["repo-x: duplicate entry"]} if not validation_pass else {}),
             },
             "ci": {"total_checked": 77, "passing": 50, "failing": 25},
         }
@@ -221,8 +222,8 @@ class TestEvaluate:
 
     def test_met_count(self, registry, soak_dir):
         scorecard = evaluate(registry=registry, soak_dir=soak_dir)
-        # #5 (submitted), #6 (essay), #8 (products live), #13 (inbound link), #15 (portfolio validation) are MET
-        assert scorecard.met_count == 5
+        # #5, #6, #8, #13, #15 from _KNOWN_MET + #19 (network testament auto-eval)
+        assert scorecard.met_count == 6
 
     def test_summary_output(self, registry, soak_dir):
         scorecard = evaluate(registry=registry, soak_dir=soak_dir)

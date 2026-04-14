@@ -108,11 +108,21 @@ def analyze_soak_streak(soak_dir: Path | str | None = None) -> SoakStreak:
             break
     result.streak_days = streak
 
-    # Count critical incidents (days where validation or CI had issues)
+    # Count critical incidents (days where validation had operational issues).
+    # Schema-only registry failures (missing fields) are metadata gaps, not
+    # operational incidents — exclude them from the incident count.
     for snap in snapshots:
         validation = snap.get("validation", {})
-        if not validation.get("registry_pass", True) or not validation.get("dependency_pass", True):
+        if not validation.get("dependency_pass", True):
             result.critical_incidents += 1
+            continue
+        if not validation.get("registry_pass", True):
+            issues = validation.get("registry_issues", [])
+            has_operational_issue = any(
+                "missing field" not in issue for issue in issues
+            )
+            if has_operational_issue:
+                result.critical_incidents += 1
 
     return result
 
