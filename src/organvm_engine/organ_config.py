@@ -52,10 +52,11 @@ FALLBACK_ORGAN_MAP: dict[str, dict[str, str]] = {
         "org": "organvm-vii-kerygma",
     },
     "META": {"dir": "meta-organvm", "registry_key": "META-ORGANVM", "org": "meta-organvm"},
-    # LIMINAL/PERSONAL (4444J99/) is a workspace convention, not a tracked organ.
-    # It exists in the workspace as ~/Workspace/4444J99/ but is outside the
-    # organ system — no registry entry, no governance, no seed contracts.
+    # LIMINAL/PERSONAL (4444J99/) is the personal workspace namespace.
     "LIMINAL": {"dir": "4444J99", "registry_key": "PERSONAL", "org": "4444j99"},
+    # sigma-E (system-system--system) is the formal adjudicatory layer.
+    # Lives within 4444J99/ but has sovereign governance status.
+    "SIGMA_E": {"dir": "4444J99", "registry_key": "SIGMA-E", "org": "4444j99"},
 }
 
 # Backward-compatible alias — existing code imports ORGANS directly

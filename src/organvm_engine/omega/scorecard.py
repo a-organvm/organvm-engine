@@ -302,6 +302,45 @@ def _check_network_testament(
     return result
 
 
+def _assess_formal_validation(workspace_root: Path | str | None = None) -> str:
+    """Check sigma-E formal validation completeness (#20)."""
+    try:
+        ws = Path(workspace_root) if workspace_root else Path.home() / "Workspace"
+        sigma_path = ws / "4444J99" / "system-system--system" / "derivations"
+        if not sigma_path.is_dir():
+            return "NOT_MET"
+        total = sum(1 for _ in sigma_path.glob("*.md"))
+        if total == 0:
+            return "NOT_MET"
+        formal = sum(
+            1 for md in sigma_path.glob("*.md")
+            if "FORMAL" in md.read_text(encoding="utf-8", errors="ignore")[:2000]
+        )
+        ratio = formal / total
+        if ratio >= 0.8:
+            return "MET"
+        return "IN_PROGRESS" if ratio >= 0.2 else "NOT_MET"
+    except Exception:
+        return "NOT_MET"
+
+
+def _format_formal_value(workspace_root: Path | str | None = None) -> str:
+    """Format sigma-E formal validation value string."""
+    try:
+        ws = Path(workspace_root) if workspace_root else Path.home() / "Workspace"
+        sigma_path = ws / "4444J99" / "system-system--system" / "derivations"
+        if not sigma_path.is_dir():
+            return "sigma-E not found"
+        total = sum(1 for _ in sigma_path.glob("*.md"))
+        formal = sum(
+            1 for md in sigma_path.glob("*.md")
+            if "FORMAL" in md.read_text(encoding="utf-8", errors="ignore")[:2000]
+        )
+        return f"{formal}/{total} derivations at FORMAL level ({formal/total*100:.0f}%)" if total else "0 derivations"
+    except Exception:
+        return "assessment error"
+
+
 def evaluate(
     registry: dict | None = None,
     soak_dir: Path | str | None = None,
@@ -521,6 +560,17 @@ def evaluate(
             ),
             evidence="Network testament tracks external mirror coverage, "
             "engagement velocity, and accumulated milestones.",
+        ),
+        OmegaCriterion(
+            id=20,
+            name="Formal validation (sigma-E derivations at FORMAL level)",
+            horizon="H3",
+            measurement="≥80% derivations at FORMAL formalization level in sigma-E",
+            auto=True,
+            status=_assess_formal_validation(workspace_root),
+            value=_format_formal_value(workspace_root),
+            evidence="sigma-E formal adjudicatory layer validates system integrity "
+            "(SPEC-025 Predicate 7 IMMUTABILITY).",
         ),
     ]
 
