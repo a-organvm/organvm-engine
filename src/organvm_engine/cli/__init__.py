@@ -580,6 +580,62 @@ def build_parser() -> argparse.ArgumentParser:
     val = dis_sub.add_parser("validate", help="Validate a dispatch payload")
     val.add_argument("file", help="Path to dispatch payload JSON")
 
+    # fabrica — Cyclic Dispatch Protocol (SPEC-024)
+    fab = sub.add_parser(
+        "fabrica",
+        help="Cyclic Dispatch Protocol — RELEASE → CATCH → HANDOFF → FORTIFY",
+    )
+    fab_sub = fab.add_subparsers(dest="subcommand")
+
+    fab_release = fab_sub.add_parser("release", help="Create a RelayPacket (enter RELEASE phase)")
+    fab_release.add_argument("--text", required=True, help="Raw intention text")
+    fab_release.add_argument("--source", default="cli", help="Source channel (cli|mcp|dashboard)")
+    fab_release.add_argument("--organ", default=None, help="Organ hint")
+    fab_release.add_argument("--tags", default=None, help="Comma-separated tags")
+    fab_release.add_argument("--json", action="store_true", help="Output JSON")
+
+    fab_catch = fab_sub.add_parser("catch", help="Generate/list/select ApproachVectors (CATCH phase)")
+    fab_catch.add_argument("--packet-id", dest="packet_id", required=True, help="Packet ID")
+    fab_catch.add_argument("--thesis", default=None, help="New vector thesis")
+    fab_catch.add_argument("--select", default=None, help="Select a vector by ID prefix")
+    fab_catch.add_argument("--list", action="store_true", help="List existing vectors")
+    fab_catch.add_argument("--organs", default=None, help="Comma-separated target organs")
+    fab_catch.add_argument("--scope", default="medium", help="Resource weight (light|medium|heavy)")
+    fab_catch.add_argument("--agents", default=None, help="Comma-separated agent types")
+    fab_catch.add_argument("--json", action="store_true", help="Output JSON")
+
+    fab_handoff = fab_sub.add_parser("handoff", help="Dispatch task to agent backend (HANDOFF phase)")
+    fab_handoff.add_argument("--packet-id", dest="packet_id", required=True, help="Packet ID")
+    fab_handoff.add_argument(
+        "--backend", required=True,
+        help="Agent backend (copilot|jules|actions|claude|launchagent|human)",
+    )
+    fab_handoff.add_argument("--repo", required=True, help="Target repo (owner/repo or path)")
+    fab_handoff.add_argument("--title", default=None, help="Task title")
+    fab_handoff.add_argument("--body", default="", help="Task body/specification")
+    fab_handoff.add_argument("--task-id", dest="task_id", default=None, help="Explicit task ID")
+    fab_handoff.add_argument("--labels", default=None, help="Comma-separated extra labels")
+    fab_handoff.add_argument("--branch", default=None, help="Branch name or ref")
+    fab_handoff.add_argument("--execute", action="store_true", help="Actually dispatch (default is dry-run)")
+    fab_handoff.add_argument("--json", action="store_true", help="Output JSON")
+
+    fab_fortify = fab_sub.add_parser("fortify", help="Review dispatched work (FORTIFY phase)")
+    fab_fortify.add_argument("--intent-id", dest="intent_id", default=None, help="Filter by intent ID")
+    fab_fortify.add_argument("--record-id", dest="record_id", default=None, help="Filter by record ID")
+    fab_fortify.add_argument(
+        "--verdict", default=None,
+        help="Verdict (approve|reject|recycle)",
+    )
+    fab_fortify.add_argument("--check", action="store_true", help="Poll backends for status updates")
+
+    fab_status = fab_sub.add_parser("status", help="Show active relay cycles")
+    fab_status.add_argument("--packet-id", dest="packet_id", default=None, help="Filter by packet ID")
+    fab_status.add_argument("--json", action="store_true", help="Output JSON")
+
+    fab_log = fab_sub.add_parser("log", help="Show transition log")
+    fab_log.add_argument("--packet-id", dest="packet_id", default=None, help="Filter by packet ID")
+    fab_log.add_argument("--json", action="store_true", help="Output JSON")
+
     # git
     git = sub.add_parser(
         "git",
@@ -3253,6 +3309,32 @@ def main() -> int:
         if handler:
             return handler(args)
         parser.parse_args(["fossil", "--help"])
+        return 0
+    if args.command == "fabrica":
+        from organvm_engine.cli.fabrica import (
+            cmd_fabrica_catch,
+            cmd_fabrica_fortify,
+            cmd_fabrica_handoff,
+            cmd_fabrica_log,
+            cmd_fabrica_release,
+            cmd_fabrica_status,
+        )
+
+        fabrica_dispatch = {
+            "release": cmd_fabrica_release,
+            "catch": cmd_fabrica_catch,
+            "handoff": cmd_fabrica_handoff,
+            "fortify": cmd_fabrica_fortify,
+            "status": cmd_fabrica_status,
+            "log": cmd_fabrica_log,
+        }
+        handler = fabrica_dispatch.get(getattr(args, "subcommand", "") or "")
+        if handler:
+            return handler(args)
+        # Default to status when no subcommand given
+        if not (getattr(args, "subcommand", "") or ""):
+            return cmd_fabrica_status(args)
+        parser.parse_args(["fabrica", "--help"])
         return 0
 
     subcommand: str | None = getattr(args, "subcommand", None)
