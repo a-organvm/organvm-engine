@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent plist for the ORGANVM fabrica heartbeat daemon.
+
+  This is a reference template. The actual plist is generated
+  programmatically by `organvm fabrica heartbeat --install`
+  using the current Python interpreter path.
+
+  Manual installation:
+    cp heartbeat.plist ~/Library/LaunchAgents/com.organvm.fabrica.heartbeat.plist
+    launchctl load ~/Library/LaunchAgents/com.organvm.fabrica.heartbeat.plist
+
+  Manual removal:
+    launchctl unload ~/Library/LaunchAgents/com.organvm.fabrica.heartbeat.plist
+    rm ~/Library/LaunchAgents/com.organvm.fabrica.heartbeat.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.organvm.fabrica.heartbeat</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/env</string>
+        <string>python3</string>
+        <string>-m</string>
+        <string>organvm_engine.fabrica.heartbeat</string>
+    </array>
+
+    <!-- Run every 15 minutes -->
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <!-- Do not run at login — only on schedule -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Background process settings -->
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <!-- Nice value (lower priority) -->
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <!-- Low I/O priority -->
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <!-- Kill if running longer than 300 seconds -->
+    <key>ExecTimeout</key>
+    <integer>300</integer>
+
+    <!-- Logging -->
+    <key>StandardOutPath</key>
+    <string>/Users/CHANGEME/.organvm/fabrica/logs/heartbeat-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/CHANGEME/.organvm/fabrica/logs/heartbeat-stderr.log</string>
+
+    <!-- Environment -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/CHANGEME</string>
+    </dict>
+</dict>
+</plist>

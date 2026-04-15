@@ -636,6 +636,24 @@ def build_parser() -> argparse.ArgumentParser:
     fab_log.add_argument("--packet-id", dest="packet_id", default=None, help="Filter by packet ID")
     fab_log.add_argument("--json", action="store_true", help="Output JSON")
 
+    fab_heartbeat = fab_sub.add_parser(
+        "heartbeat",
+        help="Run a heartbeat cycle or manage the LaunchAgent daemon",
+    )
+    fab_heartbeat.add_argument(
+        "--install", action="store_true",
+        help="Generate and load the LaunchAgent plist",
+    )
+    fab_heartbeat.add_argument(
+        "--uninstall", action="store_true",
+        help="Unload and remove the LaunchAgent plist",
+    )
+    fab_heartbeat.add_argument(
+        "--interval", type=int, default=900,
+        help="Heartbeat interval in seconds (default: 900 = 15 minutes)",
+    )
+    fab_heartbeat.add_argument("--json", action="store_true", help="Output JSON")
+
     # git
     git = sub.add_parser(
         "git",
@@ -3315,6 +3333,7 @@ def main() -> int:
             cmd_fabrica_catch,
             cmd_fabrica_fortify,
             cmd_fabrica_handoff,
+            cmd_fabrica_heartbeat,
             cmd_fabrica_log,
             cmd_fabrica_release,
             cmd_fabrica_status,
@@ -3327,6 +3346,7 @@ def main() -> int:
             "fortify": cmd_fabrica_fortify,
             "status": cmd_fabrica_status,
             "log": cmd_fabrica_log,
+            "heartbeat": cmd_fabrica_heartbeat,
         }
         handler = fabrica_dispatch.get(getattr(args, "subcommand", "") or "")
         if handler:

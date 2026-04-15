@@ -7,6 +7,7 @@ Commands:
     fabrica fortify   -- Review and approve dispatched work (FORTIFY phase)
     fabrica status    -- Show active relay cycles and dispatch records
     fabrica log       -- Show the full transition log for a relay cycle
+    fabrica heartbeat -- Run a heartbeat cycle or manage the LaunchAgent daemon
 """
 
 from __future__ import annotations
@@ -431,6 +432,51 @@ def cmd_fabrica_log(args) -> int:
         print(f"  {ts}  {pid}  {t['from']:8s} → {t['to']:8s}{reason}")
 
     return 0
+
+
+def cmd_fabrica_heartbeat(args) -> int:
+    """Run a heartbeat cycle or manage the LaunchAgent daemon."""
+    import logging
+
+    install = getattr(args, "install", False)
+    uninstall = getattr(args, "uninstall", False)
+    interval = getattr(args, "interval", 900)
+    as_json = getattr(args, "json", False)
+
+    if install and uninstall:
+        print("Error: --install and --uninstall are mutually exclusive", file=sys.stderr)
+        return 1
+
+    from organvm_engine.fabrica.heartbeat import (
+        install_launchagent,
+        run_heartbeat,
+        uninstall_launchagent,
+    )
+
+    if install:
+        try:
+            install_launchagent(interval=interval)
+            return 0
+        except Exception as exc:
+            print(f"Error installing LaunchAgent: {exc}", file=sys.stderr)
+            return 1
+
+    if uninstall:
+        try:
+            uninstall_launchagent()
+            return 0
+        except Exception as exc:
+            print(f"Error uninstalling LaunchAgent: {exc}", file=sys.stderr)
+            return 1
+
+    # Run a single heartbeat cycle
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    report = run_heartbeat(quiet=False, json_output=as_json)
+    return 0 if report.errors == 0 else 1
 
 
 # ---------------------------------------------------------------------------
