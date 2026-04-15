@@ -80,6 +80,29 @@ produces:
     description: "Git post-commit hooks for real-time WITNESSED provenance recording across all workspace repos"
     consumers: [ALL]
 
+implements:
+  - concept: alpha_omega_phase_map
+    zettel_source: "post-flood/archive_original/.zettel-index.yaml#alpha_omega_phase_map"
+    aspect: "omega/scorecard.py — 20-criterion binary maturity scorecard implementing the Alpha-Omega lifecycle"
+  - concept: constitutional_topology
+    zettel_source: "post-flood/archive_original/.zettel-index.yaml#constitutional_topology"
+    aspect: "organ_config.py — 8 organs + META as zero-order constitutional substrate"
+  - concept: meta_evolution
+    zettel_source: "post-flood/archive_original/.zettel-index.yaml#meta_evolution"
+    aspect: "metrics/organism.py — 3 update modes (passive/structural/ontological)"
+  - concept: swarm_governance
+    zettel_source: "post-flood/archive_original/.zettel-index.yaml#swarm_governance"
+    aspect: "coordination/ (claims, tool locks) + fabrica/ (dispatch backends, router)"
+  - concept: multiplex_graph
+    zettel_source: "post-flood/archive_original/.zettel-index.yaml#multiplex_graph"
+    aspect: "governance/dependency_graph.py — G^dep edge family (1 of 4 families implemented)"
+  - concept: temporal_metric_fabric
+    zettel_source: "post-flood/archive_original/.zettel-index.yaml#temporal_metric_fabric"
+    aspect: "metrics/timeseries.py + metrics/variables.py — observation-based temporal metric recording"
+  - concept: AMMOI
+    zettel_source: "post-flood/archive_original/.zettel-index.yaml#AMMOI"
+    aspect: "metrics/organism.py (SystemOrganism) + corpus/ (knowledge graph) — living structural index"
+
 consumes:
   - type: registry
     source: META-ORGANVM
