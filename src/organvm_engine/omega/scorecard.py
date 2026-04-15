@@ -460,9 +460,9 @@ def evaluate(
             horizon="H3",
             measurement="Analytics across portfolio + portal + products",
             auto=False,
-            status="NOT_MET",
-            value="No analytics tracking configured",
-            evidence="Replaces old #10 (premature MRR). Traffic before monetization.",
+            status="IN_PROGRESS",
+            value="Plausible Analytics installed on portfolio (4444j99.github.io). Awaiting 100 visitor threshold.",
+            evidence="Plausible script in portfolio Layout.astro since 2026-04. Needs traffic, not more instrumentation.",
         ),
         OmegaCriterion(
             id=11,
@@ -479,8 +479,8 @@ def evaluate(
             horizon="H4",
             measurement="GitHub activity",
             auto=False,
-            status="NOT_MET",
-            value="5 good-first-issues created",
+            status="IN_PROGRESS",
+            value="2 PRs open upstream: grafana/k6#5770 (TagSet methods), openai/openai-agents-python#2802 (MCP cleanup). 1 more prepped (anthropic-skills).",
         ),
         OmegaCriterion(
             id=13,
