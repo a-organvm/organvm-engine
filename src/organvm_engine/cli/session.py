@@ -554,6 +554,82 @@ def cmd_session_debrief(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_session_archive(args: argparse.Namespace) -> int:
+    """Archive sessions to their project directories.
+
+    Routes conversation transcripts from agent storage into the project repos
+    they belong to, creating per-session directories with transcript, prompts,
+    review scaffold, metadata, and optionally raw JSONL.
+    """
+    from organvm_engine.session.archive import archive_all, archive_session, find_session
+
+    session_id = getattr(args, "session_id", None)
+    project = getattr(args, "project", None)
+    since = getattr(args, "since", None)
+    agent = getattr(args, "agent", None)
+    dry_run = getattr(args, "dry_run", False)
+    no_raw = getattr(args, "no_raw", False)
+
+    if session_id:
+        # Archive a single session
+        session_path = find_session(session_id)
+        if not session_path:
+            print(f"Session not found: {session_id}")
+            return 1
+
+        result = archive_session(
+            session_path,
+            dry_run=dry_run,
+            include_raw=not no_raw,
+        )
+
+        if result.error:
+            print(f"Error: {result.error}")
+            return 1
+
+        if result.skipped:
+            print(f"Skipped: {result.skip_reason}")
+            return 0
+
+        prefix = "Would write" if dry_run else "Archived"
+        print(f"{prefix}: {result.archive_dir}")
+        for f in result.files_written:
+            print(f"  {f}")
+        return 0
+
+    # Batch archive
+    results = archive_all(
+        project_filter=project,
+        since=since,
+        agent=agent,
+        dry_run=dry_run,
+        include_raw=not no_raw,
+    )
+
+    if not results:
+        print("No unarchived sessions found.")
+        return 0
+
+    archived = [r for r in results if not r.skipped and not r.error]
+    skipped = [r for r in results if r.skipped]
+    errors = [r for r in results if r.error]
+
+    prefix = "Would archive" if dry_run else "Archived"
+    print(f"{prefix} {len(archived)} sessions:")
+    for r in archived:
+        file_count = len(r.files_written)
+        print(f"  {r.archive_dir.parent.name}/{r.archive_dir.name} ({file_count} files)")
+
+    if skipped:
+        print(f"\nSkipped {len(skipped)} (already archived or unresolvable)")
+    if errors:
+        print(f"\nErrors: {len(errors)}")
+        for r in errors:
+            print(f"  {r.session_id}: {r.error}")
+
+    return 0
+
+
 def _default_praxis_sessions() -> Path:
     """Default output directory for session exports."""
     from organvm_engine.paths import workspace_root

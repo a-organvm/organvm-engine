@@ -237,6 +237,7 @@ from organvm_engine.cli.seed import (
 from organvm_engine.cli.session import (
     cmd_session_agents,
     cmd_session_analyze,
+    cmd_session_archive,
     cmd_session_debrief,
     cmd_session_export,
     cmd_session_list,
@@ -1162,6 +1163,43 @@ def build_parser() -> argparse.ArgumentParser:
 
     sess_show = sess_sub.add_parser("show", help="Show session details")
     sess_show.add_argument("session_id", help="Session ID (full or prefix)")
+
+    sess_archive = sess_sub.add_parser(
+        "archive",
+        help="Archive sessions to their project directories",
+    )
+    sess_archive.add_argument(
+        "session_id",
+        nargs="?",
+        default=None,
+        help="Session ID to archive (omit for batch)",
+    )
+    sess_archive.add_argument(
+        "--project",
+        default=None,
+        help="Filter to specific project path substring",
+    )
+    sess_archive.add_argument(
+        "--since",
+        default=None,
+        help="Only sessions on or after this date (YYYY-MM-DD or relative: 7d, 24h)",
+    )
+    sess_archive.add_argument(
+        "--agent",
+        default=None,
+        choices=["claude", "gemini", "codex"],
+        help="Filter to specific agent",
+    )
+    sess_archive.add_argument(
+        "--no-raw",
+        action="store_true",
+        help="Skip copying raw .jsonl (saves space)",
+    )
+    sess_archive.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview without writing",
+    )
 
     sess_export = sess_sub.add_parser(
         "export",
@@ -3168,6 +3206,7 @@ def main() -> int:
             "agents": cmd_session_agents,
             "list": cmd_session_list,
             "show": cmd_session_show,
+            "archive": cmd_session_archive,
             "export": cmd_session_export,
             "transcript": cmd_session_transcript,
             "prompts": cmd_session_prompts,
