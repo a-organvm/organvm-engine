@@ -8,9 +8,10 @@ complete intellectual record: dialogue, reasoning, plans, and raw session data.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from organvm_engine.session.parser import (
@@ -259,6 +260,36 @@ def archive_session(
     )
 
 
+def _resolve_since(since: str | None) -> str | None:
+    """Resolve a since value to an absolute YYYY-MM-DD date string.
+
+    Accepts:
+      - YYYY-MM-DD (passthrough)
+      - Nd (N days ago, e.g., 7d)
+      - Nh (N hours ago, e.g., 24h)
+    """
+    if not since:
+        return None
+
+    # Already a date
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", since):
+        return since
+
+    # Relative: Nd or Nh
+    m = re.match(r"^(\d+)([dh])$", since)
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2)
+        now = datetime.now(timezone.utc)
+        if unit == "d":
+            cutoff = now - timedelta(days=n)
+        else:
+            cutoff = now - timedelta(hours=n)
+        return cutoff.strftime("%Y-%m-%d")
+
+    return since  # fallback: pass through and hope it's comparable
+
+
 def discover_unarchived_sessions(
     *,
     project_filter: str | None = None,
@@ -283,6 +314,8 @@ def discover_unarchived_sessions(
     # Check archive states for known projects
     seen_projects: dict[str, dict] = {}
 
+    since_resolved = _resolve_since(since)
+
     unarchived: list[tuple[Path, SessionMeta]] = []
 
     for session_info in all_sessions:
@@ -293,7 +326,7 @@ def discover_unarchived_sessions(
             continue
 
         # Apply date filter
-        if since and meta.date_str < since:
+        if since_resolved and meta.date_str < since_resolved:
             continue
 
         project_path = resolve_project_path(meta)
