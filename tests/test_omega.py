@@ -175,10 +175,10 @@ class TestSoakStreak:
 
 
 class TestEvaluate:
-    def test_returns_19_criteria(self, registry, soak_dir):
+    def test_returns_20_criteria(self, registry, soak_dir):
         scorecard = evaluate(registry=registry, soak_dir=soak_dir)
-        assert len(scorecard.criteria) == 19
-        assert scorecard.total == 19
+        assert len(scorecard.criteria) == 20
+        assert scorecard.total == 20
 
     def test_criterion_6_always_met(self, registry, soak_dir):
         scorecard = evaluate(registry=registry, soak_dir=soak_dir)
@@ -206,11 +206,11 @@ class TestEvaluate:
         assert c9.status == "NOT_MET"
         assert "stranger-ready" in c9.name
 
-    def test_organic_discovery_not_met(self, registry, soak_dir):
+    def test_organic_discovery_in_progress(self, registry, soak_dir):
         scorecard = evaluate(registry=registry, soak_dir=soak_dir)
         c10 = scorecard.criteria[9]
         assert c10.id == 10
-        assert c10.status == "NOT_MET"
+        assert c10.status == "IN_PROGRESS"
         assert "visitor" in c10.name
 
     def test_organic_revenue_is_criterion_18(self, registry, soak_dir):
@@ -236,15 +236,15 @@ class TestEvaluate:
         scorecard = evaluate(registry=registry, soak_dir=soak_dir)
         d = scorecard.to_dict()
         assert d["score"] == scorecard.met_count
-        assert d["total"] == 19
-        assert len(d["criteria"]) == 19
+        assert d["total"] == 20
+        assert len(d["criteria"]) == 20
         assert "soak" in d
         assert d["soak"]["streak_days"] == 8
 
     def test_auto_criteria_identified(self, registry, soak_dir):
         scorecard = evaluate(registry=registry, soak_dir=soak_dir)
         auto_ids = {c.id for c in scorecard.criteria if c.auto}
-        assert auto_ids == {1, 3, 17, 19}
+        assert auto_ids == {1, 3, 17, 19, 20}
 
 
 class TestWriteSnapshot:
