@@ -96,6 +96,7 @@ from organvm_engine.cli.content import (
     cmd_content_status,
 )
 from organvm_engine.cli.context import cmd_context_surfaces, cmd_context_sync
+from organvm_engine.cli.corpus import cmd_corpus_gaps, cmd_corpus_scan, cmd_corpus_stats
 from organvm_engine.cli.deadlines import cmd_deadlines
 from organvm_engine.cli.debt import cmd_debt_scan, cmd_debt_stats
 from organvm_engine.cli.dispatch import cmd_dispatch_validate
@@ -788,6 +789,74 @@ def build_parser() -> argparse.ArgumentParser:
         "--all",
         action="store_true",
         help="Show all deadlines regardless of date",
+    )
+
+    # corpus
+    corpus = sub.add_parser("corpus", help="Corpus knowledge graph (IRF-SYS-104)")
+    corpus_sub = corpus.add_subparsers(dest="subcommand")
+
+    corpus_scan = corpus_sub.add_parser(
+        "scan", help="Scan post-flood corpus and build knowledge graph",
+    )
+    corpus_scan.add_argument(
+        "--corpus-dir", default="post-flood",
+        help="Path to post-flood/ directory (default: post-flood)",
+    )
+    corpus_scan.add_argument(
+        "--workspace", default=None,
+        help="Path to ~/Workspace/ for seed.yaml scanning",
+    )
+    corpus_scan.add_argument(
+        "--output", "-o", default=None,
+        help="Save graph to JSON file",
+    )
+    corpus_scan.add_argument(
+        "--json", action="store_true",
+        help="Output full graph as JSON",
+    )
+
+    corpus_stats = corpus_sub.add_parser(
+        "stats", help="Show corpus knowledge graph statistics",
+    )
+    corpus_stats.add_argument(
+        "--corpus-dir", default="post-flood",
+        help="Path to post-flood/ directory",
+    )
+    corpus_stats.add_argument(
+        "--workspace", default=None,
+        help="Path to ~/Workspace/",
+    )
+    corpus_stats.add_argument(
+        "--graph-file", default=None,
+        help="Load graph from saved JSON instead of scanning",
+    )
+    corpus_stats.add_argument(
+        "--json", action="store_true",
+        help="Output as JSON",
+    )
+
+    corpus_gaps = corpus_sub.add_parser(
+        "gaps", help="Show concepts without implementation",
+    )
+    corpus_gaps.add_argument(
+        "--corpus-dir", default="post-flood",
+        help="Path to post-flood/ directory",
+    )
+    corpus_gaps.add_argument(
+        "--workspace", default=None,
+        help="Path to ~/Workspace/",
+    )
+    corpus_gaps.add_argument(
+        "--graph-file", default=None,
+        help="Load graph from saved JSON instead of scanning",
+    )
+    corpus_gaps.add_argument(
+        "--json", action="store_true",
+        help="Output as JSON",
+    )
+    corpus_gaps.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="Show implementation details per concept",
     )
 
     # ci
@@ -2996,6 +3065,9 @@ def main() -> int:
         ("git", "reproduce-workspace"): cmd_git_reproduce,
         ("git", "diff-pinned"): cmd_git_diff_pinned,
         ("git", "install-hooks"): cmd_git_install_hooks,
+        ("corpus", "scan"): cmd_corpus_scan,
+        ("corpus", "stats"): cmd_corpus_stats,
+        ("corpus", "gaps"): cmd_corpus_gaps,
         ("ci", "triage"): cmd_ci_triage,
         ("ci", "audit"): cmd_ci_audit,
         ("ci", "mandate"): cmd_ci_mandate,
