@@ -661,6 +661,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fab_heartbeat.add_argument("--json", action="store_true", help="Output JSON")
 
+    # contrib — Contribution engine and backflow pipeline
+    contrib = sub.add_parser(
+        "contrib",
+        help="Contribution engine — outbound PR tracking and backflow signals",
+    )
+    contrib_sub = contrib.add_subparsers(dest="subcommand")
+    contrib_sub.add_parser("list", help="List all contribution repos and targets")
+    contrib_sub.add_parser("status", help="Check upstream PR status for all contrib repos")
+    contrib_backflow = contrib_sub.add_parser(
+        "backflow", help="Generate backflow signal report",
+    )
+    contrib_backflow.add_argument(
+        "--write", action="store_true", help="Write manifest to atoms dir",
+    )
+
     # git
     git = sub.add_parser(
         "git",
@@ -3471,6 +3486,26 @@ def main() -> int:
         if not (getattr(args, "subcommand", "") or ""):
             return cmd_fabrica_status(args)
         parser.parse_args(["fabrica", "--help"])
+        return 0
+
+    if args.command == "contrib":
+        from organvm_engine.cli.contrib import (
+            cmd_contrib_list,
+            cmd_contrib_status,
+            cmd_contrib_backflow,
+        )
+        contrib_dispatch = {
+            "list": cmd_contrib_list,
+            "status": cmd_contrib_status,
+            "backflow": cmd_contrib_backflow,
+        }
+        handler = contrib_dispatch.get(getattr(args, "subcommand", "") or "")
+        if handler:
+            return handler(args)
+        # Default to list when no subcommand given
+        if not (getattr(args, "subcommand", "") or ""):
+            return cmd_contrib_list(args)
+        parser.parse_args(["contrib", "--help"])
         return 0
 
     subcommand: str | None = getattr(args, "subcommand", None)
