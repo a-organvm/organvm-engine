@@ -11,21 +11,17 @@ dictionaries.  Phase 1 will add LLM-powered analysis.
 from __future__ import annotations
 
 import re
-import uuid
 from dataclasses import asdict, dataclass, field
-from typing import Any
 
 from organvm_engine.primitives.base import InstitutionalPrimitive
 from organvm_engine.primitives.types import (
-    ExecutionMode,
     Frame,
     FrameType,
     InstitutionalContext,
-    PrincipalPosition,
     PrimitiveOutput,
+    PrincipalPosition,
     StakesLevel,
 )
-
 
 # ---------------------------------------------------------------------------
 # Assessor-specific types
@@ -322,16 +318,16 @@ class Assessor(InstitutionalPrimitive):
             if rf.exposure > 0.5:
                 actions.append(
                     f"[{frame.frame_type.value}] Address {rf.category}: "
-                    f"{rf.description} (exposure={rf.exposure:.2f})"
+                    f"{rf.description} (exposure={rf.exposure:.2f})",
                 )
             if rf.deadline:
                 actions.append(
                     f"[{frame.frame_type.value}] Deadline-sensitive: "
-                    f"{rf.category} by {rf.deadline}"
+                    f"{rf.category} by {rf.deadline}",
                 )
         for opp in opportunities[:2]:
             actions.append(
-                f"[{frame.frame_type.value}] Pursue: {opp.description}"
+                f"[{frame.frame_type.value}] Pursue: {opp.description}",
             )
         return actions
 

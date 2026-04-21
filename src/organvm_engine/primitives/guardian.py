@@ -20,11 +20,10 @@ from typing import Any
 
 from organvm_engine.primitives.base import InstitutionalPrimitive
 from organvm_engine.primitives.types import (
-    ExecutionMode,
     Frame,
     InstitutionalContext,
-    PrincipalPosition,
     PrimitiveOutput,
+    PrincipalPosition,
     StakesLevel,
 )
 
@@ -84,7 +83,7 @@ class GuardianState:
 
     def add_watch(self, item: WatchItem) -> None:
         self._ensure_dirs()
-        with open(self._watchlist_path, "a") as f:
+        with self._watchlist_path.open("a") as f:
             f.write(json.dumps(asdict(item)) + "\n")
 
     def remove_watch(self, item_id: str) -> bool:
@@ -94,7 +93,7 @@ class GuardianState:
         if len(filtered) == len(items):
             return False
         self._ensure_dirs()
-        with open(self._watchlist_path, "w") as f:
+        with self._watchlist_path.open("w") as f:
             for item in filtered:
                 f.write(json.dumps(asdict(item)) + "\n")
         return True
@@ -103,7 +102,7 @@ class GuardianState:
         if not self._watchlist_path.exists():
             return []
         items: list[WatchItem] = []
-        with open(self._watchlist_path) as f:
+        with self._watchlist_path.open() as f:
             for line in f:
                 line = line.strip()
                 if line:
@@ -205,9 +204,7 @@ class GuardianState:
             return None
 
         crossed = False
-        if item.direction == "above" and current_val > threshold_val:
-            crossed = True
-        elif item.direction == "below" and current_val < threshold_val:
+        if item.direction == "above" and current_val > threshold_val or item.direction == "below" and current_val < threshold_val:
             crossed = True
 
         if crossed:

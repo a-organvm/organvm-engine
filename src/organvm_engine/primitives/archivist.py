@@ -22,8 +22,8 @@ from organvm_engine.primitives.types import (
     ExecutionMode,
     Frame,
     InstitutionalContext,
-    PrincipalPosition,
     PrimitiveOutput,
+    PrincipalPosition,
     StakesLevel,
 )
 
@@ -76,7 +76,7 @@ class ArchivistStore:
     def append(self, record: MemoryRecord) -> None:
         """Append a record and update the index."""
         self._ensure_dirs()
-        with open(self._memory_path, "a") as f:
+        with self._memory_path.open("a") as f:
             f.write(json.dumps(asdict(record)) + "\n")
         self._update_index(record)
 
@@ -93,12 +93,12 @@ class ArchivistStore:
             idx.setdefault(tag_key, [])
             if record.record_id not in idx[tag_key]:
                 idx[tag_key].append(record.record_id)
-        with open(self._index_path, "w") as f:
+        with self._index_path.open("w") as f:
             json.dump(idx, f, indent=2)
 
     def _load_index(self) -> dict[str, list[str]]:
         if self._index_path.exists():
-            with open(self._index_path) as f:
+            with self._index_path.open() as f:
                 return json.load(f)
         return {}
 
@@ -109,7 +109,7 @@ class ArchivistStore:
         if not self._memory_path.exists():
             return []
         records: list[MemoryRecord] = []
-        with open(self._memory_path) as f:
+        with self._memory_path.open() as f:
             for line in f:
                 line = line.strip()
                 if line:

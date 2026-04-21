@@ -61,7 +61,7 @@ def test_assessor_no_risks():
 def test_assessor_opportunity_detection():
     assessor = Assessor()
     context = InstitutionalContext(
-        situation="New contract opportunity available",
+        situation="New contracts opportunity available for freelance work",
     )
     frame = Frame(FrameType.STRATEGIC)
     position = PrincipalPosition(

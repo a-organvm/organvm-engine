@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from organvm_engine.primitives.types import Frame, FrameType
+from organvm_engine.primitives.types import Frame
 
 
 @dataclass

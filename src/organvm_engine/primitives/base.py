@@ -17,8 +17,8 @@ from organvm_engine.primitives.types import (
     ExecutionMode,
     Frame,
     InstitutionalContext,
-    PrincipalPosition,
     PrimitiveOutput,
+    PrincipalPosition,
     StakesLevel,
 )
 

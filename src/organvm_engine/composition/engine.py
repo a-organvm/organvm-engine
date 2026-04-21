@@ -7,12 +7,8 @@ into execution stages, and runs them with the appropriate operators.
 
 from __future__ import annotations
 
-from dataclasses import asdict
-from typing import Any
-
 from organvm_engine.composition.graph import CompositionGraph, PrimitiveNode
 from organvm_engine.composition.operators import (
-    chain_execute,
     parallel_execute,
 )
 from organvm_engine.composition.prohibitions import validate_composition
@@ -20,12 +16,11 @@ from organvm_engine.primitives.base import InstitutionalPrimitive
 from organvm_engine.primitives.registry import PrimitiveRegistry
 from organvm_engine.primitives.types import (
     AuditEntry,
-    ExecutionMode,
     Frame,
     FrameType,
     InstitutionalContext,
-    PrincipalPosition,
     PrimitiveOutput,
+    PrincipalPosition,
     StakesLevel,
 )
 
@@ -72,7 +67,7 @@ class CompositionEngine:
         violations = validate_composition(graph)
         if violations:
             raise CompositionError(
-                f"Prohibited composition(s): {'; '.join(violations)}"
+                f"Prohibited composition(s): {'; '.join(violations)}",
             )
 
         stages = graph.execution_order()
@@ -177,7 +172,7 @@ class CompositionEngine:
             prim = self._registry.get_by_id(node.primitive_id)
         if prim is None:
             raise CompositionError(
-                f"Primitive not found: {node.primitive_name} ({node.primitive_id})"
+                f"Primitive not found: {node.primitive_name} ({node.primitive_id})",
             )
         return prim
 

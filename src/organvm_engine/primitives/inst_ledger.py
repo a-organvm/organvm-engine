@@ -18,15 +18,14 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from organvm_engine.primitives.base import InstitutionalPrimitive
 from organvm_engine.primitives.types import (
     ExecutionMode,
     Frame,
     InstitutionalContext,
-    PrincipalPosition,
     PrimitiveOutput,
+    PrincipalPosition,
     StakesLevel,
 )
 
@@ -93,14 +92,14 @@ class LedgerStore:
     def record(self, entry: LedgerEntry) -> None:
         """Append an entry to the ledger."""
         self._ensure_dirs()
-        with open(self._entries_path, "a") as f:
+        with self._entries_path.open("a") as f:
             f.write(json.dumps(asdict(entry)) + "\n")
 
     def load_entries(self) -> list[LedgerEntry]:
         if not self._entries_path.exists():
             return []
         entries: list[LedgerEntry] = []
-        with open(self._entries_path) as f:
+        with self._entries_path.open() as f:
             for line in f:
                 line = line.strip()
                 if line:
@@ -154,20 +153,20 @@ class LedgerStore:
         # Alerts
         if snap.runway_months < 3 and snap.runway_months != float("inf"):
             snap.alerts.append(
-                f"LOW RUNWAY: {snap.runway_months:.1f} months at current burn"
+                f"LOW RUNWAY: {snap.runway_months:.1f} months at current burn",
             )
         if snap.net_position < 0:
             snap.alerts.append(
-                f"NEGATIVE NET POSITION: {snap.net_position:.2f}"
+                f"NEGATIVE NET POSITION: {snap.net_position:.2f}",
             )
         if snap.monthly_outflow > snap.monthly_inflow * 1.2:
             snap.alerts.append(
-                "OUTFLOW EXCEEDS INFLOW by >20%"
+                "OUTFLOW EXCEEDS INFLOW by >20%",
             )
 
         # Persist snapshot
         self._ensure_dirs()
-        with open(self._snapshot_path, "w") as f:
+        with self._snapshot_path.open("w") as f:
             json.dump(asdict(snap), f, indent=2)
 
         return snap

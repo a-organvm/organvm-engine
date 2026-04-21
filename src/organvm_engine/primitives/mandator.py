@@ -22,8 +22,8 @@ from organvm_engine.primitives.types import (
     ExecutionMode,
     Frame,
     InstitutionalContext,
-    PrincipalPosition,
     PrimitiveOutput,
+    PrincipalPosition,
     StakesLevel,
 )
 
@@ -72,14 +72,14 @@ class MandatorStore:
 
     def record(self, directive: Directive) -> None:
         self._ensure_dirs()
-        with open(self._directives_path, "a") as f:
+        with self._directives_path.open("a") as f:
             f.write(json.dumps(asdict(directive)) + "\n")
 
     def load_directives(self, status: str = "") -> list[Directive]:
         if not self._directives_path.exists():
             return []
         directives: list[Directive] = []
-        with open(self._directives_path) as f:
+        with self._directives_path.open() as f:
             for line in f:
                 line = line.strip()
                 if line:
@@ -125,10 +125,7 @@ class Mandator(InstitutionalPrimitive):
 
         # Mandator ALWAYS escalates — principal approves all directives
         confidence = rec_data.get("confidence", 0.7)
-        if isinstance(confidence, (int, float)):
-            confidence = float(confidence)
-        else:
-            confidence = 0.7
+        confidence = float(confidence) if isinstance(confidence, (int, float)) else 0.7
 
         exe_mode = ExecutionMode.HUMAN_ROUTED  # always human-reviewed
         stakes = StakesLevel.CRITICAL

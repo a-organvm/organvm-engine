@@ -9,8 +9,6 @@ Four operators form a complete algebra for primitive composition:
 
 from __future__ import annotations
 
-import copy
-from dataclasses import asdict
 from typing import Any
 
 from organvm_engine.primitives.base import InstitutionalPrimitive
@@ -19,8 +17,8 @@ from organvm_engine.primitives.types import (
     ExecutionMode,
     Frame,
     InstitutionalContext,
-    PrincipalPosition,
     PrimitiveOutput,
+    PrincipalPosition,
     StakesLevel,
 )
 

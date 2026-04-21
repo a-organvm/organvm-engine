@@ -17,15 +17,12 @@ from typing import Any
 
 from organvm_engine.primitives.base import InstitutionalPrimitive
 from organvm_engine.primitives.types import (
-    ExecutionMode,
     Frame,
-    FrameType,
     InstitutionalContext,
-    PrincipalPosition,
     PrimitiveOutput,
+    PrincipalPosition,
     StakesLevel,
 )
-
 
 # ---------------------------------------------------------------------------
 # Counselor-specific types
@@ -72,7 +69,7 @@ def _extract_assessments(data: dict[str, Any]) -> list[dict[str, Any]]:
         return [data]
     # Parallel merge — keys like "assessor_legal", "assessor_financial"
     found: list[dict[str, Any]] = []
-    for key, val in data.items():
+    for _key, val in data.items():
         if isinstance(val, dict) and "risk_factors" in val:
             found.append(val)
     return found
@@ -84,8 +81,7 @@ def _urgency_from_risks(risks: list[dict[str, Any]]) -> str:
     has_deadline = False
     for rf in risks:
         exp = rf.get("exposure", 0.0)
-        if exp > max_exposure:
-            max_exposure = exp
+        max_exposure = max(max_exposure, exp)
         if rf.get("deadline"):
             has_deadline = True
 
@@ -267,13 +263,13 @@ class Counselor(InstitutionalPrimitive):
         if risks:
             rationale_parts.append(
                 f"{len(risks)} risk factors identified "
-                f"(max exposure: {risks[0].get('exposure', 0):.2f})"
+                f"(max exposure: {risks[0].get('exposure', 0):.2f})",
             )
         if opportunities:
             rationale_parts.append(f"{len(opportunities)} opportunities noted")
         if precedent:
             rationale_parts.append(
-                f"Precedent: {precedent.get('summary', 'available')}"
+                f"Precedent: {precedent.get('summary', 'available')}",
             )
         rationale = ". ".join(rationale_parts) or "Insufficient data for analysis"
 
