@@ -380,6 +380,103 @@ class TestFullPipeline:
         gaps = graph.concepts_without_implementation()
         assert any(g.uid == "concept:orphan_concept" for g in gaps)
 
+
+class TestTraceConcept:
+    def _build_graph(self, tmp_path: Path) -> CorpusGraph:
+        corpus_dir = _make_sidecar(tmp_path)
+        _make_layer2(corpus_dir)
+        _make_seed_with_implements(tmp_path)
+        return scan_corpus(corpus_dir, workspace_root=tmp_path)
+
+    def test_traces_implemented_concept(self, tmp_path: Path) -> None:
+        graph = self._build_graph(tmp_path)
+        trace = graph.trace_concept("test_concept")
+        assert trace["concept"] == "test_concept"
+        assert trace["implementation_count"] == 1
+        assert len(trace["implementations"]) == 1
+        assert trace["implementations"][0]["repo"] == "test-repo"
+
+    def test_traces_unimplemented_concept(self, tmp_path: Path) -> None:
+        graph = self._build_graph(tmp_path)
+        trace = graph.trace_concept("orphan_concept")
+        assert trace["implementation_count"] == 0
+        assert trace["implementations"] == []
+
+    def test_returns_error_for_missing_concept(self, tmp_path: Path) -> None:
+        graph = self._build_graph(tmp_path)
+        trace = graph.trace_concept("nonexistent")
+        assert "error" in trace
+
+    def test_includes_definitions(self, tmp_path: Path) -> None:
+        graph = self._build_graph(tmp_path)
+        trace = graph.trace_concept("test_concept")
+        assert len(trace["definitions"]) >= 1
+
+    def test_accepts_prefixed_uid(self, tmp_path: Path) -> None:
+        graph = self._build_graph(tmp_path)
+        trace = graph.trace_concept("concept:test_concept")
+        assert trace["concept"] == "concept:test_concept"
+        assert "error" not in trace
+
+
+class TestCoverageDepth:
+    def test_returns_all_concepts(self, tmp_path: Path) -> None:
+        corpus_dir = _make_sidecar(tmp_path)
+        _make_seed_with_implements(tmp_path)
+        graph = scan_corpus(corpus_dir, workspace_root=tmp_path)
+        depth = graph.coverage_depth()
+        concepts = graph.nodes_by_type("concept")
+        assert len(depth) == len(concepts)
+
+    def test_sorts_by_fragility(self, tmp_path: Path) -> None:
+        corpus_dir = _make_sidecar(tmp_path)
+        _make_seed_with_implements(tmp_path)
+        graph = scan_corpus(corpus_dir, workspace_root=tmp_path)
+        depth = graph.coverage_depth()
+        counts = [d["implementations"] for d in depth]
+        assert counts == sorted(counts)
+
+    def test_marks_fragile_concepts(self, tmp_path: Path) -> None:
+        corpus_dir = _make_sidecar(tmp_path)
+        _make_seed_with_implements(tmp_path)
+        graph = scan_corpus(corpus_dir, workspace_root=tmp_path)
+        depth = graph.coverage_depth()
+        orphan = next(d for d in depth if d["concept"] == "orphan_concept")
+        assert orphan["fragile"] is True
+        assert orphan["implementations"] == 0
+
+    def test_implemented_concept_has_repos(self, tmp_path: Path) -> None:
+        corpus_dir = _make_sidecar(tmp_path)
+        _make_seed_with_implements(tmp_path)
+        graph = scan_corpus(corpus_dir, workspace_root=tmp_path)
+        depth = graph.coverage_depth()
+        implemented = next(d for d in depth if d["concept"] == "test_concept")
+        assert "test-repo" in implemented["repos"]
+        assert implemented["implementations"] == 1
+
+
+class TestRepoConcepts:
+    def test_finds_concepts_for_repo(self, tmp_path: Path) -> None:
+        corpus_dir = _make_sidecar(tmp_path)
+        _make_seed_with_implements(tmp_path)
+        graph = scan_corpus(corpus_dir, workspace_root=tmp_path)
+        concepts = graph.repo_concepts("test-repo")
+        assert len(concepts) == 1
+        assert concepts[0]["concept"] == "test_concept"
+
+    def test_returns_empty_for_unknown_repo(self, tmp_path: Path) -> None:
+        corpus_dir = _make_sidecar(tmp_path)
+        graph = scan_corpus(corpus_dir, workspace_root=tmp_path)
+        concepts = graph.repo_concepts("nonexistent-repo")
+        assert concepts == []
+
+    def test_includes_aspect(self, tmp_path: Path) -> None:
+        corpus_dir = _make_sidecar(tmp_path)
+        _make_seed_with_implements(tmp_path)
+        graph = scan_corpus(corpus_dir, workspace_root=tmp_path)
+        concepts = graph.repo_concepts("test-repo")
+        assert concepts[0]["aspect"] != ""
+
         # Verify save/load round-trip
         path = tmp_path / "corpus-graph.json"
         graph.save(path)

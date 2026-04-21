@@ -96,7 +96,14 @@ from organvm_engine.cli.content import (
     cmd_content_status,
 )
 from organvm_engine.cli.context import cmd_context_surfaces, cmd_context_sync
-from organvm_engine.cli.corpus import cmd_corpus_gaps, cmd_corpus_scan, cmd_corpus_stats
+from organvm_engine.cli.corpus import (
+    cmd_corpus_coverage,
+    cmd_corpus_gaps,
+    cmd_corpus_repo,
+    cmd_corpus_scan,
+    cmd_corpus_stats,
+    cmd_corpus_trace,
+)
 from organvm_engine.cli.deadlines import cmd_deadlines
 from organvm_engine.cli.debt import cmd_debt_scan, cmd_debt_stats
 from organvm_engine.cli.dispatch import cmd_dispatch_validate
@@ -873,6 +880,37 @@ def build_parser() -> argparse.ArgumentParser:
         "-v", "--verbose", action="store_true",
         help="Show implementation details per concept",
     )
+
+    _corpus_common = {
+        "--corpus-dir": {"default": "post-flood", "help": "Path to post-flood/ directory"},
+        "--workspace": {"default": None, "help": "Path to ~/Workspace/"},
+        "--graph-file": {"default": None, "help": "Load graph from saved JSON instead of scanning"},
+        "--json": {"action": "store_true", "help": "Output as JSON"},
+    }
+
+    corpus_trace = corpus_sub.add_parser(
+        "trace", help="Trace a concept through its full provenance chain",
+    )
+    corpus_trace.add_argument("concept", help="Concept ID to trace (e.g. AMMOI, evolution_law)")
+    for flag, kwargs in _corpus_common.items():
+        corpus_trace.add_argument(flag, **kwargs)
+
+    corpus_coverage = corpus_sub.add_parser(
+        "coverage", help="Show implementation depth and fragility for all concepts",
+    )
+    for flag, kwargs in _corpus_common.items():
+        corpus_coverage.add_argument(flag, **kwargs)
+    corpus_coverage.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="Show robust concepts with organ distribution",
+    )
+
+    corpus_repo = corpus_sub.add_parser(
+        "repo", help="Show what concepts a repo implements (reverse lookup)",
+    )
+    corpus_repo.add_argument("repo", help="Repo name (e.g. organvm-engine)")
+    for flag, kwargs in _corpus_common.items():
+        corpus_repo.add_argument(flag, **kwargs)
 
     # ci
     ci = sub.add_parser("ci", help="CI health operations")
@@ -3083,6 +3121,9 @@ def main() -> int:
         ("corpus", "scan"): cmd_corpus_scan,
         ("corpus", "stats"): cmd_corpus_stats,
         ("corpus", "gaps"): cmd_corpus_gaps,
+        ("corpus", "trace"): cmd_corpus_trace,
+        ("corpus", "coverage"): cmd_corpus_coverage,
+        ("corpus", "repo"): cmd_corpus_repo,
         ("ci", "triage"): cmd_ci_triage,
         ("ci", "audit"): cmd_ci_audit,
         ("ci", "mandate"): cmd_ci_mandate,

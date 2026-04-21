@@ -62,6 +62,118 @@ class CorpusGraph:
             if n.node_type == "concept" and n.uid not in implemented
         ]
 
+    def trace_concept(self, concept_id: str) -> dict[str, Any]:
+        """Full provenance chain for a concept.
+
+        Returns transcript origins, spec definitions, document extractions,
+        and implementing repos with their aspects.
+        """
+        uid = concept_id if concept_id.startswith("concept:") else f"concept:{concept_id}"
+        node = self.get_node(uid)
+        if not node:
+            return {"error": f"concept '{concept_id}' not found", "concept": concept_id}
+
+        # Transcripts and specs that DEFINE this concept
+        definitions: list[dict[str, Any]] = []
+        for edge in self.edges_to(uid):
+            if edge.edge_type == "DEFINES":
+                source = self.get_node(edge.source)
+                if source:
+                    definitions.append({
+                        "uid": source.uid,
+                        "type": source.node_type,
+                        "title": source.title,
+                    })
+
+        # Documents extracted from transcripts that reference this concept
+        documents: list[dict[str, Any]] = []
+        for edge in self.edges:
+            if edge.edge_type == "REFERENCES" and edge.target == uid:
+                source = self.get_node(edge.source)
+                if source:
+                    documents.append({
+                        "uid": source.uid,
+                        "type": source.node_type,
+                        "title": source.title,
+                    })
+
+        # Repos that IMPLEMENT this concept
+        implementations: list[dict[str, Any]] = []
+        for edge in self.edges_to(uid):
+            if edge.edge_type == "IMPLEMENTS":
+                source = self.get_node(edge.source)
+                if source:
+                    implementations.append({
+                        "uid": source.uid,
+                        "repo": source.title,
+                        "organ": source.metadata.get("organ", ""),
+                        "aspect": edge.metadata.get("aspect", ""),
+                    })
+
+        return {
+            "concept": concept_id,
+            "title": node.title,
+            "metadata": node.metadata,
+            "definitions": definitions,
+            "documents": documents,
+            "implementations": implementations,
+            "implementation_count": len(implementations),
+            "organ_spread": sorted({
+                i["organ"] for i in implementations if i["organ"]
+            }),
+        }
+
+    def coverage_depth(self) -> list[dict[str, Any]]:
+        """Per-concept implementation depth and organ distribution.
+
+        Returns all concepts sorted by fragility (fewest implementations first).
+        """
+        concepts = self.nodes_by_type("concept")
+        results = []
+        for concept in concepts:
+            impls = [
+                e for e in self.edges_to(concept.uid)
+                if e.edge_type == "IMPLEMENTS"
+            ]
+            organs: set[str] = set()
+            repos: list[str] = []
+            for impl in impls:
+                repo_node = self.get_node(impl.source)
+                if repo_node:
+                    repos.append(repo_node.title)
+                    organ = repo_node.metadata.get("organ", "")
+                    if organ:
+                        organs.add(organ)
+            results.append({
+                "concept": concept.uid.removeprefix("concept:"),
+                "title": concept.title,
+                "implementations": len(impls),
+                "repos": repos,
+                "organs": sorted(organs),
+                "organ_count": len(organs),
+                "fragile": len(impls) <= 1,
+            })
+        results.sort(key=lambda r: (r["implementations"], r["organ_count"]))
+        return results
+
+    def repo_concepts(self, repo_name: str) -> list[dict[str, Any]]:
+        """Reverse lookup: what concepts does a repo implement?"""
+        results = []
+        for edge in self.edges:
+            if edge.edge_type != "IMPLEMENTS":
+                continue
+            source = self.get_node(edge.source)
+            if not source or repo_name not in (source.title, source.uid):
+                continue
+            concept = self.get_node(edge.target)
+            if concept:
+                results.append({
+                    "concept": concept.uid.removeprefix("concept:"),
+                    "title": concept.title,
+                    "aspect": edge.metadata.get("aspect", ""),
+                })
+        return results
+
     def stats(self) -> dict[str, Any]:
         type_counts = {}
         for n in self.nodes.values():
@@ -95,7 +207,7 @@ class CorpusGraph:
     def load(cls, path: Path) -> CorpusGraph:
         data = json.loads(path.read_text(encoding="utf-8"))
         graph = cls()
-        for _uid, ndata in data.get("nodes", {}).items():
+        for ndata in data.get("nodes", {}).values():
             graph.add_node(GraphNode(**ndata))
         for edata in data.get("edges", []):
             graph.add_edge(GraphEdge(**edata))

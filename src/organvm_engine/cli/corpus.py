@@ -142,3 +142,142 @@ def cmd_corpus_gaps(args: argparse.Namespace) -> int:
                 print(f"           ← {name}: {aspect}")
 
     return 0
+
+
+def cmd_corpus_trace(args: argparse.Namespace) -> int:
+    """Trace a concept through its full provenance chain."""
+    from pathlib import Path
+
+    from organvm_engine.corpus.graph import CorpusGraph
+    from organvm_engine.corpus.scanner import scan_corpus
+
+    if args.graph_file:
+        graph = CorpusGraph.load(Path(args.graph_file))
+    else:
+        corpus_dir = Path(args.corpus_dir).resolve()
+        ws_root = Path(args.workspace).resolve() if args.workspace else None
+        graph = scan_corpus(corpus_dir, workspace_root=ws_root)
+
+    trace = graph.trace_concept(args.concept)
+
+    if args.json:
+        print(json.dumps(trace, indent=2, ensure_ascii=False))
+        return 0
+
+    if "error" in trace:
+        print(f"  Error: {trace['error']}")
+        return 1
+
+    print(f"\n  Concept Trace: {trace['title']}")
+    print(f"  {'═' * 50}")
+
+    if trace["definitions"]:
+        print(f"\n  Defined by:")
+        for d in trace["definitions"]:
+            print(f"    [{d['type']}] {d['title']}")
+
+    if trace["documents"]:
+        print(f"\n  Referenced in:")
+        for d in trace["documents"]:
+            print(f"    [{d['type']}] {d['title']}")
+
+    if trace["implementations"]:
+        print(f"\n  Implemented by ({trace['implementation_count']} repos"
+              f" across {len(trace['organ_spread'])} organs):")
+        for impl in trace["implementations"]:
+            organ = f" [{impl['organ']}]" if impl["organ"] else ""
+            print(f"    {impl['repo']}{organ}")
+            if impl["aspect"]:
+                print(f"      {impl['aspect']}")
+    else:
+        print(f"\n  [GAP] No implementations found.")
+
+    if trace["organ_spread"]:
+        print(f"\n  Organ spread: {', '.join(trace['organ_spread'])}")
+
+    return 0
+
+
+def cmd_corpus_coverage(args: argparse.Namespace) -> int:
+    """Show implementation depth and fragility for all concepts."""
+    from pathlib import Path
+
+    from organvm_engine.corpus.graph import CorpusGraph
+    from organvm_engine.corpus.scanner import scan_corpus
+
+    if args.graph_file:
+        graph = CorpusGraph.load(Path(args.graph_file))
+    else:
+        corpus_dir = Path(args.corpus_dir).resolve()
+        ws_root = Path(args.workspace).resolve() if args.workspace else None
+        graph = scan_corpus(corpus_dir, workspace_root=ws_root)
+
+    depth = graph.coverage_depth()
+
+    if args.json:
+        print(json.dumps(depth, indent=2, ensure_ascii=False))
+        return 0
+
+    fragile = [d for d in depth if d["fragile"]]
+    robust = [d for d in depth if not d["fragile"]]
+
+    print(f"\n  Coverage Depth Report")
+    print(f"  {'═' * 50}")
+    print(f"  Total concepts: {len(depth)}")
+    print(f"  Fragile (≤1 impl): {len(fragile)}")
+    print(f"  Robust (≥2 impl): {len(robust)}")
+
+    if fragile:
+        print(f"\n  Fragile concepts:")
+        for d in fragile:
+            impls = d["implementations"]
+            repos = ", ".join(d["repos"]) if d["repos"] else "none"
+            tag = "[GAP]" if impls == 0 else "[1 impl]"
+            print(f"    {tag} {d['title']} ← {repos}")
+
+    if args.verbose and robust:
+        print(f"\n  Robust concepts:")
+        for d in robust:
+            spread = f" ({', '.join(d['organs'])})" if d["organs"] else ""
+            print(f"    [{d['implementations']} impl] {d['title']}{spread}")
+
+    return 0
+
+
+def cmd_corpus_repo(args: argparse.Namespace) -> int:
+    """Show what concepts a repo implements (reverse lookup)."""
+    from pathlib import Path
+
+    from organvm_engine.corpus.graph import CorpusGraph
+    from organvm_engine.corpus.scanner import scan_corpus
+
+    if args.graph_file:
+        graph = CorpusGraph.load(Path(args.graph_file))
+    else:
+        corpus_dir = Path(args.corpus_dir).resolve()
+        ws_root = Path(args.workspace).resolve() if args.workspace else None
+        graph = scan_corpus(corpus_dir, workspace_root=ws_root)
+
+    concepts = graph.repo_concepts(args.repo)
+
+    if args.json:
+        print(json.dumps({
+            "repo": args.repo,
+            "concepts": concepts,
+            "count": len(concepts),
+        }, indent=2, ensure_ascii=False))
+        return 0
+
+    if not concepts:
+        print(f"\n  No concepts found for repo '{args.repo}'")
+        return 0
+
+    print(f"\n  Concepts implemented by: {args.repo}")
+    print(f"  {'═' * 50}")
+    for c in concepts:
+        print(f"    {c['concept']}")
+        if c["aspect"]:
+            print(f"      {c['aspect']}")
+
+    print(f"\n  Total: {len(concepts)} concepts")
+    return 0
