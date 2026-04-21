@@ -14,6 +14,7 @@ from typing import Any
 
 import yaml
 
+from organvm_engine.organ_config import organ_org_dirs
 from organvm_engine.paths import workspace_root
 
 
@@ -63,8 +64,9 @@ def discover_contrib_repos(
     ws = Path(workspace) if workspace else workspace_root()
     repos: list[ContribRepo] = []
 
-    # Scan all directories for contrib repos
-    for org_dir in ws.iterdir():
+    # Scan only canonical organ directories (avoids hardlink mirrors)
+    for org_name in organ_org_dirs():
+        org_dir = ws / org_name
         if not org_dir.is_dir():
             continue
         for repo_dir in org_dir.iterdir():
