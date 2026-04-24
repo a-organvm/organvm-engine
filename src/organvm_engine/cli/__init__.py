@@ -214,6 +214,7 @@ from organvm_engine.cli.ontologia import (
     cmd_ontologia_tensions,
 )
 from organvm_engine.cli.organism import cmd_organism, cmd_organism_snapshot
+from organvm_engine.cli.resolve_cmd import cmd_resolve, cmd_topology_build
 from organvm_engine.cli.pitch import cmd_pitch_generate, cmd_pitch_sync
 from organvm_engine.cli.plans import (
     cmd_plans_atomize,
@@ -3164,6 +3165,22 @@ def build_parser() -> argparse.ArgumentParser:
     form_inv.add_argument("--context", default=None, help="JSON context string")
     form_inv.add_argument("--json", action="store_true", help="Output JSON")
 
+    # ── resolve (top-level) ──
+    res = sub.add_parser("resolve", help="Resolve a capability to a filesystem path")
+    res.add_argument("query", nargs="?", help="Repo name, alias, or @capability")
+    res.add_argument("--fallback", default=None, help="Value to return if not found (exit 0)")
+    res.add_argument("--all", action="store_true", help="Print all resolved paths")
+    res.add_argument("--json", action="store_true", help="Output JSON (with --all)")
+
+    # ── topology ──
+    topo = sub.add_parser("topology", help="Topology cache management")
+    topo_sub = topo.add_subparsers(dest="subcommand")
+
+    topo_build = topo_sub.add_parser("build", help="Build the topology cache from seed.yaml files")
+    topo_build.add_argument("--write", action="store_true", help="Write cache to disk")
+    topo_build.add_argument("--verbose", action="store_true", help="List all discovered repos")
+    topo_build.add_argument("--workspace", default=None, help="Workspace root override")
+
     return parser
 
 
@@ -3243,6 +3260,18 @@ def main() -> int:
     }
 
     # Handle top-level commands (no subcommand)
+    if args.command == "resolve":
+        return cmd_resolve(args)
+    if args.command == "topology":
+        topo_dispatch = {
+            "build": cmd_topology_build,
+        }
+        sub_cmd = getattr(args, "subcommand", None)
+        handler = topo_dispatch.get(sub_cmd)
+        if handler:
+            return handler(args)
+        print("Usage: organvm topology build [--write]", file=sys.stderr)
+        return 2
     if args.command == "status":
         return cmd_status(args)
     if args.command == "deadlines":
