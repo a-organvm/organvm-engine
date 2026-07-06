@@ -1187,7 +1187,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Number of recent syncs to show (default: 1)",
     )
-    
+
     c_rollback = ctx_sub.add_parser(
         "rollback",
         help="Rollback a previous context sync",
