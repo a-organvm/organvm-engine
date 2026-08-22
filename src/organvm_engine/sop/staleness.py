@@ -344,8 +344,9 @@ def _resolve_governed_files(mapping: SOPCodeMapping) -> tuple[list[Path], list[P
 
 def _expand_mapping_path(base_dir: Path, raw_path: str) -> list[Path]:
     if _has_glob(raw_path):
-        pattern = str(_absolute_mapping_path(base_dir, raw_path))
-        return sorted(Path(path) for path in glob.glob(pattern, recursive=True))
+        abs_path = _absolute_mapping_path(base_dir, raw_path)
+        pattern = str(abs_path)
+        return sorted(Path(path) for path in glob.glob(pattern, recursive=True))  # noqa: PTH207
 
     path = _absolute_mapping_path(base_dir, raw_path)
     return [path] if path.exists() else []
@@ -382,7 +383,7 @@ def _should_skip(path: Path) -> bool:
 def _select_sop_entry(mapping: SOPCodeMapping, discovered: list[SOPEntry]) -> SOPEntry | None:
     matches = [
         entry for entry in discovered
-        if entry.sop_name == mapping.sop_name or entry.filename == mapping.sop_name
+        if mapping.sop_name in (entry.sop_name, entry.filename)
     ]
     if not matches:
         return None
