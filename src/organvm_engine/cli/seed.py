@@ -93,7 +93,7 @@ def cmd_seed_validate(args: argparse.Namespace) -> int:
             else:
                 produces = get_produces(seed)
                 consumes = get_consumes(seed)
-                
+
                 if not produces and not consumes:
                     print(f"  WARN {seed.get('org')}/{seed.get('repo')}: zero produces/consumes edges (LEX-IV Metabolism violation)")
                 else:
