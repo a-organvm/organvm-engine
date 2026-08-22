@@ -17,8 +17,8 @@ from organvm_engine.mcp import (
     TOOLS_BY_NAME,
     call_tool,
     list_tools,
+    tools,
 )
-from organvm_engine.mcp import tools
 
 FIXTURES = Path(__file__).parent / "fixtures"
 REGISTRY = str(FIXTURES / "registry-minimal.json")
