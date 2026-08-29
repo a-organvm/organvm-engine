@@ -5,8 +5,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-import organvm_engine.session.agents as session_agents
-from organvm_engine.cli.session import cmd_session_review
+from organvm_engine.cli.session import _print_unreadable_sessions, cmd_session_review
+from organvm_engine.session import agents as session_agents
+from organvm_engine.session.agents import UnreadableSession
 
 # ── Helpers ───────────────────────────────────────────────────────
 
@@ -215,7 +216,8 @@ def test_review_unparseable_session(tmp_path, capsys):
 
 def test_review_non_utf8_session_reports_action(tmp_path, capsys):
     bad_jsonl = tmp_path / "non-utf8.jsonl"
-    bad_jsonl.write_bytes(b"\x8d\n")
+    valid_prefix = b"{}\n" * 7_000
+    bad_jsonl.write_bytes(valid_prefix + b"\x8d\n")
 
     with patch("organvm_engine.cli.session.find_session", return_value=bad_jsonl):
         result = cmd_session_review(_FakeArgs(session_id="non-utf8"))
@@ -223,6 +225,21 @@ def test_review_non_utf8_session_reports_action(tmp_path, capsys):
     assert result == 1
     captured = capsys.readouterr()
     assert '"status": "unreadable-session"' in captured.out
-    assert '"reason": "non-UTF-8 input at byte 0"' in captured.out
+    assert f'"reason": "non-UTF-8 input at byte {len(valid_prefix)}"' in captured.out
     assert "Re-encode the file as UTF-8" in captured.out
     assert "Traceback" not in captured.out
+
+
+def test_unreadable_session_output_is_capped(tmp_path, capsys):
+    diagnostics = [
+        UnreadableSession("claude", tmp_path / f"broken-{index}.jsonl", index)
+        for index in range(12)
+    ]
+
+    _print_unreadable_sessions(diagnostics)
+
+    output = capsys.readouterr().out
+    assert output.count('"status": "unreadable-session"') == 10
+    assert '"count": 2, "status": "unreadable-sessions-omitted"' in output
+    assert "broken-9.jsonl" in output
+    assert "broken-10.jsonl" not in output
