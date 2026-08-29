@@ -61,12 +61,44 @@ class AgentSession:
         return f"{self.size_bytes}B"
 
 
+@dataclass(frozen=True)
+class UnreadableSession:
+    """Actionable diagnostic for a session file that is not valid UTF-8."""
+
+    agent: str
+    file_path: Path
+    byte_offset: int
+
+    def to_dict(self) -> dict[str, str | int]:
+        """Return a stable CLI-facing representation of the diagnostic."""
+        return {
+            "status": "unreadable-session",
+            "agent": self.agent,
+            "file": str(self.file_path),
+            "reason": f"non-UTF-8 input at byte {self.byte_offset}",
+            "action": "Re-encode the file as UTF-8 or remove it from the session corpus.",
+        }
+
+
+def _record_decode_error(
+    diagnostics: list[UnreadableSession] | None,
+    agent: str,
+    file_path: Path,
+    exc: UnicodeDecodeError,
+) -> None:
+    """Record a decode failure when the caller requested discovery diagnostics."""
+    if diagnostics is not None:
+        diagnostics.append(UnreadableSession(agent, file_path, exc.start))
+
+
 # ── Discovery ──────────────────────────────────────────────────────
 
 
 def discover_claude_sessions(
     project_filter: str | None = None,
     directory_filter: str | None = None,
+    *,
+    diagnostics: list[UnreadableSession] | None = None,
 ) -> list[AgentSession]:
     """Find all Claude Code sessions.
 
@@ -91,7 +123,7 @@ def discover_claude_sessions(
             continue
 
         for jsonl in proj_dir.glob("*.jsonl"):
-            meta = _quick_parse_claude(jsonl, decoded_path)
+            meta = _quick_parse_claude(jsonl, decoded_path, diagnostics=diagnostics)
             if meta:
                 results.append(meta)
 
@@ -101,6 +133,8 @@ def discover_claude_sessions(
 def discover_gemini_sessions(
     project_filter: str | None = None,
     directory_filter: str | None = None,
+    *,
+    diagnostics: list[UnreadableSession] | None = None,
 ) -> list[AgentSession]:
     """Find all Gemini CLI sessions.
 
@@ -132,7 +166,11 @@ def discover_gemini_sessions(
 
         for pattern in ("session-*.json", "session-*.jsonl"):
             for session_file in chats_dir.glob(pattern):
-                meta = _quick_parse_gemini(session_file, proj_dir.name)
+                meta = _quick_parse_gemini(
+                    session_file,
+                    proj_dir.name,
+                    diagnostics=diagnostics,
+                )
                 if meta:
                     results.append(meta)
 
@@ -155,6 +193,8 @@ def _gemini_slug_for_directory(directory: str) -> str | None:
 def discover_codex_sessions(
     project_filter: str | None = None,
     directory_filter: str | None = None,
+    *,
+    diagnostics: list[UnreadableSession] | None = None,
 ) -> list[AgentSession]:
     """Find all Codex sessions (active + archived)."""
     results = []
@@ -162,14 +202,24 @@ def discover_codex_sessions(
     # Active sessions: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
     if CODEX_SESSIONS_DIR.exists():
         for jsonl in CODEX_SESSIONS_DIR.rglob("rollout-*.jsonl"):
-            meta = _quick_parse_codex(jsonl, project_filter, directory_filter)
+            meta = _quick_parse_codex(
+                jsonl,
+                project_filter,
+                directory_filter,
+                diagnostics=diagnostics,
+            )
             if meta:
                 results.append(meta)
 
     # Archived: ~/.codex/archived_sessions/rollout-*.jsonl
     if CODEX_ARCHIVED_DIR.exists():
         for jsonl in CODEX_ARCHIVED_DIR.glob("rollout-*.jsonl"):
-            meta = _quick_parse_codex(jsonl, project_filter, directory_filter)
+            meta = _quick_parse_codex(
+                jsonl,
+                project_filter,
+                directory_filter,
+                diagnostics=diagnostics,
+            )
             if meta:
                 results.append(meta)
 
@@ -247,16 +297,36 @@ def discover_all_sessions(
     agent: str | None = None,
     project_filter: str | None = None,
     directory_filter: str | None = None,
+    *,
+    diagnostics: list[UnreadableSession] | None = None,
 ) -> list[AgentSession]:
     """Discover sessions across all agents, sorted newest first."""
     results: list[AgentSession] = []
 
     if agent is None or agent == "claude":
-        results.extend(discover_claude_sessions(project_filter, directory_filter))
+        results.extend(
+            discover_claude_sessions(
+                project_filter,
+                directory_filter,
+                diagnostics=diagnostics,
+            ),
+        )
     if agent is None or agent == "gemini":
-        results.extend(discover_gemini_sessions(project_filter, directory_filter))
+        results.extend(
+            discover_gemini_sessions(
+                project_filter,
+                directory_filter,
+                diagnostics=diagnostics,
+            ),
+        )
     if agent is None or agent == "codex":
-        results.extend(discover_codex_sessions(project_filter, directory_filter))
+        results.extend(
+            discover_codex_sessions(
+                project_filter,
+                directory_filter,
+                diagnostics=diagnostics,
+            ),
+        )
     if agent is None or agent == "opencode":
         results.extend(discover_opencode_sessions(project_filter, directory_filter))
 
@@ -286,12 +356,17 @@ def _read_cwd_from_claude_project(proj_dir: Path) -> str:
                             return cwd
                     except json.JSONDecodeError:
                         continue
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
     return proj_dir.name
 
 
-def _quick_parse_claude(jsonl_path: Path, project_dir: str) -> AgentSession | None:
+def _quick_parse_claude(
+    jsonl_path: Path,
+    project_dir: str,
+    *,
+    diagnostics: list[UnreadableSession] | None = None,
+) -> AgentSession | None:
     """Extract minimal metadata from a Claude JSONL without full parse."""
     try:
         size = jsonl_path.stat().st_size
@@ -318,6 +393,9 @@ def _quick_parse_claude(jsonl_path: Path, project_dir: str) -> AgentSession | No
                         pass
                 # Only need first and last — stop scanning after we have a few
                 # but we need to reach the end for the last timestamp
+    except UnicodeDecodeError as exc:
+        _record_decode_error(diagnostics, "claude", jsonl_path, exc)
+        return None
     except OSError:
         return None
 
@@ -335,7 +413,12 @@ def _quick_parse_claude(jsonl_path: Path, project_dir: str) -> AgentSession | No
     )
 
 
-def _quick_parse_gemini(session_file: Path, project_slug: str) -> AgentSession | None:
+def _quick_parse_gemini(
+    session_file: Path,
+    project_slug: str,
+    *,
+    diagnostics: list[UnreadableSession] | None = None,
+) -> AgentSession | None:
     """Extract minimal metadata from a Gemini session file.
 
     Gemini ships two on-disk formats:
@@ -360,6 +443,9 @@ def _quick_parse_gemini(session_file: Path, project_slug: str) -> AgentSession |
                 data = json.loads(first_line)
             else:
                 data = json.load(f)
+    except UnicodeDecodeError as exc:
+        _record_decode_error(diagnostics, "gemini", session_file, exc)
+        return None
     except (OSError, json.JSONDecodeError):
         return None
 
@@ -388,6 +474,8 @@ def _quick_parse_codex(
     jsonl_path: Path,
     project_filter: str | None,
     directory_filter: str | None = None,
+    *,
+    diagnostics: list[UnreadableSession] | None = None,
 ) -> AgentSession | None:
     """Extract minimal metadata from a Codex rollout JSONL."""
     try:
@@ -424,6 +512,9 @@ def _quick_parse_codex(
                     ts_str2 = payload.get("timestamp")
                     if ts_str2:
                         started = _parse_iso(ts_str2)
+    except UnicodeDecodeError as exc:
+        _record_decode_error(diagnostics, "codex", jsonl_path, exc)
+        return None
     except OSError:
         return None
 
