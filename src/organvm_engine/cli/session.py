@@ -37,6 +37,8 @@ from organvm_engine.session.parser import (
 )
 from organvm_engine.session.plans import discover_plans
 
+_MAX_UNREADABLE_SESSION_DIAGNOSTICS = 10
+
 
 def cmd_session_projects(args: argparse.Namespace) -> int:
     """List all Claude Code project directories."""
@@ -449,8 +451,18 @@ def _print_unreadable_sessions(diagnostics: list[UnreadableSession]) -> None:
         return
 
     print(f"Unreadable sessions ({len(diagnostics)} skipped):")
-    for diagnostic in diagnostics:
+    visible = diagnostics[:_MAX_UNREADABLE_SESSION_DIAGNOSTICS]
+    for diagnostic in visible:
         print(f"  {json.dumps(diagnostic.to_dict(), sort_keys=True)}")
+    omitted = len(diagnostics) - len(visible)
+    if omitted:
+        print(
+            "  "
+            + json.dumps(
+                {"status": "unreadable-sessions-omitted", "count": omitted},
+                sort_keys=True,
+            ),
+        )
     print()
 
 
@@ -487,7 +499,13 @@ def cmd_session_review(args: argparse.Namespace) -> int:
         prompts_content = render_any_prompts(jsonl_path) if meta else ""
     except UnicodeDecodeError as exc:
         _print_unreadable_sessions(
-            [UnreadableSession(detect_agent(jsonl_path), jsonl_path, exc.start)],
+            [
+                UnreadableSession.from_decode_error(
+                    detect_agent(jsonl_path),
+                    jsonl_path,
+                    exc,
+                ),
+            ],
         )
         return 1
 
