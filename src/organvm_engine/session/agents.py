@@ -69,6 +69,23 @@ class UnreadableSession:
     file_path: Path
     byte_offset: int
 
+    @classmethod
+    def from_decode_error(
+        cls,
+        agent: str,
+        file_path: Path,
+        exc: UnicodeDecodeError,
+    ) -> UnreadableSession:
+        """Build a diagnostic with an absolute byte offset."""
+        byte_offset = exc.start
+        try:
+            file_path.read_bytes().decode("utf-8")
+        except UnicodeDecodeError as absolute_exc:
+            byte_offset = absolute_exc.start
+        except OSError:
+            pass
+        return cls(agent, file_path, byte_offset)
+
     def to_dict(self) -> dict[str, str | int]:
         """Return a stable CLI-facing representation of the diagnostic."""
         return {
@@ -88,7 +105,7 @@ def _record_decode_error(
 ) -> None:
     """Record a decode failure when the caller requested discovery diagnostics."""
     if diagnostics is not None:
-        diagnostics.append(UnreadableSession(agent, file_path, exc.start))
+        diagnostics.append(UnreadableSession.from_decode_error(agent, file_path, exc))
 
 
 # ── Discovery ──────────────────────────────────────────────────────
@@ -441,6 +458,8 @@ def _quick_parse_gemini(
                 if not first_line:
                     return None
                 data = json.loads(first_line)
+                for _line in f:
+                    pass
             else:
                 data = json.load(f)
     except UnicodeDecodeError as exc:
@@ -513,16 +532,18 @@ def _quick_parse_codex(
                     if ts_str2:
                         started = _parse_iso(ts_str2)
     except UnicodeDecodeError as exc:
+        if cwd and not _codex_cwd_matches_filters(
+            cwd,
+            project_filter,
+            directory_filter,
+        ):
+            return None
         _record_decode_error(diagnostics, "codex", jsonl_path, exc)
         return None
     except OSError:
         return None
 
-    # Apply directory filter (exact match) before substring project filter
-    if directory_filter and cwd != directory_filter:
-        return None
-    # Apply project filter on cwd
-    if project_filter and project_filter not in cwd:
+    if not _codex_cwd_matches_filters(cwd, project_filter, directory_filter):
         return None
 
     if not timestamps and not started:
@@ -537,6 +558,17 @@ def _quick_parse_codex(
         ended=max(timestamps) if timestamps else None,
         size_bytes=size,
     )
+
+
+def _codex_cwd_matches_filters(
+    cwd: str,
+    project_filter: str | None,
+    directory_filter: str | None,
+) -> bool:
+    """Return whether a recovered Codex cwd belongs in the requested scope."""
+    if directory_filter and cwd != directory_filter:
+        return False
+    return not (project_filter and project_filter not in cwd)
 
 
 def _parse_iso(ts_str: str | None) -> datetime | None:
