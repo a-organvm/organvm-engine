@@ -604,9 +604,13 @@ def _recover_codex_cwd(jsonl_path: Path) -> str:
                     entry = json.loads(raw_line.decode("utf-8"))
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     continue
+                if not isinstance(entry, dict):
+                    continue
                 if entry.get("type") != "session_meta":
                     continue
                 payload = entry.get("payload", {})
+                if not isinstance(payload, dict):
+                    continue
                 cwd = payload.get("cwd", "")
                 return cwd if isinstance(cwd, str) else ""
     except OSError:
