@@ -6,6 +6,7 @@ from pathlib import Path
 
 from organvm_engine.session.agents import (
     AgentSession,
+    UnreadableSession,
     _human_size,
     _parse_iso,
     discover_all_sessions,
@@ -290,6 +291,27 @@ class TestDiscovery:
         assert len(sessions) == 1
         assert sessions[0].agent == "gemini"
 
+    def test_gemini_discovery_validates_entire_jsonl(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("organvm_engine.session.agents.GEMINI_TMP_DIR", tmp_path)
+        chats_dir = tmp_path / "portfolio" / "chats"
+        chats_dir.mkdir(parents=True)
+        session_file = chats_dir / "session-corrupt.jsonl"
+        header = (
+            b'{"sessionId":"gemini-corrupt",'
+            b'"startTime":"2026-03-06T10:00:00Z"}\n'
+        )
+        valid_events = b"{}\n" * 7_000
+        invalid_offset = len(header) + len(valid_events)
+        session_file.write_bytes(header + valid_events + b"\x8d\n")
+        diagnostics = []
+
+        sessions = discover_gemini_sessions(diagnostics=diagnostics)
+
+        assert sessions == []
+        assert len(diagnostics) == 1
+        assert diagnostics[0].agent == "gemini"
+        assert diagnostics[0].byte_offset == invalid_offset
+
     def test_codex_discovery(self, tmp_path, monkeypatch):
         monkeypatch.setattr("organvm_engine.session.agents.CODEX_SESSIONS_DIR", tmp_path)
         monkeypatch.setattr("organvm_engine.session.agents.CODEX_ARCHIVED_DIR", tmp_path / "archived")
@@ -298,6 +320,116 @@ class TestDiscovery:
         sessions = discover_codex_sessions()
         assert len(sessions) == 1
         assert sessions[0].agent == "codex"
+
+    def test_codex_filters_before_recording_decode_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("organvm_engine.session.agents.CODEX_SESSIONS_DIR", tmp_path)
+        monkeypatch.setattr(
+            "organvm_engine.session.agents.CODEX_ARCHIVED_DIR",
+            tmp_path / "archived",
+        )
+        session_file = tmp_path / "rollout-corrupt.jsonl"
+        meta = {
+            "timestamp": "2026-03-06T10:00:00Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "codex-corrupt",
+                "cwd": "/Users/test/other",
+                "timestamp": "2026-03-06T10:00:00Z",
+            },
+        }
+        header = (json.dumps(meta) + "\n").encode()
+        valid_events = b"{}\n" * 7_000
+        invalid_offset = len(header) + len(valid_events)
+        session_file.write_bytes(header + valid_events + b"\x8d\n")
+        unrelated_diagnostics = []
+
+        sessions = discover_codex_sessions(
+            project_filter="target",
+            diagnostics=unrelated_diagnostics,
+        )
+
+        assert sessions == []
+        assert unrelated_diagnostics == []
+
+        matching_diagnostics = []
+        sessions = discover_codex_sessions(
+            project_filter="other",
+            diagnostics=matching_diagnostics,
+        )
+
+        assert sessions == []
+        assert len(matching_diagnostics) == 1
+        assert matching_diagnostics[0].byte_offset == invalid_offset
+
+    def test_codex_recovers_cwd_when_following_bytes_are_invalid(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setattr("organvm_engine.session.agents.CODEX_SESSIONS_DIR", tmp_path)
+        monkeypatch.setattr(
+            "organvm_engine.session.agents.CODEX_ARCHIVED_DIR",
+            tmp_path / "archived",
+        )
+        session_file = tmp_path / "rollout-corrupt.jsonl"
+        meta = {
+            "timestamp": "2026-03-06T10:00:00Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "codex-corrupt",
+                "cwd": "/Users/test/other",
+                "timestamp": "2026-03-06T10:00:00Z",
+            },
+        }
+        header = (json.dumps(meta) + "\n").encode()
+        session_file.write_bytes(header + b"\x8d\n")
+
+        unrelated_diagnostics = []
+        sessions = discover_codex_sessions(
+            project_filter="target",
+            diagnostics=unrelated_diagnostics,
+        )
+
+        assert sessions == []
+        assert unrelated_diagnostics == []
+
+        matching_diagnostics = []
+        sessions = discover_codex_sessions(
+            project_filter="other",
+            diagnostics=matching_diagnostics,
+        )
+
+        assert sessions == []
+        assert len(matching_diagnostics) == 1
+        assert matching_diagnostics[0].byte_offset == len(header)
+
+    def test_unreadable_offset_scan_does_not_load_entire_file(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        session_file = tmp_path / "corrupt.jsonl"
+        valid_prefix = b"{}\n" * 50_000
+        session_file.write_bytes(valid_prefix + b"\x8d\n")
+        try:
+            session_file.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            decode_error = exc
+        else:  # pragma: no cover - the fixture is deliberately invalid
+            raise AssertionError("fixture unexpectedly decoded")
+
+        def fail_read_bytes(_self):
+            raise AssertionError("offset scan must not call Path.read_bytes")
+
+        monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
+
+        diagnostic = UnreadableSession.from_decode_error(
+            "codex",
+            session_file,
+            decode_error,
+        )
+
+        assert diagnostic.byte_offset == len(valid_prefix)
 
     def test_discover_all(self, tmp_path, monkeypatch):
         # Claude

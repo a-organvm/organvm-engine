@@ -17,9 +17,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
-from organvm_engine.session.agents import agent_summary, discover_all_sessions
+from organvm_engine.session.agents import (
+    UnreadableSession,
+    agent_summary,
+    discover_all_sessions,
+)
 from organvm_engine.session.parser import (
     SessionExport,
     detect_agent,
@@ -31,6 +36,8 @@ from organvm_engine.session.parser import (
     render_any_transcript,
 )
 from organvm_engine.session.plans import discover_plans
+
+_MAX_UNREADABLE_SESSION_DIAGNOSTICS = 10
 
 
 def cmd_session_projects(args: argparse.Namespace) -> int:
@@ -438,6 +445,27 @@ def cmd_session_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_unreadable_sessions(diagnostics: list[UnreadableSession]) -> None:
+    """Print bounded machine-readable diagnostics for skipped session files."""
+    if not diagnostics:
+        return
+
+    print(f"Unreadable sessions ({len(diagnostics)} skipped):")
+    visible = diagnostics[:_MAX_UNREADABLE_SESSION_DIAGNOSTICS]
+    for diagnostic in visible:
+        print(f"  {json.dumps(diagnostic.to_dict(), sort_keys=True)}")
+    omitted = len(diagnostics) - len(visible)
+    if omitted:
+        print(
+            "  "
+            + json.dumps(
+                {"status": "unreadable-sessions-omitted", "count": omitted},
+                sort_keys=True,
+            ),
+        )
+    print()
+
+
 def cmd_session_review(args: argparse.Namespace) -> int:
     """Review a session: summary, prompt list, related plans."""
     session_id = getattr(args, "session_id", None)
@@ -445,9 +473,15 @@ def cmd_session_review(args: argparse.Namespace) -> int:
     project = getattr(args, "project", None)
 
     if latest:
-        sessions = discover_all_sessions(project_filter=project)
+        diagnostics: list[UnreadableSession] = []
+        sessions = discover_all_sessions(
+            project_filter=project,
+            diagnostics=diagnostics,
+        )
+        _print_unreadable_sessions(diagnostics)
         if not sessions:
-            print("No sessions found.")
+            message = "No readable sessions found." if diagnostics else "No sessions found."
+            print(message)
             return 1
         target = sessions[0]
         jsonl_path = target.file_path
@@ -460,7 +494,21 @@ def cmd_session_review(args: argparse.Namespace) -> int:
         print("Provide a session ID or use --latest.")
         return 1
 
-    meta = parse_any_session(jsonl_path)
+    try:
+        meta = parse_any_session(jsonl_path)
+        prompts_content = render_any_prompts(jsonl_path) if meta else ""
+    except UnicodeDecodeError as exc:
+        _print_unreadable_sessions(
+            [
+                UnreadableSession.from_decode_error(
+                    detect_agent(jsonl_path),
+                    jsonl_path,
+                    exc,
+                ),
+            ],
+        )
+        return 1
+
     if not meta:
         print(f"Could not parse session: {jsonl_path}")
         return 1
@@ -474,7 +522,6 @@ def cmd_session_review(args: argparse.Namespace) -> int:
     print()
 
     # Extract and list human prompts
-    prompts_content = render_any_prompts(jsonl_path)
     prompt_count = prompts_content.count("### P")
     print(f"Prompts ({meta.human_messages} human messages, {prompt_count} extracted):")
 

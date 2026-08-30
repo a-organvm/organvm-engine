@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from organvm_engine.cli.session import cmd_session_review
+from organvm_engine.cli.session import _print_unreadable_sessions, cmd_session_review
+from organvm_engine.session import agents as session_agents
+from organvm_engine.session.agents import UnreadableSession
 
 # ── Helpers ───────────────────────────────────────────────────────
 
@@ -132,6 +134,34 @@ def test_review_latest(tmp_path, capsys):
         assert "Session Review:" in captured.out
 
 
+def test_review_latest_skips_non_utf8_session(tmp_path, monkeypatch, capsys):
+    projects_dir = tmp_path / "claude-projects"
+    project_dir = projects_dir / "-Users-test-Workspace-project"
+    project_dir.mkdir(parents=True)
+    _make_test_session(project_dir, session_id="valid-latest")
+
+    unreadable = project_dir / "broken.jsonl"
+    unreadable.write_bytes(b'{"timestamp":"2026-03-07T10:00:00Z"}\n\x8d\n')
+
+    monkeypatch.setattr(session_agents, "CLAUDE_PROJECTS_DIR", projects_dir)
+    monkeypatch.setattr(session_agents, "GEMINI_TMP_DIR", tmp_path / "no-gemini")
+    monkeypatch.setattr(session_agents, "CODEX_SESSIONS_DIR", tmp_path / "no-codex")
+    monkeypatch.setattr(session_agents, "CODEX_ARCHIVED_DIR", tmp_path / "no-archive")
+    monkeypatch.setattr(session_agents, "OPENCODE_DB", tmp_path / "no-opencode.db")
+
+    with patch("organvm_engine.cli.session.discover_plans", return_value=[]):
+        result = cmd_session_review(_FakeArgs(latest=True))
+
+    assert result == 0
+    captured = capsys.readouterr()
+    assert "Session Review: valid-la" in captured.out
+    assert '"status": "unreadable-session"' in captured.out
+    assert '"file":' in captured.out
+    assert "broken.jsonl" in captured.out
+    assert "Re-encode the file as UTF-8" in captured.out
+    assert "Traceback" not in captured.out
+
+
 def test_review_latest_no_sessions(capsys):
     with patch(
         "organvm_engine.cli.session.discover_all_sessions",
@@ -182,3 +212,34 @@ def test_review_unparseable_session(tmp_path, capsys):
         assert result == 1
         captured = capsys.readouterr()
         assert "Could not parse" in captured.out
+
+
+def test_review_non_utf8_session_reports_action(tmp_path, capsys):
+    bad_jsonl = tmp_path / "non-utf8.jsonl"
+    valid_prefix = b"{}\n" * 7_000
+    bad_jsonl.write_bytes(valid_prefix + b"\x8d\n")
+
+    with patch("organvm_engine.cli.session.find_session", return_value=bad_jsonl):
+        result = cmd_session_review(_FakeArgs(session_id="non-utf8"))
+
+    assert result == 1
+    captured = capsys.readouterr()
+    assert '"status": "unreadable-session"' in captured.out
+    assert f'"reason": "non-UTF-8 input at byte {len(valid_prefix)}"' in captured.out
+    assert "Re-encode the file as UTF-8" in captured.out
+    assert "Traceback" not in captured.out
+
+
+def test_unreadable_session_output_is_capped(tmp_path, capsys):
+    diagnostics = [
+        UnreadableSession("claude", tmp_path / f"broken-{index}.jsonl", index)
+        for index in range(12)
+    ]
+
+    _print_unreadable_sessions(diagnostics)
+
+    output = capsys.readouterr().out
+    assert output.count('"status": "unreadable-session"') == 10
+    assert '"count": 2, "status": "unreadable-sessions-omitted"' in output
+    assert "broken-9.jsonl" in output
+    assert "broken-10.jsonl" not in output
