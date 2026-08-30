@@ -6,6 +6,7 @@ from pathlib import Path
 
 from organvm_engine.session.agents import (
     AgentSession,
+    UnreadableSession,
     _human_size,
     _parse_iso,
     discover_all_sessions,
@@ -359,6 +360,76 @@ class TestDiscovery:
         assert sessions == []
         assert len(matching_diagnostics) == 1
         assert matching_diagnostics[0].byte_offset == invalid_offset
+
+    def test_codex_recovers_cwd_when_following_bytes_are_invalid(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setattr("organvm_engine.session.agents.CODEX_SESSIONS_DIR", tmp_path)
+        monkeypatch.setattr(
+            "organvm_engine.session.agents.CODEX_ARCHIVED_DIR",
+            tmp_path / "archived",
+        )
+        session_file = tmp_path / "rollout-corrupt.jsonl"
+        meta = {
+            "timestamp": "2026-03-06T10:00:00Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "codex-corrupt",
+                "cwd": "/Users/test/other",
+                "timestamp": "2026-03-06T10:00:00Z",
+            },
+        }
+        header = (json.dumps(meta) + "\n").encode()
+        session_file.write_bytes(header + b"\x8d\n")
+
+        unrelated_diagnostics = []
+        sessions = discover_codex_sessions(
+            project_filter="target",
+            diagnostics=unrelated_diagnostics,
+        )
+
+        assert sessions == []
+        assert unrelated_diagnostics == []
+
+        matching_diagnostics = []
+        sessions = discover_codex_sessions(
+            project_filter="other",
+            diagnostics=matching_diagnostics,
+        )
+
+        assert sessions == []
+        assert len(matching_diagnostics) == 1
+        assert matching_diagnostics[0].byte_offset == len(header)
+
+    def test_unreadable_offset_scan_does_not_load_entire_file(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        session_file = tmp_path / "corrupt.jsonl"
+        valid_prefix = b"{}\n" * 50_000
+        session_file.write_bytes(valid_prefix + b"\x8d\n")
+        try:
+            session_file.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            decode_error = exc
+        else:  # pragma: no cover - the fixture is deliberately invalid
+            raise AssertionError("fixture unexpectedly decoded")
+
+        def fail_read_bytes(_self):
+            raise AssertionError("offset scan must not call Path.read_bytes")
+
+        monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
+
+        diagnostic = UnreadableSession.from_decode_error(
+            "codex",
+            session_file,
+            decode_error,
+        )
+
+        assert diagnostic.byte_offset == len(valid_prefix)
 
     def test_discover_all(self, tmp_path, monkeypatch):
         # Claude

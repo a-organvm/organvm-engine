@@ -6,6 +6,7 @@ All four are normalized to a common SessionMeta + rendering pipeline.
 
 from __future__ import annotations
 
+import codecs
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -20,6 +21,9 @@ GEMINI_PROJECTS_JSON = Path.home() / ".local" / "share" / "gemini" / "projects.j
 CODEX_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 CODEX_ARCHIVED_DIR = Path.home() / ".codex" / "archived_sessions"
 OPENCODE_DB = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+
+_UTF8_SCAN_CHUNK_BYTES = 64 * 1024
+_CODEX_META_LINE_LIMIT_BYTES = 1024 * 1024
 
 
 # ── Agent enum ─────────────────────────────────────────────────────
@@ -77,14 +81,7 @@ class UnreadableSession:
         exc: UnicodeDecodeError,
     ) -> UnreadableSession:
         """Build a diagnostic with an absolute byte offset."""
-        byte_offset = exc.start
-        try:
-            file_path.read_bytes().decode("utf-8")
-        except UnicodeDecodeError as absolute_exc:
-            byte_offset = absolute_exc.start
-        except OSError:
-            pass
-        return cls(agent, file_path, byte_offset)
+        return cls(agent, file_path, _absolute_utf8_error_offset(file_path, exc.start))
 
     def to_dict(self) -> dict[str, str | int]:
         """Return a stable CLI-facing representation of the diagnostic."""
@@ -95,6 +92,30 @@ class UnreadableSession:
             "reason": f"non-UTF-8 input at byte {self.byte_offset}",
             "action": "Re-encode the file as UTF-8 or remove it from the session corpus.",
         }
+
+
+def _absolute_utf8_error_offset(file_path: Path, fallback: int) -> int:
+    """Locate the first invalid UTF-8 byte with bounded memory use."""
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    consumed = 0
+    try:
+        with file_path.open("rb") as stream:
+            while chunk := stream.read(_UTF8_SCAN_CHUNK_BYTES):
+                buffered = len(decoder.getstate()[0])
+                try:
+                    decoder.decode(chunk, final=False)
+                except UnicodeDecodeError as exc:
+                    return consumed - buffered + exc.start
+                consumed += len(chunk)
+
+            buffered = len(decoder.getstate()[0])
+            try:
+                decoder.decode(b"", final=True)
+            except UnicodeDecodeError as exc:
+                return consumed - buffered + exc.start
+    except OSError:
+        pass
+    return fallback
 
 
 def _record_decode_error(
@@ -532,6 +553,8 @@ def _quick_parse_codex(
                     if ts_str2:
                         started = _parse_iso(ts_str2)
     except UnicodeDecodeError as exc:
+        if not cwd:
+            cwd = _recover_codex_cwd(jsonl_path)
         if cwd and not _codex_cwd_matches_filters(
             cwd,
             project_filter,
@@ -558,6 +581,37 @@ def _quick_parse_codex(
         ended=max(timestamps) if timestamps else None,
         size_bytes=size,
     )
+
+
+def _recover_codex_cwd(jsonl_path: Path) -> str:
+    """Recover a Codex cwd without text-reader look-ahead across bad bytes.
+
+    Binary, size-limited line reads ensure a valid ``session_meta`` line can be
+    decoded even when the following line contains invalid UTF-8 in the same
+    buffered text read. Oversized lines are skipped with bounded memory use.
+    """
+    try:
+        with jsonl_path.open("rb") as stream:
+            while raw_line := stream.readline(_CODEX_META_LINE_LIMIT_BYTES + 1):
+                if (
+                    len(raw_line) > _CODEX_META_LINE_LIMIT_BYTES
+                    and not raw_line.endswith(b"\n")
+                ):
+                    while raw_line and not raw_line.endswith(b"\n"):
+                        raw_line = stream.readline(_CODEX_META_LINE_LIMIT_BYTES + 1)
+                    continue
+                try:
+                    entry = json.loads(raw_line.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if entry.get("type") != "session_meta":
+                    continue
+                payload = entry.get("payload", {})
+                cwd = payload.get("cwd", "")
+                return cwd if isinstance(cwd, str) else ""
+    except OSError:
+        pass
+    return ""
 
 
 def _codex_cwd_matches_filters(
