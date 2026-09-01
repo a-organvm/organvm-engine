@@ -1,0 +1,1046 @@
+"""Canonical project-record loading and integrity validation."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import subprocess
+from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+import yaml
+
+CONTRACT_NAME = "project-record.v1"
+CONTRACT_VERSION = 1
+DOCUMENTATION_CLASSES = frozenset("ABCDEF")
+IMPLEMENTATION_STATUSES = frozenset(
+    {"ACTIVE", "PROTOTYPE", "SKELETON", "DESIGN_ONLY", "ARCHIVED"},
+)
+DEPLOYMENT_STATUSES = frozenset(
+    {"not-deployed", "internal", "pilot", "public", "retired", "not-applicable"},
+)
+AUDIENCE_MODES = frozenset(
+    {"general", "technical", "humanities", "business", "evaluator"},
+)
+CLAIM_POSTURES = frozenset(
+    {"implemented", "partial", "proposed", "unknown", "contradicted"},
+)
+DEPLOYMENT_STATUS_POSTURES: dict[str, frozenset[str]] = {
+    "pilot": frozenset({"implemented", "partial"}),
+    "public": frozenset({"implemented", "partial"}),
+    # A retired deployment may be established by its historical operation or
+    # by verified evidence that the former deployment is now unavailable.
+    "retired": frozenset({"implemented", "partial", "contradicted"}),
+}
+ROLE_CLASS_RULES: dict[str, str] = {
+    "mirror": "D",
+    "deployment-artifact": "D",
+    "archive": "F",
+    "upstream-fork": "F",
+    "contribution": "F",
+}
+GIT_EVIDENCE_REFERENCE = re.compile(
+    r"^git:(?P<commit>[0-9a-fA-F]{40})(?::(?P<path>.+))?$",
+)
+REPOSITORY_SLUG = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+CLASS_ROUTE_RULES: dict[str, tuple[frozenset[str], int, int | None]] = {
+    "A": (AUDIENCE_MODES, 5, 5),
+    "B": (frozenset(), 2, 3),
+    "C": (frozenset({"technical"}), 1, None),
+    "D": (frozenset(), 0, 0),
+    "E": (frozenset({"humanities"}), 1, None),
+    "F": (frozenset(), 0, 0),
+}
+REQUIRED_FIELDS = (
+    "contract_name",
+    "contract_version",
+    "project_id",
+    "name",
+    "canonical_repository",
+    "repository_role",
+    "documentation_class",
+    "one_sentence",
+    "problem",
+    "intended_users",
+    "implementation_status",
+    "deployment_status",
+    "authorship",
+    "claim_references",
+    "limitations",
+    "audience_routes",
+    "search_intents",
+    "links",
+    "generated_at",
+    "verified_at",
+)
+
+
+def load_project_record(path: str | Path) -> dict[str, Any]:
+    """Load a YAML/JSON project record as a mapping."""
+    record_path = Path(path)
+    if not record_path.is_file():
+        raise FileNotFoundError(record_path)
+    try:
+        data = yaml.safe_load(record_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid YAML in {record_path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Project record is not a mapping: {record_path}")
+    return data
+
+
+def validate_project_record(
+    record: Mapping[str, Any],
+    *,
+    root: str | Path | None = None,
+    schema: Mapping[str, Any] | None = None,
+    assertion_schema: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
+    require_git_tracked_evidence: bool = False,
+    actual_repository: str | None = None,
+) -> list[str]:
+    """Return deterministic integrity errors for a canonical project record.
+
+    JSON Schema validates shape. These checks additionally enforce uniqueness,
+    local-path containment, cross-reference integrity, and agreement between a
+    claim reference and its assertion-evidence record. Pass
+    ``actual_repository`` when the caller knows the checked-out owner/name so
+    canonical and noncanonical delivery roles can be bound to the repository
+    that CI is actually validating.
+    """
+    errors: list[str] = []
+    validation_now = now or datetime.now(timezone.utc)
+    if validation_now.tzinfo is None:
+        errors.append("validation time must include a timezone")
+        validation_now = validation_now.replace(tzinfo=timezone.utc)
+    for field in REQUIRED_FIELDS:
+        if field not in record:
+            errors.append(f"missing required field: {field}")
+
+    if record.get("contract_name") != CONTRACT_NAME:
+        errors.append(
+            f"unsupported contract_name: {record.get('contract_name')!r}; "
+            f"expected {CONTRACT_NAME!r}",
+        )
+    if record.get("contract_version") != CONTRACT_VERSION:
+        errors.append(
+            f"unsupported contract_version: {record.get('contract_version')!r}; "
+            f"expected {CONTRACT_VERSION}",
+        )
+
+    doc_class = record.get("documentation_class")
+    if not isinstance(doc_class, str) or doc_class not in DOCUMENTATION_CLASSES:
+        errors.append(f"invalid documentation_class: {doc_class!r}")
+    implementation_status = record.get("implementation_status")
+    if (
+        not isinstance(implementation_status, str)
+        or implementation_status not in IMPLEMENTATION_STATUSES
+    ):
+        errors.append(f"invalid implementation_status: {record.get('implementation_status')!r}")
+    deployment_status = record.get("deployment_status")
+    if (
+        not isinstance(deployment_status, str)
+        or deployment_status not in DEPLOYMENT_STATUSES
+    ):
+        errors.append(f"invalid deployment_status: {record.get('deployment_status')!r}")
+
+    repository = record.get("canonical_repository")
+    if not isinstance(repository, str) or REPOSITORY_SLUG.fullmatch(repository) is None:
+        errors.append("canonical_repository must use owner/name form")
+
+    if actual_repository is not None:
+        if REPOSITORY_SLUG.fullmatch(actual_repository) is None:
+            errors.append("actual_repository must use owner/name form")
+        elif isinstance(repository, str) and REPOSITORY_SLUG.fullmatch(repository):
+            repository_role = record.get("repository_role")
+            same_repository = repository.casefold() == actual_repository.casefold()
+            if repository_role == "canonical" and not same_repository:
+                errors.append(
+                    "repository_role 'canonical' requires canonical_repository to "
+                    "equal actual_repository",
+                )
+            if repository_role in {"mirror", "deployment-artifact", "upstream-fork"} and same_repository:
+                errors.append(
+                    f"repository_role {repository_role!r} requires canonical_repository "
+                    "to differ from actual_repository",
+                )
+
+    project_timestamps: dict[str, datetime] = {}
+    for field in ("generated_at", "verified_at"):
+        value = record.get(field)
+        parsed = _parse_datetime(value) if isinstance(value, str) else None
+        if parsed is None:
+            errors.append(f"{field} must be an ISO 8601 date-time with a timezone")
+        else:
+            project_timestamps[field] = parsed
+            if parsed > validation_now.astimezone(timezone.utc):
+                errors.append(f"{field} cannot be in the future")
+    generated_at = project_timestamps.get("generated_at")
+    verified_at = project_timestamps.get("verified_at")
+    if generated_at is not None and verified_at is not None and verified_at > generated_at:
+        errors.append("verified_at must be less than or equal to generated_at")
+
+    links = record.get("links", {})
+    if not isinstance(links, Mapping):
+        errors.append("links must be a mapping")
+        links = {}
+    repository_link = links.get("repository")
+    if not isinstance(repository_link, str) or not _valid_web_uri(repository_link):
+        errors.append("links.repository must be an absolute HTTP(S) URI")
+    else:
+        linked_repository = _github_repository_slug(repository_link)
+        if linked_repository is None:
+            errors.append(
+                "links.repository must be a canonical GitHub repository URL",
+            )
+        elif (
+            isinstance(repository, str)
+            and repository.count("/") == 1
+            and linked_repository.casefold() != repository.casefold()
+        ):
+            errors.append(
+                "canonical_repository must agree with links.repository GitHub owner/name",
+            )
+    for key in ("project_page", "demo", "deployment"):
+        value = links.get(key)
+        if value is not None and (not isinstance(value, str) or not _valid_web_uri(value)):
+            errors.append(f"links.{key} must be an absolute HTTP(S) URI")
+    local_link_paths: list[tuple[str, str]] = []
+    for key in ("documentation", "evidence"):
+        value = links.get(key)
+        if value is None:
+            if key == "documentation":
+                errors.append(f"links.{key} is required")
+            continue
+        if not isinstance(value, str) or not value:
+            errors.append(
+                f"links.{key} must be a contained local path or absolute HTTP(S) URI",
+            )
+        elif _valid_web_uri(value):
+            continue
+        elif _reference_is_remote_or_absolute(value):
+            errors.append(
+                f"links.{key} must be a contained local path or absolute HTTP(S) URI",
+            )
+        else:
+            local_link_paths.append((key, value))
+
+    repository_role = record.get("repository_role")
+    if doc_class == "D" and repository_role not in {"mirror", "deployment-artifact"}:
+        errors.append(
+            "documentation_class D requires repository_role 'mirror' or "
+            "'deployment-artifact'",
+        )
+    if isinstance(repository_role, str) and repository_role in ROLE_CLASS_RULES:
+        required_class = ROLE_CLASS_RULES[repository_role]
+        if doc_class != required_class:
+            errors.append(
+                f"repository_role {repository_role!r} requires documentation_class {required_class}",
+            )
+    redirect = record.get("redirect")
+    canonical_redirect_required = (
+        doc_class == "D"
+        or (
+            isinstance(repository_role, str)
+            and repository_role in {"mirror", "deployment-artifact"}
+        )
+    )
+    redirect_requirement = (
+        "class D"
+        if doc_class == "D"
+        else f"repository_role {repository_role!r}"
+    )
+    if canonical_redirect_required and not isinstance(redirect, Mapping):
+        errors.append(f"{redirect_requirement} requires a canonical redirect")
+    if isinstance(redirect, Mapping):
+        target = redirect.get("target")
+        if not isinstance(target, str) or not _valid_web_uri(target):
+            errors.append("redirect.target must be an absolute HTTP(S) URI")
+        if canonical_redirect_required:
+            if redirect.get("status") == "none":
+                errors.append(
+                    f"{redirect_requirement} requires a non-none redirect status",
+                )
+            target_repository = (
+                _github_repository_slug(target) if isinstance(target, str) else None
+            )
+            if target_repository is None:
+                errors.append(
+                    f"{redirect_requirement} redirect.target must be a GitHub repository URL",
+                )
+            elif (
+                isinstance(repository, str)
+                and repository.count("/") == 1
+                and target_repository.casefold() != repository.casefold()
+            ):
+                errors.append(
+                    f"{redirect_requirement} redirect.target must resolve to canonical_repository",
+                )
+
+    if isinstance(doc_class, str) and doc_class in {"A", "B"}:
+        evidence_link = links.get("evidence")
+        if not isinstance(evidence_link, str) or not evidence_link:
+            errors.append(f"class {doc_class} requires links.evidence")
+
+    claims = record.get("claim_references", [])
+    claim_ids: list[str] = []
+    claim_scopes: list[str] = []
+    claim_assertion_paths: list[tuple[int, str, str, str]] = []
+    claims_by_id: dict[str, Mapping[str, Any]] = {}
+    if not isinstance(claims, list) or not claims:
+        errors.append("claim_references must be a non-empty list")
+        claims = []
+    for index, claim in enumerate(claims):
+        if not isinstance(claim, Mapping):
+            errors.append(f"claim_references[{index}] must be a mapping")
+            continue
+        claim_id = claim.get("id")
+        if not isinstance(claim_id, str) or not claim_id:
+            errors.append(f"claim_references[{index}] requires a non-empty id")
+        else:
+            claim_ids.append(claim_id)
+            claims_by_id[claim_id] = claim
+        if claim.get("assertion_contract") != "assertion-evidence.v1":
+            errors.append(
+                f"claim_references[{index}] must use assertion-evidence.v1",
+            )
+        scope = claim.get("scope")
+        if isinstance(scope, str):
+            claim_scopes.append(scope)
+        claim_posture = claim.get("claim_posture")
+        if not isinstance(claim_posture, str) or claim_posture not in CLAIM_POSTURES:
+            errors.append(
+                f"claim_references[{index}] has invalid claim_posture: {claim_posture!r}",
+            )
+        assertion_id = claim.get("assertion_id")
+        assertion_ref = claim.get("assertion_ref")
+        if not isinstance(assertion_id, str) or not assertion_id:
+            errors.append(f"claim_references[{index}] requires assertion_id")
+        if not isinstance(assertion_ref, str) or not assertion_ref:
+            errors.append(f"claim_references[{index}] requires assertion_ref")
+        elif _reference_is_remote_or_absolute(assertion_ref):
+            errors.append(
+                f"claim_references[{index}] remote or absolute assertion_ref is unsupported by project-record.v1",
+            )
+        elif isinstance(assertion_id, str) and isinstance(claim_id, str):
+            claim_assertion_paths.append((index, assertion_ref, assertion_id, claim_id))
+
+    for claim_id in _duplicates(claim_ids):
+        errors.append(f"duplicate claim reference id: {claim_id}")
+    claim_id_set = set(claim_ids)
+    if "status" not in claim_scopes:
+        errors.append("project record requires a 'status' claim reference")
+    qualifying_deployment_claim_ids: list[str] = []
+    allowed_deployment_postures = (
+        DEPLOYMENT_STATUS_POSTURES.get(deployment_status)
+        if isinstance(deployment_status, str)
+        else None
+    )
+    if allowed_deployment_postures is not None:
+        deployment_claims = [
+            (claim_id, claim)
+            for claim_id, claim in claims_by_id.items()
+            if claim.get("scope") == "deployment"
+        ]
+        qualifying_deployment_claim_ids = [
+            claim_id
+            for claim_id, claim in deployment_claims
+            if claim.get("claim_posture") in allowed_deployment_postures
+        ]
+        if not deployment_claims:
+            errors.append(
+                f"deployment_status {deployment_status!r} requires a 'deployment' "
+                "claim reference",
+            )
+        elif not qualifying_deployment_claim_ids:
+            rendered_postures = ", ".join(
+                repr(posture) for posture in sorted(allowed_deployment_postures)
+            )
+            errors.append(
+                f"deployment_status {deployment_status!r} requires at least one "
+                f"deployment claim with claim_posture in {{{rendered_postures}}}",
+            )
+    if doc_class == "F":
+        for required_scope in ("provenance",):
+            if required_scope not in claim_scopes:
+                errors.append(
+                    f"class F requires a {required_scope!r} claim reference",
+                )
+
+    limitation_ids: list[str] = []
+    limitation_assertion_paths: list[tuple[int, str, str]] = []
+    limitations = record.get("limitations", [])
+    if not isinstance(limitations, list):
+        errors.append("limitations must be a list")
+        limitations = []
+    for index, limitation in enumerate(limitations):
+        if not isinstance(limitation, Mapping):
+            errors.append(f"limitations[{index}] must be a mapping")
+            continue
+        limitation_id = limitation.get("id")
+        if isinstance(limitation_id, str) and limitation_id:
+            limitation_ids.append(limitation_id)
+        else:
+            errors.append(f"limitations[{index}] requires a non-empty id")
+        assertion_ref = limitation.get("assertion_ref")
+        assertion_id = limitation.get("assertion_id")
+        if isinstance(assertion_ref, str) and assertion_ref:
+            if not isinstance(assertion_id, str) or not assertion_id:
+                errors.append(
+                    f"limitations[{index}] assertion_ref requires assertion_id",
+                )
+            if _reference_is_remote_or_absolute(assertion_ref):
+                errors.append(
+                    f"limitations[{index}] remote or absolute assertion_ref is unsupported by project-record.v1",
+                )
+            elif isinstance(assertion_id, str) and assertion_id:
+                limitation_assertion_paths.append((index, assertion_ref, assertion_id))
+        elif assertion_id is not None:
+            errors.append(f"limitations[{index}] assertion_id requires assertion_ref")
+    for limitation_id in _duplicates(limitation_ids):
+        errors.append(f"duplicate limitation id: {limitation_id}")
+
+    routes = record.get("audience_routes", [])
+    modes: list[str] = []
+    route_paths: list[str] = []
+    if not isinstance(routes, list):
+        errors.append("audience_routes must be a list")
+        routes = []
+    for index, route in enumerate(routes):
+        if not isinstance(route, Mapping):
+            errors.append(f"audience_routes[{index}] must be a mapping")
+            continue
+        mode = route.get("mode")
+        path = route.get("path")
+        if not isinstance(mode, str) or mode not in AUDIENCE_MODES:
+            errors.append(f"audience_routes[{index}] has invalid mode: {mode!r}")
+        else:
+            modes.append(mode)
+        if not isinstance(path, str) or not path.startswith("docs/audiences/"):
+            errors.append(f"audience_routes[{index}] path must be under docs/audiences/")
+        else:
+            route_paths.append(path)
+
+    for mode in _duplicates(modes):
+        errors.append(f"duplicate audience mode: {mode}")
+    for path in _duplicates(route_paths):
+        errors.append(f"duplicate audience route path: {path}")
+    if "evaluator" in modes and "authorship" not in claim_scopes:
+        errors.append("evaluator audience route requires an 'authorship' claim reference")
+    if isinstance(doc_class, str) and doc_class in CLASS_ROUTE_RULES:
+        required_modes, minimum, maximum = CLASS_ROUTE_RULES[doc_class]
+        missing_modes = sorted(required_modes - set(modes))
+        if missing_modes:
+            errors.append(
+                f"class {doc_class} is missing audience modes: {', '.join(missing_modes)}",
+            )
+        if len(modes) < minimum:
+            errors.append(f"class {doc_class} requires at least {minimum} audience route(s)")
+        if maximum is not None and len(modes) > maximum:
+            errors.append(f"class {doc_class} allows at most {maximum} audience route(s)")
+
+    industry_names: list[str] = []
+    industry_paths: list[tuple[int, str]] = []
+    industries = record.get("industries", [])
+    if not isinstance(industries, list):
+        errors.append("industries must be a list")
+        industries = []
+    for index, industry in enumerate(industries):
+        if not isinstance(industry, Mapping):
+            errors.append(f"industries[{index}] must be a mapping")
+            continue
+        name = industry.get("name")
+        if isinstance(name, str) and name:
+            industry_names.append(name.casefold())
+        path = industry.get("path")
+        if isinstance(path, str) and path:
+            industry_paths.append((index, path))
+        status = industry.get("status")
+        refs = industry.get("claim_references", [])
+        if isinstance(status, str) and status in {"deployed", "piloted"} and not refs:
+            errors.append(f"industries[{index}] status {status!r} requires claim_references")
+        if not isinstance(refs, list):
+            errors.append(f"industries[{index}].claim_references must be a list")
+            refs = []
+        for claim_id in refs:
+            if not isinstance(claim_id, str) or claim_id not in claim_id_set:
+                errors.append(f"industries[{index}] references unknown claim id: {claim_id}")
+    for industry_name in _duplicates(industry_names):
+        errors.append(f"duplicate industry name: {industry_name}")
+
+    search_intent_names: list[str] = []
+    search_intents = record.get("search_intents", [])
+    if not isinstance(search_intents, list):
+        errors.append("search_intents must be a list")
+        search_intents = []
+    for index, search_intent in enumerate(search_intents):
+        if not isinstance(search_intent, Mapping):
+            errors.append(f"search_intents[{index}] must be a mapping")
+            continue
+        intent = search_intent.get("intent")
+        if isinstance(intent, str) and intent:
+            search_intent_names.append(intent)
+    for intent in _duplicates(search_intent_names):
+        errors.append(f"duplicate search intent: {intent}")
+
+    if root is not None:
+        root_path = Path(root).resolve()
+        for relative in route_paths:
+            _validate_local_file(root_path, relative, "audience path", errors)
+
+        for index, reference in industry_paths:
+            _validate_local_file(
+                root_path,
+                reference,
+                f"industries[{index}] path",
+                errors,
+            )
+
+        for key, reference in local_link_paths:
+            _validate_local_file(root_path, reference, f"links.{key}", errors)
+
+        resolved_claim_assertions: dict[str, Mapping[str, Any]] = {}
+        for index, reference, assertion_id, claim_id in claim_assertion_paths:
+            assertion, assertion_errors = _validate_assertion_target(
+                root=root_path,
+                reference=reference,
+                assertion_id=assertion_id,
+                label=f"claim_references[{index}]",
+                assertion_schema=assertion_schema,
+                now=validation_now,
+                require_git_tracked_evidence=require_git_tracked_evidence,
+            )
+            errors.extend(assertion_errors)
+            if assertion is not None:
+                resolved_claim_assertions[claim_id] = assertion
+
+        for index, reference, assertion_id in limitation_assertion_paths:
+            _assertion, assertion_errors = _validate_assertion_target(
+                root=root_path,
+                reference=reference,
+                assertion_id=assertion_id,
+                label=f"limitations[{index}]",
+                assertion_schema=assertion_schema,
+                now=validation_now,
+                require_git_tracked_evidence=require_git_tracked_evidence,
+            )
+            errors.extend(assertion_errors)
+
+        if allowed_deployment_postures is not None and qualifying_deployment_claim_ids:
+            verified_deployment_claims = [
+                claim_id
+                for claim_id in qualifying_deployment_claim_ids
+                if resolved_claim_assertions.get(claim_id, {}).get("verification_state")
+                == "verified"
+            ]
+            if not verified_deployment_claims:
+                errors.append(
+                    f"deployment_status {deployment_status!r} requires at least one "
+                    "qualifying deployment claim that resolves to a verified assertion",
+                )
+
+        errors.extend(
+            _industry_evidence_errors(
+                industries,
+                claims_by_id=claims_by_id,
+                resolved_assertions=resolved_claim_assertions,
+            ),
+        )
+
+    if schema is not None:
+        errors.extend(_schema_errors(dict(record), schema, prefix="schema"))
+    return sorted(set(errors))
+
+
+def _validate_assertion_target(
+    *,
+    root: Path,
+    reference: str,
+    assertion_id: str,
+    label: str,
+    assertion_schema: Mapping[str, Any] | None,
+    now: datetime,
+    require_git_tracked_evidence: bool,
+) -> tuple[Mapping[str, Any] | None, list[str]]:
+    errors: list[str] = []
+    candidate = _contained_path(root, reference)
+    if candidate is None:
+        return None, [f"{label} assertion path escapes repository root: {reference}"]
+    if not candidate.is_file():
+        return None, [f"{label} assertion path does not exist: {reference}"]
+    try:
+        assertion = _load_mapping(candidate)
+    except (OSError, ValueError) as exc:
+        return None, [f"{label} cannot load assertion: {exc}"]
+
+    assertion_contract_matches = assertion.get("contract_name") == "assertion-evidence.v1"
+    if not assertion_contract_matches:
+        errors.append(f"{label} target is not assertion-evidence.v1: {reference}")
+    if assertion.get("assertion_id") != assertion_id:
+        errors.append(f"{label} assertion_id does not match {reference}")
+    if assertion_contract_matches:
+        errors.extend(
+            f"assertion {reference}: semantic: {error}"
+            for error in _assertion_semantic_errors(assertion, now=now)
+        )
+        errors.extend(
+            _assertion_evidence_binding_errors(
+                assertion,
+                root=root,
+                reference=reference,
+                require_git_tracked_evidence=require_git_tracked_evidence,
+            ),
+        )
+    if assertion_schema is not None:
+        errors.extend(
+            _schema_errors(
+                assertion,
+                assertion_schema,
+                prefix=f"assertion {reference}",
+            ),
+        )
+    return assertion, errors
+
+
+def _industry_evidence_errors(
+    industries: list[Any],
+    *,
+    claims_by_id: Mapping[str, Mapping[str, Any]],
+    resolved_assertions: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    errors: list[str] = []
+    evidence_scopes = {"deployment", "adoption", "outcome"}
+    for index, industry in enumerate(industries):
+        if not isinstance(industry, Mapping):
+            continue
+        status = industry.get("status")
+        references = industry.get("claim_references", [])
+        if not isinstance(references, list):
+            continue
+        for claim_id in references:
+            if not isinstance(claim_id, str) or claim_id not in claims_by_id:
+                continue
+            claim = claims_by_id[claim_id]
+            assertion = resolved_assertions.get(claim_id)
+            if isinstance(status, str) and status in {"deployed", "piloted"}:
+                if claim.get("scope") not in evidence_scopes:
+                    errors.append(
+                        f"industries[{index}] {status!r} claim {claim_id!r} must use "
+                        "deployment, adoption, or outcome scope",
+                    )
+                if assertion is not None and assertion.get("verification_state") != "verified":
+                    errors.append(
+                        f"industries[{index}] {status!r} claim {claim_id!r} must resolve "
+                        "to a verified assertion",
+                    )
+            elif status == "proposed":
+                if claim.get("claim_posture") != "proposed":
+                    errors.append(
+                        f"industries[{index}] proposed claim {claim_id!r} requires "
+                        "claim_posture 'proposed'",
+                    )
+                if assertion is not None and (
+                    assertion.get("assertion_class") != "inference"
+                    or not isinstance(assertion.get("inference_label"), str)
+                    or not assertion.get("inference_label")
+                ):
+                    errors.append(
+                        f"industries[{index}] proposed claim {claim_id!r} must resolve "
+                        "to a labeled inference",
+                    )
+    return errors
+
+
+def _duplicates(values: list[str]) -> list[str]:
+    return sorted({value for value in values if values.count(value) > 1})
+
+
+def _contained_path(root: Path, relative: str) -> Path | None:
+    try:
+        candidate = (root / relative).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
+
+
+def _validate_local_file(root: Path, relative: str, label: str, errors: list[str]) -> None:
+    candidate = _contained_path(root, relative)
+    if candidate is None:
+        errors.append(f"{label} escapes repository root: {relative}")
+    elif not candidate.is_file():
+        errors.append(f"{label} does not exist: {relative}")
+
+
+def _valid_datetime(value: str) -> bool:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
+def _valid_web_uri(value: str) -> bool:
+    if any(character.isspace() for character in value):
+        return False
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return False
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _github_repository_slug(value: str) -> str | None:
+    """Extract owner/name from one canonical GitHub repository URL."""
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "github.com"
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) != 2:
+        return None
+    owner, name = parts
+    if name.endswith(".git"):
+        name = name[:-4]
+    if not owner or not name:
+        return None
+    return f"{owner}/{name}"
+
+
+def _reference_is_remote_or_absolute(reference: str) -> bool:
+    """Return whether an assertion reference cannot be resolved inside the root."""
+    try:
+        has_scheme = bool(urlparse(reference).scheme)
+    except ValueError:
+        return True
+    return has_scheme or Path(reference).is_absolute()
+
+
+def _assertion_semantic_errors(
+    assertion: Mapping[str, Any],
+    *,
+    now: datetime,
+) -> list[str]:
+    """Validate assertion-evidence invariants that JSON Schema cannot express."""
+    errors: list[str] = []
+    evidence = assertion.get("evidence_references")
+    if not isinstance(evidence, list):
+        return errors
+
+    evidence_ids = [
+        item.get("evidence_id") for item in evidence if isinstance(item, Mapping)
+    ]
+    duplicate_evidence_ids = _duplicates(
+        [value for value in evidence_ids if isinstance(value, str)],
+    )
+    if duplicate_evidence_ids:
+        errors.append(
+            "evidence_references contain duplicate evidence_id values: "
+            f"{duplicate_evidence_ids}",
+        )
+
+    freshness = assertion.get("freshness")
+    if isinstance(freshness, Mapping):
+        verified_at = freshness.get("verified_at")
+        parsed_verified_at = (
+            _parse_datetime(verified_at) if isinstance(verified_at, str) else None
+        )
+        if parsed_verified_at is None:
+            errors.append(
+                "freshness.verified_at must be an ISO 8601 date-time with a timezone",
+            )
+        else:
+            normalized_now = now.astimezone(timezone.utc)
+            if parsed_verified_at > normalized_now:
+                errors.append("freshness.verified_at cannot be in the future")
+            max_age_seconds = freshness.get("max_age_seconds")
+            if (
+                freshness.get("status") == "fresh"
+                and isinstance(max_age_seconds, int)
+                and not isinstance(max_age_seconds, bool)
+                and max_age_seconds > 0
+                and parsed_verified_at + timedelta(seconds=max_age_seconds)
+                < normalized_now
+            ):
+                errors.append(
+                    "freshness.status 'fresh' is expired at validation time",
+                )
+
+    if assertion.get("verification_state") != "verified":
+        return errors
+
+    groups = {
+        item.get("independence_group")
+        for item in evidence
+        if isinstance(item, Mapping)
+        and isinstance(item.get("independence_group"), str)
+        and item.get("independence_group")
+    }
+    evidence_types = {
+        item.get("evidence_type")
+        for item in evidence
+        if isinstance(item, Mapping) and isinstance(item.get("evidence_type"), str)
+    }
+    assertion_class = assertion.get("assertion_class")
+
+    if assertion_class == "external_fact" and len(groups) < 2:
+        errors.append(
+            "a verified external_fact requires at least two independent evidence groups",
+        )
+    if assertion_class == "operator_directive":
+        if len(groups) < 2:
+            errors.append(
+                "a verified operator_directive requires at least two independent evidence groups",
+            )
+        required = {"immutable_source_event", "ratified_constitutional_record"}
+        missing = sorted(required - evidence_types)
+        if missing:
+            errors.append(
+                "a verified operator_directive is missing evidence types: "
+                + ", ".join(missing),
+            )
+        if not isinstance(freshness, Mapping) or freshness.get("status") not in {
+            "fresh",
+            "not_applicable",
+        }:
+            errors.append(
+                "a verified operator_directive requires non-stale freshness",
+            )
+    if assertion_class == "current_state":
+        required = {"owner_record", "fresh_verifier_receipt"}
+        missing = sorted(required - evidence_types)
+        if missing:
+            errors.append(
+                "a verified current_state is missing evidence types: "
+                + ", ".join(missing),
+            )
+        if not isinstance(freshness, Mapping) or freshness.get("status") != "fresh":
+            errors.append("a verified current_state requires freshness.status 'fresh'")
+
+    return errors
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _assertion_evidence_binding_errors(
+    assertion: Mapping[str, Any],
+    *,
+    root: Path,
+    reference: str,
+    require_git_tracked_evidence: bool,
+) -> list[str]:
+    """Bind evidence to local bytes or deterministic local Git objects."""
+    errors: list[str] = []
+    evidence = assertion.get("evidence_references")
+    if not isinstance(evidence, list):
+        return errors
+
+    for index, item in enumerate(evidence):
+        if not isinstance(item, Mapping):
+            continue
+        evidence_reference = item.get("reference")
+        if not isinstance(evidence_reference, str) or not evidence_reference:
+            continue
+        label = f"assertion {reference}: evidence_references[{index}]"
+        body_hash = item.get("body_hash")
+        if not isinstance(body_hash, str) or not body_hash.startswith("sha256:"):
+            errors.append(f"{label} body_hash must use sha256:<hex>")
+            continue
+        if evidence_reference.startswith("git:"):
+            errors.extend(
+                _git_evidence_binding_errors(
+                    root=root,
+                    evidence_reference=evidence_reference,
+                    body_hash=body_hash,
+                    label=label,
+                ),
+            )
+            continue
+        if _reference_is_remote_or_absolute(evidence_reference):
+            errors.append(
+                f"{label} remote or opaque reference cannot be content-verified by "
+                "project-record.v1; cite a committed local snapshot or receipt: "
+                f"{evidence_reference}",
+            )
+            continue
+        if ".git" in Path(evidence_reference).parts:
+            errors.append(f"{label} reference under .git is forbidden: {evidence_reference}")
+            continue
+        if _path_contains_symlink(root, evidence_reference):
+            errors.append(f"{label} symlink evidence is forbidden: {evidence_reference}")
+            continue
+
+        candidate = _contained_path(root, evidence_reference)
+        if candidate is None:
+            errors.append(
+                f"{label} reference escapes repository root: {evidence_reference}",
+            )
+            continue
+        if not candidate.is_file():
+            errors.append(
+                f"{label} reference does not exist: {evidence_reference}",
+            )
+            continue
+        if require_git_tracked_evidence:
+            errors.extend(
+                _git_tracked_path_errors(
+                    root=root,
+                    relative=evidence_reference,
+                    label=label,
+                ),
+            )
+        actual = "sha256:" + hashlib.sha256(candidate.read_bytes()).hexdigest()
+        if body_hash != actual:
+            errors.append(
+                f"{label} body_hash does not match raw bytes for {evidence_reference}: "
+                f"expected {actual}, found {body_hash}",
+            )
+    return errors
+
+
+def _git_evidence_binding_errors(
+    *,
+    root: Path,
+    evidence_reference: str,
+    body_hash: str,
+    label: str,
+) -> list[str]:
+    match = GIT_EVIDENCE_REFERENCE.fullmatch(evidence_reference)
+    if match is None:
+        return [
+            f"{label} git evidence must use git:<full-40-sha> or "
+            "git:<full-40-sha>:<contained-path>",
+        ]
+    commit = match.group("commit")
+    path = match.group("path")
+    if path is not None and (
+        _reference_is_remote_or_absolute(path)
+        or ".." in Path(path).parts
+        or ".git" in Path(path).parts
+    ):
+        return [f"{label} git evidence path is not contained: {path}"]
+
+    commit_check = _run_git(root, "cat-file", "-e", f"{commit}^{{commit}}")
+    if commit_check.returncode != 0:
+        return [
+            f"{label} git commit is unavailable locally (possibly shallow): {commit}",
+        ]
+    if path is None:
+        payload_result = _run_git(root, "cat-file", "commit", commit)
+    else:
+        tree_entry = _run_git(root, "ls-tree", commit, "--", path)
+        if tree_entry.returncode != 0 or not tree_entry.stdout:
+            return [f"{label} git evidence path does not exist at {commit}: {path}"]
+        mode = tree_entry.stdout.split(None, 1)[0].decode("ascii", errors="replace")
+        if mode not in {"100644", "100755"}:
+            return [
+                f"{label} git evidence path must be a regular blob, not mode {mode}: {path}",
+            ]
+        payload_result = _run_git(root, "cat-file", "blob", f"{commit}:{path}")
+    if payload_result.returncode != 0:
+        return [f"{label} cannot resolve git evidence: {evidence_reference}"]
+    actual = "sha256:" + hashlib.sha256(payload_result.stdout).hexdigest()
+    if body_hash != actual:
+        return [
+            f"{label} body_hash does not match Git object bytes for {evidence_reference}: "
+            f"expected {actual}, found {body_hash}",
+        ]
+    return []
+
+
+def _git_tracked_path_errors(*, root: Path, relative: str, label: str) -> list[str]:
+    inside = _run_git(root, "rev-parse", "--is-inside-work-tree")
+    if inside.returncode != 0 or inside.stdout.strip() != b"true":
+        return [f"{label} commit-bound validation requires a Git work tree"]
+    staged = _run_git(root, "ls-files", "--stage")
+    for line in staged.stdout.splitlines():
+        fields = line.split(None, 3)
+        if len(fields) != 4 or fields[0] != b"160000":
+            continue
+        submodule_path = fields[3].decode("utf-8", errors="replace")
+        if relative == submodule_path or relative.startswith(submodule_path + "/"):
+            return [f"{label} evidence inside a submodule is forbidden: {relative}"]
+
+    tracked = _run_git(root, "ls-files", "--error-unmatch", "--", relative)
+    if tracked.returncode != 0:
+        return [f"{label} evidence is ignored or untracked: {relative}"]
+
+    for args in (
+        ("diff", "--quiet", "HEAD", "--", relative),
+        ("diff", "--cached", "--quiet", "HEAD", "--", relative),
+    ):
+        result = _run_git(root, *args)
+        if result.returncode == 1:
+            return [f"{label} evidence differs from the checked-out commit: {relative}"]
+        if result.returncode > 1:
+            return [f"{label} cannot verify committed evidence path: {relative}"]
+    return []
+
+
+def _path_contains_symlink(root: Path, relative: str) -> bool:
+    candidate = root
+    for part in Path(relative).parts:
+        candidate /= part
+        if candidate.is_symlink():
+            return True
+    return False
+
+
+def _run_git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        ["git", "-C", str(root), *args],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def _load_mapping(path: Path) -> dict[str, Any]:
+    if path.suffix.lower() == ".json":
+        data = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"not a mapping: {path}")
+    return data
+
+
+def _schema_errors(data: dict, schema: Mapping[str, Any], *, prefix: str) -> list[str]:
+    from jsonschema import Draft202012Validator, FormatChecker
+
+    try:
+        Draft202012Validator.check_schema(schema)
+        found = sorted(
+            Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(data),
+            key=lambda error: list(error.absolute_path),
+        )
+    except Exception as exc:  # pragma: no cover - jsonschema supplies detail
+        return [f"invalid validation schema: {exc}"]
+    messages: list[str] = []
+    for error in found:
+        location = "/".join(str(part) for part in error.absolute_path) or "<root>"
+        messages.append(f"{prefix} {location}: {error.message}")
+    return messages

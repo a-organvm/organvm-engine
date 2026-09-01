@@ -1,0 +1,999 @@
+"""Build and execute the reader-mode estate audit notebook.
+
+The seven source inventories are transient, authorized audit exports held outside
+the public repository because they include private-repository names. Generated
+artifacts contain aggregate private counts and public-repository rows only.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import traceback
+from pathlib import Path
+from textwrap import dedent
+
+import nbformat
+from nbclient import NotebookClient
+
+HERE = Path(__file__).resolve().parent
+NOTEBOOK = HERE / "2026-08-31-reader-mode-estate-audit.ipynb"
+
+
+def markdown(source: str) -> nbformat.NotebookNode:
+    return nbformat.v4.new_markdown_cell(dedent(source).strip())
+
+
+def code(source: str) -> nbformat.NotebookNode:
+    return nbformat.v4.new_code_cell(dedent(source).strip())
+
+
+cells = [
+    markdown(
+        """
+        # ORGANVM reader-mode documentation estate audit
+
+        **Audit date:** 2026-08-31
+
+        **Scope:** 323 repositories visible through the linked GitHub context
+
+        **Decision:** preserve one canonical factual substrate and expose it through
+        class-appropriate reader routes; repair truth and authority drift before
+        expanding search surfaces.
+
+        ## TL;DR
+
+        This notebook normalizes seven independently produced repository inventories,
+        validates their coverage and scoring, publishes aggregate estate statistics,
+        and emits a privacy-safe public rollout queue. Private repository names and
+        findings remain outside the committed artifacts.
+        """,
+    ),
+    markdown(
+        """
+        ## Context & Methods
+
+        Each repository was inspected read-only and classified A–F. Seven dimensions
+        were scored from 0–4: orientation, technical depth, conceptual depth,
+        commercial relevance, evidence, search surface, and cross-linking. The seven
+        audit segments use slightly different field names, so this notebook maps them
+        into one schema and then asserts:
+
+        - exactly 323 rows and 323 unique `owner/repository` keys;
+        - classes are limited to A–F;
+        - visibility is public or private;
+        - all seven dimension scores fall within 0–4;
+        - recomputed totals agree with the normalized dimensions.
+
+        The ranking is editorial, not a claim of mathematical optimality. It combines
+        documentation class, public leverage, evidence/truth repair, and the explicit
+        recommendations recorded by each audit segment. Wave 0 establishes authority;
+        five pilots stress distinct rhetorical modes; the following twenty are the
+        first conversion queue.
+
+        ### Key assumptions
+
+        - Repository visibility and metadata reflect the authorized exports captured
+          for the 2026-08-31 audit, not a continuously refreshed GitHub view.
+        - Each repository is the unit of analysis; all seven rubric dimensions carry
+          equal weight and use the source auditors' integer scores.
+        - A 0–28 total is descriptive, not a quality ranking. Conversion order also
+          considers documentation class, truth/identity risk, public leverage, and
+          segment recommendations.
+        - The seven raw exports are transient, access-controlled inputs. They are
+          intentionally absent from this public repository; the committed manifest
+          records filenames, counts, and hashes, not row-level private data.
+        """,
+    ),
+    markdown(
+        """
+        ## Data
+
+        The input grain is one repository per row across seven non-overlapping audit
+        segments. The next cells load the authorized exports, normalize their field
+        aliases, and validate coverage, visibility, classification, score completeness,
+        and source totals before any public artifact is written.
+        """,
+    ),
+    code(
+        """
+        from __future__ import annotations
+
+        import hashlib
+        import json
+        import os
+        import re
+        from datetime import datetime, timezone
+        from pathlib import Path
+
+        import pandas as pd
+        from IPython.display import Markdown, display
+
+        pd.set_option("display.max_colwidth", 100)
+
+        DIMENSIONS = (
+            "orientation",
+            "technical_depth",
+            "conceptual_depth",
+            "commercial_relevance",
+            "evidence",
+            "seo_surface",
+            "cross_linking",
+        )
+        SCORE_ALIASES = {
+            "orientation": ("orientation",),
+            "technical_depth": ("technical_depth", "technical"),
+            "conceptual_depth": ("conceptual_depth", "conceptual"),
+            "commercial_relevance": ("commercial_relevance", "commercial"),
+            "evidence": ("evidence",),
+            "seo_surface": ("seo_surface", "seo"),
+            "cross_linking": ("cross_linking",),
+        }
+        SOURCE_FILES = {
+            "personal": "personal.json",
+            "ergon": "ergon.json",
+            "theoria_poiesis": "theoria-poiesis.json",
+            "governance_comms": "governance-comms.json",
+            "umbrella_core": "umbrella-core.json",
+            "umbrella_extended": "umbrella-extended.json",
+            "organvm_gap": "organvm-gap.json",
+        }
+
+        INPUT_DIR = Path(
+            os.environ.get("ORGANVM_DOC_AUDIT_INPUT_DIR", "../../../audit")
+        ).resolve()
+        OUTPUT_DIR = Path.cwd().resolve()
+        missing = [name for name in SOURCE_FILES.values() if not (INPUT_DIR / name).is_file()]
+        if missing:
+            raise FileNotFoundError(
+                "Missing live audit inputs. Set ORGANVM_DOC_AUDIT_INPUT_DIR to the "
+                f"private export directory. Missing: {', '.join(missing)}"
+            )
+
+        raw = {
+            source: json.loads((INPUT_DIR / filename).read_text(encoding="utf-8"))
+            for source, filename in SOURCE_FILES.items()
+        }
+        source_counts = {
+            source: len(bundle["repositories"])
+            for source, bundle in raw.items()
+        }
+        display(pd.DataFrame.from_dict(source_counts, orient="index", columns=["repository rows"]))
+        """,
+    ),
+    code(
+        """
+        def normalize_visibility(row):
+            if row.get("visibility") in {"public", "private"}:
+                return row["visibility"]
+            public = row.get("metadata", {}).get("public")
+            if isinstance(public, bool):
+                return "public" if public else "private"
+            raise ValueError(f"Cannot resolve visibility for {row.get('repository')}")
+
+
+        def normalize_repository(source, bundle, row):
+            if source == "personal":
+                return f"{bundle.get('owner', '4444J99')}/{row['name']}"
+            return row["repository"]
+
+
+        def require_integer(value, field, repository):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(
+                    f"{repository}: {field} must be an integer, got {type(value).__name__}"
+                )
+            return value
+
+
+        def normalize_scores(row, repository):
+            source_scores = row.get("scores", {})
+            result = {}
+            for dimension, aliases in SCORE_ALIASES.items():
+                present = [key for key in aliases if source_scores.get(key) is not None]
+                if len(present) != 1:
+                    raise ValueError(
+                        f"{repository}: expected exactly one score alias for {dimension}; "
+                        f"found {present}"
+                    )
+                source_key = present[0]
+                result[dimension] = require_integer(
+                    source_scores[source_key], f"scores.{source_key}", repository
+                )
+
+            total_candidates = [
+                ("scores.total", source_scores.get("total")),
+                ("score_total", row.get("score_total")),
+                ("total", row.get("total")),
+            ]
+            present_totals = [
+                (field, require_integer(value, field, repository))
+                for field, value in total_candidates
+                if value is not None
+            ]
+            if not present_totals:
+                raise ValueError(f"{repository}: source total is required for this audit")
+            if len({value for _, value in present_totals}) != 1:
+                raise ValueError(
+                    f"{repository}: conflicting source totals in "
+                    f"{[field for field, _ in present_totals]}"
+                )
+
+            result["source_total"] = present_totals[0][1]
+            result["total"] = sum(result[dimension] for dimension in DIMENSIONS)
+            if result["source_total"] != result["total"]:
+                raise ValueError(
+                    f"{repository}: source total {result['source_total']} does not equal "
+                    f"recomputed total {result['total']}"
+                )
+            return result
+
+
+        def normalize_readme(source, row):
+            if source == "personal":
+                return bool(row.get("readme", {}).get("present"))
+            if source == "ergon":
+                return bool(row.get("readme_observation", {}).get("fetched"))
+            if source == "theoria_poiesis":
+                return int(row.get("readme_words", 0)) > 0
+            if source == "umbrella_extended":
+                return bool(row.get("readme", {}).get("present"))
+            if source == "organvm_gap":
+                return bool(row.get("readme", {}).get("present"))
+            return None
+
+
+        def normalize_row(source, bundle, row):
+            repository = normalize_repository(source, bundle, row)
+            scores = normalize_scores(row, repository)
+            metadata = row.get("metadata", {})
+            finding = (
+                row.get("finding")
+                or row.get("note")
+                or row.get("observed")
+                or row.get("evidence_bounded_note")
+                or "; ".join(row.get("truth_or_identity_findings", []))
+                or ""
+            )
+            role = (
+                row.get("repository_role")
+                or row.get("surface_role")
+                or row.get("role")
+                or row.get("surface", {}).get("role")
+                or "unspecified"
+            )
+            priority = (
+                row.get("conversion_priority")
+                or row.get("conversion_wave")
+                or row.get("priority")
+                or "unranked"
+            )
+            archived = bool(row.get("archived", metadata.get("archived", False)))
+            return {
+                "repository": repository,
+                "source_segment": source,
+                "visibility": normalize_visibility(row),
+                "documentation_class": row.get("documentation_class") or row.get("class"),
+                "repository_role": role,
+                "priority": priority,
+                "archived": archived,
+                "has_readme": normalize_readme(source, row),
+                **scores,
+                "finding": finding,
+                "recommended_treatment": row.get("recommended_treatment", ""),
+                "recommended_reader_modes": row.get("recommended_reader_modes", []),
+                "industry_clusters": row.get("industry_clusters", []),
+                "concept_clusters": row.get("concept_clusters", []),
+                "topics": metadata.get("topics", []),
+                "url": row.get("url") or f"https://github.com/{repository}",
+            }
+
+
+        rows = [
+            normalize_row(source, bundle, row)
+            for source, bundle in raw.items()
+            for row in bundle["repositories"]
+        ]
+        inventory = pd.DataFrame(rows).sort_values("repository").reset_index(drop=True)
+
+        assert len(inventory) == 323, f"expected 323 rows, found {len(inventory)}"
+        assert inventory["repository"].nunique() == 323, "repository keys are not unique"
+        assert len(SOURCE_FILES) == 7, f"expected seven source segments, found {len(SOURCE_FILES)}"
+        assert inventory["source_segment"].nunique() == 7
+        assert set(inventory["documentation_class"]) <= set("ABCDEF")
+        assert set(inventory["visibility"]) <= {"public", "private"}
+        for dimension in DIMENSIONS:
+            assert inventory[dimension].between(0, 4).all(), dimension
+        assert (
+            inventory[list(DIMENSIONS)].sum(axis=1) == inventory["total"]
+        ).all(), "normalized totals do not equal the seven dimensions"
+        assert (
+            inventory["source_total"] == inventory["total"]
+        ).all(), "source totals do not equal recomputed totals"
+        visibility_validation = inventory["visibility"].value_counts().to_dict()
+        assert visibility_validation == {"public": 239, "private": 84}, visibility_validation
+
+        input_sources = []
+        for source, filename in SOURCE_FILES.items():
+            source_rows = inventory[inventory["source_segment"] == source]
+            source_visibility = source_rows["visibility"].value_counts().to_dict()
+            source_path = INPUT_DIR / filename
+            input_sources.append(
+                {
+                    "source_segment": source,
+                    "filename": filename,
+                    "rows": int(len(source_rows)),
+                    "public": int(source_visibility.get("public", 0)),
+                    "private": int(source_visibility.get("private", 0)),
+                    "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+                }
+            )
+        assert sum(item["rows"] for item in input_sources) == 323
+        assert sum(item["public"] for item in input_sources) == 239
+        assert sum(item["private"] for item in input_sources) == 84
+
+        print(
+            f"Validated {len(inventory)} unique repositories across "
+            f"{len(SOURCE_FILES)} audit segments; every source total reconciles."
+        )
+        """,
+    ),
+    markdown("## Results"),
+    code(
+        """
+        visibility_counts = inventory["visibility"].value_counts().to_dict()
+        class_visibility = pd.crosstab(
+            inventory["documentation_class"], inventory["visibility"], margins=True
+        ).reindex(list("ABCDEF") + ["All"], fill_value=0)
+        dimension_summary = (
+            inventory.groupby("visibility")[list(DIMENSIONS)]
+            .mean()
+            .round(2)
+            .T
+        )
+
+        display(Markdown(
+            f"**Coverage:** {len(inventory)} repositories — "
+            f"{visibility_counts.get('public', 0)} public and "
+            f"{visibility_counts.get('private', 0)} private."
+        ))
+        display(class_visibility)
+        display(Markdown("### Mean score by visibility (0–4)"))
+        display(dimension_summary)
+        """,
+    ),
+    code(
+        """
+        integrity_terms = (
+            "unsupported", "stale", "broken", "mismatch", "contradict",
+            "false", "drift", "zero-byte", "ambiguous", "truth repair",
+        )
+        inventory["integrity_attention"] = inventory["finding"].str.lower().map(
+            lambda text: any(term in text for term in integrity_terms)
+        )
+        public_inventory = inventory[inventory["visibility"] == "public"].copy()
+
+        private_full_identifiers = set(
+            inventory.loc[inventory["visibility"] == "private", "repository"]
+        )
+        public_slugs = {
+            repository.split("/", 1)[-1]
+            for repository in inventory.loc[
+                inventory["visibility"] == "public", "repository"
+            ]
+        }
+        private_slugs = {
+            repository.split("/", 1)[-1] for repository in private_full_identifiers
+        }
+        distinctive_private_slugs = {
+            slug
+            for slug in private_slugs - public_slugs
+            if len(slug) >= 6 and re.search(r"[-_.]", slug)
+        }
+
+
+        def replace_bounded(text, identifier, replacement):
+            repository_character = r"A-Za-z0-9._-"
+            return re.sub(
+                rf"(?<![{repository_character}]){re.escape(identifier)}"
+                rf"(?![{repository_character}])",
+                replacement,
+                text,
+            )
+
+
+        def redact_private_references(value):
+            if isinstance(value, str):
+                redacted = value
+                for identifier in sorted(
+                    private_full_identifiers | distinctive_private_slugs,
+                    key=len,
+                    reverse=True,
+                ):
+                    redacted = replace_bounded(
+                        redacted, identifier, "[private repository]"
+                    )
+                for slug in sorted(private_slugs, key=len, reverse=True):
+                    redacted = redacted.replace(
+                        f"`{slug}`", "`[private repository]`"
+                    )
+                return redacted
+            if isinstance(value, list):
+                return [redact_private_references(item) for item in value]
+            if isinstance(value, dict):
+                return {
+                    key: redact_private_references(item) for key, item in value.items()
+                }
+            return value
+
+
+        for column in public_inventory.columns:
+            if public_inventory[column].dtype == object:
+                public_inventory[column] = public_inventory[column].map(
+                    redact_private_references
+                )
+        public_integrity_count = int(public_inventory["integrity_attention"].sum())
+
+        status_rows = pd.DataFrame(
+            [
+                {"finding": "Public repositories needing explicit truth/identity attention", "count": public_integrity_count},
+                {"finding": "Public archived surfaces", "count": int((public_inventory["archived"] == True).sum())},
+                {"finding": "Known public READMEs absent in segments that recorded presence", "count": int(((public_inventory["has_readme"] == False)).sum())},
+                {"finding": "Public Class A/B/E projects", "count": int(public_inventory["documentation_class"].isin(["A", "B", "E"]).sum())},
+            ]
+        )
+        display(status_rows)
+        """,
+    ),
+    markdown(
+        """
+        ## Authority architecture
+
+        The audit rejects a new standalone documentation-engine repository. Existing
+        authorities already divide the work cleanly:
+
+        | Authority | Repository | Owns |
+        |---|---|---|
+        | Editorial contract | `organvm/editorial-standards` | README v2, audience templates, rubric, language |
+        | Data contract | `organvm-iv-taxis/schema-definitions` | `project-record.v1` and assertion/evidence schemas |
+        | Runtime | `organvm/organvm-engine` | audit and validation commands, machine-readable receipts |
+        | Fleet policy | `organvm/.github` | organization-wide adoption requirements and repository hygiene |
+        | Reusable enforcement | `organvm-iv-taxis/system-governance-framework` | reusable CI invoking the runtime |
+        | Fleet rollout | `organvm-iv-taxis/orchestration-start-here` | conversion waves, execution tracking, compliance reporting |
+
+        Public renderers remain downstream consumers: portfolio, showcase, and
+        stakeholder portal express the same facts for different readers.
+        """,
+    ),
+    markdown("## Conversion program"),
+    code(
+        """
+        pilots = [
+            (1, "4444J99/limen", "claims-ledger and infrastructure/governance pilot"),
+            (2, "organvm/the-thing-without-a-name", "creative, scholarly, production, and provenance pilot"),
+            (3, "4444J99/peer-audited--behavioral-blockchain", "technical, commercial, ethical, and live-status pilot"),
+            (4, "4444J99/your-fit-tailored", "specification-first theory/product pilot"),
+            (5, "4444J99/hokage-chess", "prototype-vs-product pilot after mandatory truth repair"),
+        ]
+
+        next_twenty = [
+            (1, "organvm-iii-ergon/public-record-data-scrapper", "strong public product/evidence front door"),
+            (2, "organvm-iii-ergon/life-my--midst--in", "employment, identity theory, architecture, and evaluation"),
+            (3, "organvm-iii-ergon/the-actual-news", "public purpose plus protocol/conformance evidence"),
+            (4, "organvm-iii-ergon/classroom-rpg-aetheria", "pedagogy, product, system, and evaluator routes"),
+            (5, "organvm-iii-ergon/parlor-games--ephemera-engine", "runnable creative system with honest design status"),
+            (6, "organvm-ii-poiesis/ivi374ivi027-05", "bounded multimedia/literary work and preservation record"),
+            (7, "organvm/a-organvm", "canonical flagship with no audience routing"),
+            (8, "organvm/organvm-engine", "largest implementation-to-documentation mismatch"),
+            (9, "organvm/radix-recursiva-solve-coagula-redi", "flagship theory/runtime synthesis"),
+            (10, "organvm/recursive-engine--generative-entity", "mature theory/runtime flagship"),
+            (11, "organvm/linguistic-atomization-framework", "balanced technical-humanities record"),
+            (12, "organvm/alchemical-synthesizer", "creative technology flagship"),
+            (13, "organvm/metasystem-master", "repair zero-byte and evidence drift before conversion"),
+            (14, "organvm/adaptive-personal-syllabus", "repair tracked artifacts and provenance before conversion"),
+            (15, "organvm-iv-taxis/system-governance-framework", "document the reusable enforcement surface"),
+            (16, "organvm-iv-taxis/distribution-strategy", "source audience and search-intent mappings"),
+            (17, "organvm-vii-kerygma/portfolio", "general, hiring, and client renderer"),
+            (18, "organvm-vii-kerygma/showcase-portfolio", "humanities, curatorial, and grant renderer"),
+            (19, "organvm-vii-kerygma/stakeholder-portal", "evaluator and operational evidence renderer"),
+            (20, "organvm/4444J99", "problem-domain top-of-funnel above the internal ontology"),
+        ]
+
+        assert [rank for rank, _, _ in pilots] == list(range(1, 6))
+        assert [rank for rank, _, _ in next_twenty] == list(range(1, 21))
+        curated_sequence = [repo for _, repo, _ in pilots + next_twenty]
+        assert len(curated_sequence) == len(set(curated_sequence)), "curated queues overlap"
+        curated_names = set(curated_sequence)
+        public_names = set(public_inventory["repository"])
+        missing_curated = sorted(curated_names - public_names)
+        assert not missing_curated, f"curated public repositories absent from inventory: {missing_curated}"
+
+        public_by_repository = public_inventory.set_index("repository", verify_integrity=True)
+
+
+        def selection_records(entries):
+            selected = []
+            for rank, repository, reason in entries:
+                source_row = public_by_repository.loc[repository]
+                assert source_row["finding"] or source_row["priority"] != "unranked"
+                selected.append(
+                    {
+                        "rank": rank,
+                        "repository": repository,
+                        "class": source_row["documentation_class"],
+                        "audit_score": int(source_row["total"]),
+                        "source_priority": source_row["priority"],
+                        "integrity_gate": bool(source_row["integrity_attention"]),
+                        "reason": reason,
+                    }
+                )
+            return selected
+
+
+        pilot_records = selection_records(pilots)
+        queue_records = selection_records(next_twenty)
+        pilot_table = pd.DataFrame(pilot_records)
+        queue_table = pd.DataFrame(queue_records)
+        display(Markdown("### Five pilots"))
+        display(pilot_table)
+        display(Markdown("### Next twenty conversions"))
+        display(queue_table)
+        """,
+    ),
+    markdown(
+        """
+        ## Truth and authority gates
+
+        Conversion is blocked when it would amplify a false current state, broken
+        canonical identity, unsupported metric, ambiguous license, or placeholder
+        surface. The initial gate set includes:
+
+        - repair Hokage Chess's Python/CLI claims against its bounded TypeScript helper prototype;
+        - route the 38-commit-behind personal copy of The Thing to the canonical
+          `organvm/the-thing-without-a-name` record instead of forking full editions;
+        - replace stale Styx test totals with exact-commit receipts and repair its link;
+        - label Your Fit as specification-first until runtime evidence exists;
+        - resolve Limen's missing license before calling it open source;
+        - reconcile organization profiles and transferred-repository identities;
+        - repair or redirect `organvm/docs`, `organvm/metasystem-master`, and retired Pages copies;
+        - align editorial, schema, and engine owner URLs with their live authorities.
+
+        These are evidence repairs, not copy edits. Search expansion follows the repair.
+        """,
+    ),
+    markdown("## Publish privacy-safe artifacts"),
+    code(
+        """
+        generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        input_manifest = {
+            "schema_version": "reader-mode-input-manifest.v1",
+            "audit_date": "2026-08-31",
+            "generated_at": generated_at,
+            "raw_inputs_committed": False,
+            "authorized_inputs_required": True,
+            "reproduction_note": (
+                "Rerunning requires the seven separately retained authorized exports. "
+                "Match each file to its SHA-256 digest before execution; the public "
+                "repository does not contain row-level private inputs."
+            ),
+            "sources": input_sources,
+            "totals": {
+                "source_segments": len(input_sources),
+                "repositories": int(sum(item["rows"] for item in input_sources)),
+                "public": int(sum(item["public"] for item in input_sources)),
+                "private": int(sum(item["private"] for item in input_sources)),
+            },
+        }
+        aggregate_summary = {
+            "audit_date": "2026-08-31",
+            "generated_at": generated_at,
+            "scope": {
+                "repositories": int(len(inventory)),
+                "public": int(visibility_counts.get("public", 0)),
+                "private": int(visibility_counts.get("private", 0)),
+                "source_segments": source_counts,
+                "source_manifest": "reader-mode-input-manifest.json",
+                "linked_accounts": 11,
+                "coverage_note": "The installation endpoint capped organvm at 100 rows; authenticated repository search added 70 omitted rows. The linked a-organvm account exposed zero repositories; organvm/a-organvm is a distinct repository.",
+            },
+            "documentation_classes": {
+                visibility: {
+                    cls: int(class_visibility.loc[cls].get(visibility, 0))
+                    for cls in "ABCDEF"
+                }
+                for visibility in ("public", "private")
+            },
+            "documentation_class_totals": {
+                cls: int(class_visibility.loc[cls].get("All", 0))
+                for cls in "ABCDEF"
+            },
+            "mean_scores": {
+                visibility: {
+                    dimension: round(float(value), 3)
+                    for dimension, value in group[list(DIMENSIONS)].mean().items()
+                }
+                for visibility, group in inventory.groupby("visibility")
+            },
+            "public_integrity_attention": public_integrity_count,
+            "privacy": "Private repository names and row-level findings are excluded from committed artifacts.",
+        }
+
+        public_columns = [
+            "repository", "visibility", "documentation_class", "repository_role",
+            "priority", "archived", "has_readme", *DIMENSIONS, "source_total", "total",
+            "integrity_attention", "finding", "recommended_treatment", "url",
+            "recommended_reader_modes", "industry_clusters", "concept_clusters", "topics",
+        ]
+        public_records = json.loads(
+            public_inventory[public_columns].to_json(orient="records")
+        )
+        rollout = {
+            "audit_date": "2026-08-31",
+            "generated_at": generated_at,
+            "dimensions": list(DIMENSIONS),
+            "authority_repositories": [
+                "organvm/editorial-standards",
+                "organvm-iv-taxis/schema-definitions",
+                "organvm/organvm-engine",
+                "organvm/.github",
+                "organvm-iv-taxis/system-governance-framework",
+                "organvm-iv-taxis/orchestration-start-here",
+            ],
+            "selection_method": (
+                "Editorial order combining class, public leverage, source-segment "
+                "recommendations, and truth/identity gates; audit_score is descriptive, "
+                "not the sole ranking function."
+            ),
+            "pilots": pilot_records,
+            "next_twenty": queue_records,
+            "public_inventory": public_records,
+        }
+
+        class_rows = [
+            f"| {cls} | {int(class_visibility.loc[cls].get('public', 0))} | "
+            f"{int(class_visibility.loc[cls].get('private', 0))} |"
+            for cls in "ABCDEF"
+        ]
+        pilot_rows = [
+            f"| {item['rank']} | `{item['repository']}` | {item['class']} | "
+            f"{item['audit_score']} | {item['source_priority']} | {item['reason']} |"
+            for item in pilot_records
+        ]
+        queue_rows = [
+            f"| {item['rank']} | `{item['repository']}` | {item['class']} | "
+            f"{item['audit_score']} | {item['source_priority']} | {item['reason']} |"
+            for item in queue_records
+        ]
+        report_lines = [
+            "# ORGANVM reader-mode documentation estate audit",
+            "",
+            "Audit date: 2026-08-31",
+            "",
+            "## Outcome",
+            "",
+            (
+                f"All **{len(inventory)}** repositories visible through the linked "
+                f"GitHub context were classified and scored: "
+                f"**{visibility_counts.get('public', 0)} public** and "
+                f"**{visibility_counts.get('private', 0)} private**. The implementation "
+                "uses existing editorial, schema, runtime, governance, and orchestration "
+                "authorities rather than adding a documentation-engine repository."
+            ),
+            "",
+            (
+                "The public contract is one canonical factual project record, "
+                "evidence-linked material claims, class-specific reader routes, and "
+                "truth repair before search expansion. Private repository identifiers "
+                "and row-level findings remain outside this report."
+            ),
+            "",
+            "## Data and validation",
+            "",
+            (
+                "The audit uses seven authorized exports at one "
+                "repository per row. All 323 source totals reconcile with the seven "
+                "0–4 dimension scores; repository identifiers are unique; and class, "
+                "visibility, and expected coverage checks pass."
+            ),
+            "",
+            (
+                "The public input manifest records source filenames, row and visibility "
+                "counts, and SHA-256 hashes. Raw exports are not committed, so rerunning "
+                "is possible only with separately retained authorized copies."
+            ),
+            "",
+            "## Documentation classes",
+            "",
+            "| Class | Public | Private |",
+            "|---|---:|---:|",
+            *class_rows,
+            "",
+            "## Authority map",
+            "",
+            "| Responsibility | Canonical repository |",
+            "|---|---|",
+            "| Editorial contract, rubric, and templates | `organvm/editorial-standards` |",
+            "| Project and assertion schemas | `organvm-iv-taxis/schema-definitions` |",
+            "| Audit and validation runtime | `organvm/organvm-engine` |",
+            "| Fleet adoption policy | `organvm/.github` |",
+            "| Reusable CI invocation | `organvm-iv-taxis/system-governance-framework` |",
+            "| Rollout waves and execution receipts | `organvm-iv-taxis/orchestration-start-here` |",
+            "",
+            "## Five pilots",
+            "",
+            (
+                "Ranks combine public leverage, rhetorical coverage, source recommendations, "
+                "and truth gates. The audit score is shown for traceability, not used as a "
+                "standalone ordering function."
+            ),
+            "",
+            "| Rank | Repository | Class | Score / 28 | Source priority | Why this pilot |",
+            "|---:|---|:---:|---:|---|---|",
+            *pilot_rows,
+            "",
+            "## Next twenty conversions",
+            "",
+            "| Rank | Repository | Class | Score / 28 | Source priority | Value / gap / leverage |",
+            "|---:|---|:---:|---:|---|---|",
+            *queue_rows,
+            "",
+            "## Gates before expansion",
+            "",
+            "- Correct false or stale implementation, deployment, test, owner, license, and provenance claims.",
+            "- Do not create audience editions for archives, forks, or deployment artifacts beyond their class minimum.",
+            "- Treat industry mappings as proposed unless a claim record substantiates pilot or deployment status.",
+            "- Keep private repository identifiers and evidence out of public generated inventories.",
+            "- Preserve the endpoint coverage caveat recorded in the aggregate summary.",
+            "",
+            "## Reproduction boundary",
+            "",
+            (
+                "Run `build_reader_mode_estate_audit.py` with "
+                "`ORGANVM_DOC_AUDIT_INPUT_DIR` pointing to separately retained, "
+                "authorized copies of the seven exports whose hashes appear in "
+                "`reader-mode-input-manifest.json`. The public repository alone is "
+                "not a self-contained copy of the raw audit data."
+            ),
+        ]
+        report = "\\n".join(report_lines) + "\\n"
+
+        serialized_artifacts = {
+            "reader-mode-input-manifest.json": json.dumps(
+                input_manifest, indent=2, allow_nan=False
+            ) + "\\n",
+            "reader-mode-estate-summary.json": json.dumps(
+                aggregate_summary, indent=2, allow_nan=False
+            ) + "\\n",
+            "reader-mode-public-rollout.json": json.dumps(
+                rollout, indent=2, allow_nan=False
+            ) + "\\n",
+            "reader-mode-estate-audit.md": report,
+        }
+        private_identifiers = (
+            private_full_identifiers
+            | distinctive_private_slugs
+            | {f"`{slug}`" for slug in private_slugs}
+        )
+
+
+        def payload_contains_identifier(payload, identifier):
+            repository_character = r"A-Za-z0-9._-"
+            return re.search(
+                rf"(?<![{repository_character}]){re.escape(identifier)}"
+                rf"(?![{repository_character}])",
+                payload,
+            ) is not None
+
+
+        privacy_hits = {
+            filename: sum(
+                payload_contains_identifier(payload, identifier)
+                for identifier in private_identifiers
+            )
+            for filename, payload in serialized_artifacts.items()
+        }
+        assert not any(privacy_hits.values()), (
+            "private repository identifiers detected in public payloads: "
+            f"{sum(privacy_hits.values())} hit(s)"
+        )
+
+        for filename, payload in serialized_artifacts.items():
+            (OUTPUT_DIR / filename).write_text(payload, encoding="utf-8")
+
+        print("Wrote reader-mode-input-manifest.json")
+        print("Wrote reader-mode-estate-summary.json")
+        print("Wrote reader-mode-public-rollout.json")
+        print("Wrote reader-mode-estate-audit.md")
+        """,
+    ),
+    markdown(
+        """
+        ## Takeaways
+
+        1. Documentation density is not the estate's primary failure; shared entry
+           order and authority drift are.
+        2. Class A projects warrant five routes, while components, deployment
+           artifacts, research works, and archives should retain smaller contracts.
+        3. The first implementation wave must couple rhetoric with claim-level
+           evidence, otherwise SEO multiplies contradictions.
+        4. The five pilots intentionally cover infrastructure, creative practice,
+           technical/commercial systems, specification-first work, and design-only
+           truth repair.
+        5. The public rollout can be generated without exposing private repository
+           identities.
+        """,
+    ),
+]
+
+notebook = nbformat.v4.new_notebook(
+    cells=cells,
+    metadata={
+        "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+        "language_info": {"name": "python", "version": "3.12"},
+    },
+)
+nbformat.write(notebook, NOTEBOOK)
+
+
+def execute_in_process(document: nbformat.NotebookNode) -> nbformat.NotebookNode:
+    """Execute cells without ZMQ for restricted environments.
+
+    IPython's capture layer preserves stream and rich display outputs. This is a
+    fallback for sandboxes that prohibit both TCP and IPC kernel sockets; normal
+    environments continue to use nbclient.
+    """
+    from IPython.core.interactiveshell import InteractiveShell
+    from IPython.utils.capture import capture_output
+
+    shell = InteractiveShell.instance()
+    shell.reset(new_session=True)
+    execution_count = 0
+    for cell in document.cells:
+        if cell.cell_type != "code":
+            continue
+        execution_count += 1
+        cell.execution_count = execution_count
+        cell.outputs = []
+        with capture_output(display=True) as captured:
+            result = shell.run_cell(cell.source, store_history=False)
+        if captured.stdout:
+            cell.outputs.append(
+                nbformat.v4.new_output("stream", name="stdout", text=captured.stdout),
+            )
+        if captured.stderr:
+            cell.outputs.append(
+                nbformat.v4.new_output("stream", name="stderr", text=captured.stderr),
+            )
+        for output in captured.outputs:
+            cell.outputs.append(
+                nbformat.v4.new_output(
+                    "display_data",
+                    data=output.data,
+                    metadata=output.metadata,
+                ),
+            )
+        error = result.error_before_exec or result.error_in_exec
+        if error is not None:
+            cell.outputs.append(
+                nbformat.v4.new_output(
+                    "error",
+                    ename=type(error).__name__,
+                    evalue=str(error),
+                    traceback=traceback.format_exception(type(error), error, error.__traceback__),
+                ),
+            )
+            raise RuntimeError(f"Notebook cell {execution_count} failed") from error
+    document.metadata["execution"] = {
+        "mode": "in-process-ipython",
+        "reason": "Kernel sockets unavailable or explicitly disabled",
+    }
+    return document
+
+
+previous_cwd = Path.cwd()
+try:
+    os.chdir(HERE)
+    if os.environ.get("ORGANVM_NOTEBOOK_EXECUTION") == "in-process":
+        executed = execute_in_process(notebook)
+    else:
+        try:
+            client = NotebookClient(
+                notebook,
+                timeout=600,
+                kernel_name="python3",
+                allow_errors=False,
+            )
+            executed = client.execute()
+            executed.metadata["execution"] = {"mode": "nbclient"}
+        except RuntimeError as exc:
+            if "Kernel died" not in str(exc):
+                raise
+            executed = execute_in_process(notebook)
+finally:
+    os.chdir(previous_cwd)
+
+nbformat.write(executed, NOTEBOOK)
+
+
+def repository_identifiers_by_visibility() -> tuple[set[str], set[str]]:
+    """Resolve full repository identifiers without exposing them in output."""
+    private_identifiers: set[str] = set()
+    public_identifiers: set[str] = set()
+    source_files = {
+        "personal": "personal.json",
+        "ergon": "ergon.json",
+        "theoria_poiesis": "theoria-poiesis.json",
+        "governance_comms": "governance-comms.json",
+        "umbrella_core": "umbrella-core.json",
+        "umbrella_extended": "umbrella-extended.json",
+        "organvm_gap": "organvm-gap.json",
+    }
+    input_dir = Path(
+        os.environ.get("ORGANVM_DOC_AUDIT_INPUT_DIR", "../../../audit"),
+    ).resolve()
+    for source, filename in source_files.items():
+        bundle = json.loads((input_dir / filename).read_text(encoding="utf-8"))
+        for row in bundle["repositories"]:
+            visibility = row.get("visibility")
+            if visibility is None:
+                public = row.get("metadata", {}).get("public")
+                visibility = "public" if public is True else "private"
+            if source == "personal":
+                repository = f"{bundle.get('owner', '4444J99')}/{row['name']}"
+            else:
+                repository = row["repository"]
+            if visibility == "private":
+                private_identifiers.add(repository)
+            else:
+                public_identifiers.add(repository)
+    return private_identifiers, public_identifiers
+
+
+def publication_contains_identifier(payload: str, identifier: str) -> bool:
+    """Match a complete owner/repository identifier, not a longer-name prefix."""
+    repository_character = r"A-Za-z0-9._-"
+    return (
+        re.search(
+            rf"(?<![{repository_character}]){re.escape(identifier)}"
+            rf"(?![{repository_character}])",
+            payload,
+        )
+        is not None
+    )
+
+
+private_full_identifiers, public_full_identifiers = repository_identifiers_by_visibility()
+if len(private_full_identifiers) != 84:
+    raise RuntimeError(
+        f"Expected 84 private repository identifiers, found {len(private_full_identifiers)}",
+    )
+private_slugs = {repository.split("/", 1)[-1] for repository in private_full_identifiers}
+public_slugs = {repository.split("/", 1)[-1] for repository in public_full_identifiers}
+distinctive_private_slugs = {
+    slug for slug in private_slugs - public_slugs if len(slug) >= 6 and re.search(r"[-_.]", slug)
+}
+private_scan_identifiers = (
+    private_full_identifiers | distinctive_private_slugs | {f"`{slug}`" for slug in private_slugs}
+)
+publication_files = [
+    path
+    for path in HERE.iterdir()
+    if path.is_file() and path.suffix in {".ipynb", ".json", ".md", ".py"}
+]
+privacy_hit_count = sum(
+    publication_contains_identifier(path.read_text(encoding="utf-8"), identifier)
+    for path in publication_files
+    for identifier in private_scan_identifiers
+)
+if privacy_hit_count:
+    raise RuntimeError(
+        f"Detected {privacy_hit_count} private repository identifier hit(s) in public artifacts",
+    )
+
+print(f"Executed {NOTEBOOK}")
+print(
+    f"Privacy gate passed for {len(publication_files)} public files against "
+    f"{len(private_full_identifiers)} private repository identifiers and "
+    "their unambiguous bare-slug forms",
+)
