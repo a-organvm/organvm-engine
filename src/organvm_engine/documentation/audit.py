@@ -24,7 +24,7 @@ DIMENSIONS = (
 SKIP_DIRS = frozenset(
     {".git", ".venv", "node_modules", "vendor", "dist", "build", "__pycache__"},
 )
-MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+MARKDOWN_LINK_START = re.compile(r"\]\(")
 
 
 def discover_repositories(workspace: str | Path) -> list[Path]:
@@ -139,11 +139,15 @@ def audit_repository(root: str | Path) -> dict[str, Any]:
 
 
 def _readme_path(root: Path) -> Path | None:
-    for name in ("README.md", "readme.md", "Readme.md"):
-        path = root / name
-        if path.is_file():
-            return path
-    return None
+    try:
+        candidates = [
+            path
+            for path in root.iterdir()
+            if path.is_file() and path.name.casefold() == "readme.md"
+        ]
+    except OSError:
+        return None
+    return min(candidates, key=lambda path: (path.name != "README.md", path.name), default=None)
 
 
 def _record_path(root: Path) -> Path | None:
@@ -156,18 +160,18 @@ def _record_path(root: Path) -> Path | None:
 
 def _markdown_files(root: Path) -> list[Path]:
     files: list[Path] = []
-    for path in root.rglob("*.md"):
-        try:
-            relative_parts = path.relative_to(root).parts
-        except ValueError:
-            continue
-        if any(part in SKIP_DIRS for part in relative_parts):
-            continue
-        try:
-            if path.stat().st_size <= 2_000_000:
-                files.append(path)
-        except OSError:
-            continue
+    for current, dirs, names in os.walk(root):
+        dirs[:] = [name for name in dirs if name not in SKIP_DIRS]
+        current_path = Path(current)
+        for name in names:
+            if Path(name).suffix.casefold() != ".md":
+                continue
+            path = current_path / name
+            try:
+                if path.is_file() and path.stat().st_size <= 2_000_000:
+                    files.append(path)
+            except OSError:
+                continue
     return sorted(files)
 
 
@@ -220,7 +224,7 @@ def _score_seo(root: Path, readme_lower: str, markdown_files: list[Path]) -> int
 
 
 def _score_cross_linking(root: Path, corpus: str, *, valid_local_links: int) -> int:
-    links = [match for match in MARKDOWN_LINK.findall(corpus) if not match.startswith("#")]
+    links = [link for link in _markdown_destinations(corpus) if not link.startswith("#")]
     if not links:
         return 0
     score = 1
@@ -243,7 +247,7 @@ def _inspect_local_links(root: Path, markdown_files: list[Path]) -> tuple[set[Pa
     broken: list[str] = []
     for source in markdown_files:
         text = source.read_text(encoding="utf-8", errors="replace")
-        for raw_target in MARKDOWN_LINK.findall(text):
+        for raw_target in _markdown_destinations(text):
             target = raw_target.strip().strip("<>")
             if not target or target.startswith("#") or target.startswith("//"):
                 continue
@@ -264,6 +268,73 @@ def _inspect_local_links(root: Path, markdown_files: list[Path]) -> tuple[set[Pa
             else:
                 broken.append(f"{source.relative_to(root)} -> {target}")
     return valid, sorted(set(broken))
+
+
+def _markdown_destinations(text: str) -> list[str]:
+    """Extract inline Markdown link destinations without swallowing link titles.
+
+    This intentionally stays smaller than a renderer while handling the pieces
+    needed for repository link validation: angle-bracket destinations, escaped
+    characters, balanced parentheses, and optional whitespace-separated titles.
+    """
+    destinations: list[str] = []
+    for match in MARKDOWN_LINK_START.finditer(text):
+        position = match.end()
+        while position < len(text) and text[position] in " \t\n":
+            position += 1
+        if position >= len(text):
+            continue
+
+        destination: list[str] = []
+        if text[position] == "<":
+            position += 1
+            escaped = False
+            while position < len(text):
+                character = text[position]
+                position += 1
+                if escaped:
+                    destination.append(character)
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == ">":
+                    break
+                else:
+                    destination.append(character)
+            else:
+                continue
+        else:
+            depth = 0
+            escaped = False
+            while position < len(text):
+                character = text[position]
+                if escaped:
+                    destination.append(character)
+                    escaped = False
+                    position += 1
+                elif character == "\\":
+                    escaped = True
+                    position += 1
+                elif character == "(":
+                    depth += 1
+                    destination.append(character)
+                    position += 1
+                elif character == ")":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                    destination.append(character)
+                    position += 1
+                elif character.isspace() and depth == 0:
+                    break
+                else:
+                    destination.append(character)
+                    position += 1
+
+        rendered = "".join(destination)
+        if rendered:
+            destinations.append(rendered)
+    return destinations
 
 
 def _suggest_class(root: Path, readme: str) -> str:

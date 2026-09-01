@@ -47,6 +47,9 @@ GIT_EVIDENCE_REFERENCE = re.compile(
     r"^git:(?P<commit>[0-9a-fA-F]{40})(?::(?P<path>.+))?$",
 )
 REPOSITORY_SLUG = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+AUDIENCE_ROUTE_PATH = re.compile(
+    r"^docs/audiences/[a-z0-9-]+\.md$",
+)
 CLASS_ROUTE_RULES: dict[str, tuple[frozenset[str], int, int | None]] = {
     "A": (AUDIENCE_MODES, 5, 5),
     "B": (frozenset(), 2, 3),
@@ -420,8 +423,11 @@ def validate_project_record(
             errors.append(f"audience_routes[{index}] has invalid mode: {mode!r}")
         else:
             modes.append(mode)
-        if not isinstance(path, str) or not path.startswith("docs/audiences/"):
-            errors.append(f"audience_routes[{index}] path must be under docs/audiences/")
+        if not isinstance(path, str) or AUDIENCE_ROUTE_PATH.fullmatch(path) is None:
+            errors.append(
+                f"audience_routes[{index}] path must match "
+                "docs/audiences/<slug>.md",
+            )
         else:
             route_paths.append(path)
 
@@ -713,11 +719,16 @@ def _github_repository_slug(value: str) -> str | None:
     """Extract owner/name from one canonical GitHub repository URL."""
     try:
         parsed = urlparse(value)
+        port = parsed.port
     except ValueError:
         return None
     if (
         parsed.scheme != "https"
         or parsed.hostname != "github.com"
+        or parsed.netloc != "github.com"
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
         or parsed.params
         or parsed.query
         or parsed.fragment
@@ -1007,6 +1018,22 @@ def _git_tracked_path_errors(
     tracked = _run_git(root, "ls-files", "--error-unmatch", "--", relative)
     if tracked.returncode != 0:
         return [f"{label} {object_name} is ignored or untracked: {relative}"]
+
+    index_state = _run_git(root, "ls-files", "-v", "-z", "--", relative)
+    if index_state.returncode != 0 or not index_state.stdout:
+        return [f"{label} cannot inspect committed {object_name} path: {relative}"]
+    tag = index_state.stdout[:1]
+    index_errors: list[str] = []
+    if tag.islower():
+        index_errors.append(
+            f"{label} {object_name} is marked assume-unchanged: {relative}",
+        )
+    if tag.upper() == b"S":
+        index_errors.append(
+            f"{label} {object_name} is marked skip-worktree: {relative}",
+        )
+    if index_errors:
+        return index_errors
 
     for args in (
         ("diff", "--quiet", "HEAD", "--", relative),

@@ -6,6 +6,8 @@ import json
 import sys
 from pathlib import Path
 
+import yaml
+
 from organvm_engine.documentation.audit import (
     DIMENSIONS,
     audit_repository,
@@ -44,7 +46,7 @@ def cmd_docs_validate(args) -> int:
             ),
             actual_repository=getattr(args, "actual_repository", None),
         )
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, yaml.YAMLError) as exc:
         errors = [str(exc)]
 
     if getattr(args, "json", False):

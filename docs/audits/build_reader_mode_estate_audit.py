@@ -7,9 +7,11 @@ artifacts contain aggregate private counts and public-repository rows only.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import tempfile
 import traceback
 from pathlib import Path
 from textwrap import dedent
@@ -19,6 +21,133 @@ from nbclient import NotebookClient
 
 HERE = Path(__file__).resolve().parent
 NOTEBOOK = HERE / "2026-08-31-reader-mode-estate-audit.ipynb"
+INPUT_MANIFEST = HERE / "reader-mode-input-manifest.json"
+SOURCE_FILES = {
+    "personal": "personal.json",
+    "ergon": "ergon.json",
+    "theoria_poiesis": "theoria-poiesis.json",
+    "governance_comms": "governance-comms.json",
+    "umbrella_core": "umbrella-core.json",
+    "umbrella_extended": "umbrella-extended.json",
+    "organvm_gap": "organvm-gap.json",
+}
+REPOSITORY_CHARACTER = r"A-Za-z0-9._-"
+
+
+def audit_input_dir() -> Path:
+    """Resolve the separately retained authorized export directory."""
+    configured = os.environ.get("ORGANVM_DOC_AUDIT_INPUT_DIR")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (HERE / "../../../audit").resolve()
+
+
+def source_visibility(row: dict, *, source: str, index: int) -> str:
+    """Resolve a source row's visibility without guessing malformed values."""
+    visibility = row.get("visibility")
+    if visibility in {"public", "private"}:
+        return visibility
+    public = row.get("metadata", {}).get("public")
+    if isinstance(public, bool):
+        return "public" if public else "private"
+    raise RuntimeError(f"{source} row {index} has no valid visibility")
+
+
+def verify_live_inputs_against_manifest() -> dict:
+    """Fail before notebook execution unless live inputs match the pinned manifest."""
+    try:
+        manifest = json.loads(INPUT_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Cannot read pinned input manifest: {INPUT_MANIFEST.name}") from exc
+
+    if manifest.get("schema_version") != "reader-mode-input-manifest.v1":
+        raise RuntimeError("Pinned input manifest has an unsupported schema version")
+    declared_sources = manifest.get("sources")
+    if not isinstance(declared_sources, list):
+        raise RuntimeError("Pinned input manifest sources must be a list")
+    by_segment: dict[str, dict] = {}
+    for entry in declared_sources:
+        if not isinstance(entry, dict) or not isinstance(entry.get("source_segment"), str):
+            raise RuntimeError("Pinned input manifest contains an invalid source entry")
+        segment = entry["source_segment"]
+        if segment in by_segment:
+            raise RuntimeError(f"Pinned input manifest repeats source segment {segment!r}")
+        by_segment[segment] = entry
+    if set(by_segment) != set(SOURCE_FILES):
+        raise RuntimeError("Pinned input manifest source segments do not match the builder")
+
+    live_totals = {
+        "source_segments": len(SOURCE_FILES),
+        "repositories": 0,
+        "public": 0,
+        "private": 0,
+    }
+    input_dir = audit_input_dir()
+    for source, filename in SOURCE_FILES.items():
+        expected = by_segment[source]
+        if expected.get("filename") != filename:
+            raise RuntimeError(f"Pinned filename mismatch for source segment {source!r}")
+        source_path = input_dir / filename
+        try:
+            source_bytes = source_path.read_bytes()
+            bundle = json.loads(source_bytes)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Cannot read authorized input {filename!r}") from exc
+        repositories = bundle.get("repositories") if isinstance(bundle, dict) else None
+        if not isinstance(repositories, list):
+            raise RuntimeError(f"Authorized input {filename!r} has no repositories list")
+        visibility_counts = {"public": 0, "private": 0}
+        for index, row in enumerate(repositories):
+            if not isinstance(row, dict):
+                raise RuntimeError(f"{source} row {index} is not an object")
+            visibility_counts[source_visibility(row, source=source, index=index)] += 1
+        actual = {
+            "source_segment": source,
+            "filename": filename,
+            "rows": len(repositories),
+            "public": visibility_counts["public"],
+            "private": visibility_counts["private"],
+            "sha256": hashlib.sha256(source_bytes).hexdigest(),
+        }
+        if actual != expected:
+            raise RuntimeError(
+                f"Authorized input {filename!r} does not match its pinned bytes/counts",
+            )
+        live_totals["repositories"] += actual["rows"]
+        live_totals["public"] += actual["public"]
+        live_totals["private"] += actual["private"]
+
+    if manifest.get("totals") != live_totals:
+        raise RuntimeError("Pinned input manifest totals do not match the live inputs")
+    return manifest
+
+
+def bounded_identifier_pattern(identifiers: set[str]) -> str:
+    """Build a longest-first, repository-token-bounded identifier pattern."""
+    if not identifiers:
+        return r"(?!)"
+    alternatives = "|".join(
+        re.escape(value) for value in sorted(identifiers, key=len, reverse=True)
+    )
+    return rf"(?<![{REPOSITORY_CHARACTER}])(?:{alternatives})(?![{REPOSITORY_CHARACTER}])"
+
+
+def repository_reference_pattern(
+    private_full_identifiers: set[str],
+    private_only_slugs: set[str],
+    public_full_identifiers: set[str],
+) -> re.Pattern[str]:
+    """Match private references while shielding complete public identifiers."""
+    if {value.casefold() for value in private_full_identifiers} & {
+        value.casefold() for value in public_full_identifiers
+    }:
+        raise RuntimeError("A repository identifier is both public and private")
+    return re.compile(
+        rf"(?P<private_full>{bounded_identifier_pattern(private_full_identifiers)})"
+        rf"|(?P<public_full>{bounded_identifier_pattern(public_full_identifiers)})"
+        rf"|(?P<private_slug>{bounded_identifier_pattern(private_only_slugs)})",
+        flags=re.IGNORECASE,
+    )
 
 
 def markdown(source: str) -> nbformat.NotebookNode:
@@ -144,17 +273,74 @@ cells = [
             os.environ.get("ORGANVM_DOC_AUDIT_INPUT_DIR", "../../../audit")
         ).resolve()
         OUTPUT_DIR = Path.cwd().resolve()
-        missing = [name for name in SOURCE_FILES.values() if not (INPUT_DIR / name).is_file()]
-        if missing:
-            raise FileNotFoundError(
-                "Missing live audit inputs. Set ORGANVM_DOC_AUDIT_INPUT_DIR to the "
-                f"private export directory. Missing: {', '.join(missing)}"
-            )
-
-        raw = {
-            source: json.loads((INPUT_DIR / filename).read_text(encoding="utf-8"))
-            for source, filename in SOURCE_FILES.items()
+        manifest_path = OUTPUT_DIR / "reader-mode-input-manifest.json"
+        pinned_input_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if pinned_input_manifest.get("schema_version") != "reader-mode-input-manifest.v1":
+            raise ValueError("Pinned input manifest has an unsupported schema version")
+        pinned_sources = pinned_input_manifest.get("sources")
+        if not isinstance(pinned_sources, list):
+            raise TypeError("Pinned input manifest sources must be a list")
+        pinned_by_segment = {
+            item["source_segment"]: item
+            for item in pinned_sources
+            if isinstance(item, dict) and isinstance(item.get("source_segment"), str)
         }
+        if len(pinned_by_segment) != len(pinned_sources):
+            raise ValueError("Pinned input manifest has invalid or duplicate source segments")
+        if set(pinned_by_segment) != set(SOURCE_FILES):
+            raise ValueError("Pinned input manifest source segments do not match the notebook")
+
+
+        def manifest_visibility(row, source, index):
+            visibility = row.get("visibility")
+            if visibility in {"public", "private"}:
+                return visibility
+            public = row.get("metadata", {}).get("public")
+            if isinstance(public, bool):
+                return "public" if public else "private"
+            raise ValueError(f"{source} row {index} has no valid visibility")
+
+
+        raw = {}
+        live_input_sources = []
+        for source, filename in SOURCE_FILES.items():
+            expected = pinned_by_segment[source]
+            if expected.get("filename") != filename:
+                raise ValueError(f"Pinned filename mismatch for source segment {source}")
+            source_path = INPUT_DIR / filename
+            source_bytes = source_path.read_bytes()
+            bundle = json.loads(source_bytes)
+            repositories = bundle.get("repositories") if isinstance(bundle, dict) else None
+            if not isinstance(repositories, list):
+                raise TypeError(f"Authorized input {filename} has no repositories list")
+            visibility_counts = {"public": 0, "private": 0}
+            for index, row in enumerate(repositories):
+                if not isinstance(row, dict):
+                    raise TypeError(f"{source} row {index} is not an object")
+                visibility_counts[manifest_visibility(row, source, index)] += 1
+            actual = {
+                "source_segment": source,
+                "filename": filename,
+                "rows": len(repositories),
+                "public": visibility_counts["public"],
+                "private": visibility_counts["private"],
+                "sha256": hashlib.sha256(source_bytes).hexdigest(),
+            }
+            if actual != expected:
+                raise ValueError(
+                    f"Authorized input {filename} does not match its pinned bytes/counts"
+                )
+            raw[source] = bundle
+            live_input_sources.append(actual)
+
+        live_input_totals = {
+            "source_segments": len(live_input_sources),
+            "repositories": sum(item["rows"] for item in live_input_sources),
+            "public": sum(item["public"] for item in live_input_sources),
+            "private": sum(item["private"] for item in live_input_sources),
+        }
+        if pinned_input_manifest.get("totals") != live_input_totals:
+            raise ValueError("Pinned input manifest totals do not match the live inputs")
         source_counts = {
             source: len(bundle["repositories"])
             for source, bundle in raw.items()
@@ -332,6 +518,9 @@ cells = [
         assert sum(item["rows"] for item in input_sources) == 323
         assert sum(item["public"] for item in input_sources) == 239
         assert sum(item["private"] for item in input_sources) == 84
+        assert input_sources == live_input_sources, (
+            "normalized source counts or bytes drifted after manifest verification"
+        )
 
         print(
             f"Validated {len(inventory)} unique repositories across "
@@ -377,48 +566,59 @@ cells = [
         private_full_identifiers = set(
             inventory.loc[inventory["visibility"] == "private", "repository"]
         )
+        public_full_identifiers = set(
+            inventory.loc[inventory["visibility"] == "public", "repository"]
+        )
         public_slugs = {
             repository.split("/", 1)[-1]
-            for repository in inventory.loc[
-                inventory["visibility"] == "public", "repository"
-            ]
+            for repository in public_full_identifiers
         }
         private_slugs = {
             repository.split("/", 1)[-1] for repository in private_full_identifiers
         }
-        distinctive_private_slugs = {
-            slug
-            for slug in private_slugs - public_slugs
-            if len(slug) >= 6 and re.search(r"[-_.]", slug)
+        public_slug_keys = {slug.casefold() for slug in public_slugs}
+        private_only_slugs = {
+            slug for slug in private_slugs if slug.casefold() not in public_slug_keys
         }
+        assert not {
+            repository.casefold() for repository in private_full_identifiers
+        } & {
+            repository.casefold() for repository in public_full_identifiers
+        }, "a repository identifier is both public and private"
 
 
-        def replace_bounded(text, identifier, replacement):
+        def bounded_identifier_pattern(identifiers):
             repository_character = r"A-Za-z0-9._-"
-            return re.sub(
-                rf"(?<![{repository_character}]){re.escape(identifier)}"
-                rf"(?![{repository_character}])",
-                replacement,
-                text,
+            if not identifiers:
+                return r"(?!)"
+            alternatives = "|".join(
+                re.escape(identifier)
+                for identifier in sorted(identifiers, key=len, reverse=True)
             )
+            return (
+                rf"(?<![{repository_character}])(?:{alternatives})"
+                rf"(?![{repository_character}])"
+            )
+
+
+        private_reference_pattern = re.compile(
+            rf"(?P<private_full>{bounded_identifier_pattern(private_full_identifiers)})"
+            rf"|(?P<public_full>{bounded_identifier_pattern(public_full_identifiers)})"
+            rf"|(?P<private_slug>{bounded_identifier_pattern(private_only_slugs)})",
+            flags=re.IGNORECASE,
+        )
 
 
         def redact_private_references(value):
             if isinstance(value, str):
-                redacted = value
-                for identifier in sorted(
-                    private_full_identifiers | distinctive_private_slugs,
-                    key=len,
-                    reverse=True,
-                ):
-                    redacted = replace_bounded(
-                        redacted, identifier, "[private repository]"
-                    )
-                for slug in sorted(private_slugs, key=len, reverse=True):
-                    redacted = redacted.replace(
-                        f"`{slug}`", "`[private repository]`"
-                    )
-                return redacted
+                return private_reference_pattern.sub(
+                    lambda match: (
+                        match.group(0)
+                        if match.lastgroup == "public_full"
+                        else "[private repository]"
+                    ),
+                    value,
+                )
             if isinstance(value, list):
                 return [redact_private_references(item) for item in value]
             if isinstance(value, dict):
@@ -550,7 +750,7 @@ cells = [
         surface. The initial gate set includes:
 
         - repair Hokage Chess's Python/CLI claims against its bounded TypeScript helper prototype;
-        - route the 38-commit-behind personal copy of The Thing to the canonical
+        - route the 38-commit-behind account-level copy of The Thing to the canonical
           `organvm/the-thing-without-a-name` record instead of forking full editions;
         - replace stale Styx test totals with exact-commit receipts and repair its link;
         - label Your Fit as specification-first until runtime evidence exists;
@@ -566,25 +766,7 @@ cells = [
     code(
         """
         generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        input_manifest = {
-            "schema_version": "reader-mode-input-manifest.v1",
-            "audit_date": "2026-08-31",
-            "generated_at": generated_at,
-            "raw_inputs_committed": False,
-            "authorized_inputs_required": True,
-            "reproduction_note": (
-                "Rerunning requires the seven separately retained authorized exports. "
-                "Match each file to its SHA-256 digest before execution; the public "
-                "repository does not contain row-level private inputs."
-            ),
-            "sources": input_sources,
-            "totals": {
-                "source_segments": len(input_sources),
-                "repositories": int(sum(item["rows"] for item in input_sources)),
-                "public": int(sum(item["public"] for item in input_sources)),
-                "private": int(sum(item["private"] for item in input_sources)),
-            },
-        }
+        input_manifest = pinned_input_manifest
         aggregate_summary = {
             "audit_date": "2026-08-31",
             "generated_at": generated_at,
@@ -770,28 +952,24 @@ cells = [
             ) + "\\n",
             "reader-mode-estate-audit.md": report,
         }
-        private_identifiers = (
-            private_full_identifiers
-            | distinctive_private_slugs
-            | {f"`{slug}`" for slug in private_slugs}
+        manifest_scan_view = json.loads(json.dumps(input_manifest))
+        for source in manifest_scan_view["sources"]:
+            source["source_segment"] = "[source segment]"
+        summary_scan_view = json.loads(json.dumps(aggregate_summary))
+        summary_scan_view["scope"]["source_segments"] = list(
+            summary_scan_view["scope"]["source_segments"].values()
         )
-
-
-        def payload_contains_identifier(payload, identifier):
-            repository_character = r"A-Za-z0-9._-"
-            return re.search(
-                rf"(?<![{repository_character}]){re.escape(identifier)}"
-                rf"(?![{repository_character}])",
-                payload,
-            ) is not None
-
-
+        privacy_scan_artifacts = {
+            **serialized_artifacts,
+            "reader-mode-input-manifest.json": json.dumps(manifest_scan_view),
+            "reader-mode-estate-summary.json": json.dumps(summary_scan_view),
+        }
         privacy_hits = {
             filename: sum(
-                payload_contains_identifier(payload, identifier)
-                for identifier in private_identifiers
+                match.lastgroup != "public_full"
+                for match in private_reference_pattern.finditer(payload)
             )
-            for filename, payload in serialized_artifacts.items()
+            for filename, payload in privacy_scan_artifacts.items()
         }
         assert not any(privacy_hits.values()), (
             "private repository identifiers detected in public payloads: "
@@ -833,7 +1011,6 @@ notebook = nbformat.v4.new_notebook(
         "language_info": {"name": "python", "version": "3.12"},
     },
 )
-nbformat.write(notebook, NOTEBOOK)
 
 
 def execute_in_process(document: nbformat.NotebookNode) -> nbformat.NotebookNode:
@@ -893,6 +1070,7 @@ def execute_in_process(document: nbformat.NotebookNode) -> nbformat.NotebookNode
 
 previous_cwd = Path.cwd()
 try:
+    verify_live_inputs_against_manifest()
     os.chdir(HERE)
     if os.environ.get("ORGANVM_NOTEBOOK_EXECUTION") == "in-process":
         executed = execute_in_process(notebook)
@@ -913,26 +1091,13 @@ try:
 finally:
     os.chdir(previous_cwd)
 
-nbformat.write(executed, NOTEBOOK)
-
 
 def repository_identifiers_by_visibility() -> tuple[set[str], set[str]]:
     """Resolve full repository identifiers without exposing them in output."""
     private_identifiers: set[str] = set()
     public_identifiers: set[str] = set()
-    source_files = {
-        "personal": "personal.json",
-        "ergon": "ergon.json",
-        "theoria_poiesis": "theoria-poiesis.json",
-        "governance_comms": "governance-comms.json",
-        "umbrella_core": "umbrella-core.json",
-        "umbrella_extended": "umbrella-extended.json",
-        "organvm_gap": "organvm-gap.json",
-    }
-    input_dir = Path(
-        os.environ.get("ORGANVM_DOC_AUDIT_INPUT_DIR", "../../../audit"),
-    ).resolve()
-    for source, filename in source_files.items():
+    input_dir = audit_input_dir()
+    for source, filename in SOURCE_FILES.items():
         bundle = json.loads((input_dir / filename).read_text(encoding="utf-8"))
         for row in bundle["repositories"]:
             visibility = row.get("visibility")
@@ -950,19 +1115,6 @@ def repository_identifiers_by_visibility() -> tuple[set[str], set[str]]:
     return private_identifiers, public_identifiers
 
 
-def publication_contains_identifier(payload: str, identifier: str) -> bool:
-    """Match a complete owner/repository identifier, not a longer-name prefix."""
-    repository_character = r"A-Za-z0-9._-"
-    return (
-        re.search(
-            rf"(?<![{repository_character}]){re.escape(identifier)}"
-            rf"(?![{repository_character}])",
-            payload,
-        )
-        is not None
-    )
-
-
 private_full_identifiers, public_full_identifiers = repository_identifiers_by_visibility()
 if len(private_full_identifiers) != 84:
     raise RuntimeError(
@@ -970,26 +1122,86 @@ if len(private_full_identifiers) != 84:
     )
 private_slugs = {repository.split("/", 1)[-1] for repository in private_full_identifiers}
 public_slugs = {repository.split("/", 1)[-1] for repository in public_full_identifiers}
-distinctive_private_slugs = {
-    slug for slug in private_slugs - public_slugs if len(slug) >= 6 and re.search(r"[-_.]", slug)
-}
-private_scan_identifiers = (
-    private_full_identifiers | distinctive_private_slugs | {f"`{slug}`" for slug in private_slugs}
+public_slug_keys = {slug.casefold() for slug in public_slugs}
+private_only_slugs = {slug for slug in private_slugs if slug.casefold() not in public_slug_keys}
+private_reference_pattern = repository_reference_pattern(
+    private_full_identifiers,
+    private_only_slugs,
+    public_full_identifiers,
 )
+
+
+def bare_slug_scan_payload(path: Path, payload: str) -> str:
+    """Return privacy-bearing content while excluding structural source labels."""
+    if path.suffix == ".py":
+        return ""
+    if path.suffix == ".ipynb":
+        document = nbformat.reads(payload, as_version=4)
+        cells_and_outputs: list[str] = []
+        for cell in document.cells:
+            if cell.cell_type == "markdown":
+                cells_and_outputs.append(cell.source)
+            cells_and_outputs.extend(json.dumps(output) for output in cell.get("outputs", []))
+        return "\n".join(cells_and_outputs)
+    if path.name == INPUT_MANIFEST.name:
+        manifest = json.loads(payload)
+        for source in manifest["sources"]:
+            source["source_segment"] = "[source segment]"
+        return json.dumps(manifest)
+    if path.name == "reader-mode-estate-summary.json":
+        summary = json.loads(payload)
+        summary["scope"]["source_segments"] = list(
+            summary["scope"]["source_segments"].values(),
+        )
+        return json.dumps(summary)
+    return payload
+
+
 publication_files = [
     path
     for path in HERE.iterdir()
     if path.is_file() and path.suffix in {".ipynb", ".json", ".md", ".py"}
 ]
-privacy_hit_count = sum(
-    publication_contains_identifier(path.read_text(encoding="utf-8"), identifier)
-    for path in publication_files
-    for identifier in private_scan_identifiers
-)
-if privacy_hit_count:
-    raise RuntimeError(
-        f"Detected {privacy_hit_count} private repository identifier hit(s) in public artifacts",
+temporary_notebook: Path | None = None
+try:
+    file_descriptor, temporary_name = tempfile.mkstemp(
+        dir=HERE,
+        prefix=f".{NOTEBOOK.name}.",
+        suffix=".tmp",
     )
+    os.close(file_descriptor)
+    temporary_notebook = Path(temporary_name)
+    nbformat.write(executed, temporary_notebook)
+    temporary_notebook.chmod(0o644)
+
+    privacy_hit_count = 0
+    for path in publication_files:
+        payload = (
+            temporary_notebook.read_text(encoding="utf-8")
+            if path == NOTEBOOK
+            else path.read_text(encoding="utf-8")
+        )
+        privacy_hit_count += sum(
+            match.lastgroup == "private_full"
+            for match in private_reference_pattern.finditer(payload)
+        )
+        privacy_hit_count += sum(
+            match.lastgroup != "public_full"
+            for match in private_reference_pattern.finditer(
+                bare_slug_scan_payload(path, payload),
+            )
+        )
+    if privacy_hit_count:
+        raise RuntimeError(
+            f"Detected {privacy_hit_count} private repository identifier hit(s) "
+            "in public artifacts",
+        )
+
+    temporary_notebook.replace(NOTEBOOK)
+    temporary_notebook = None
+finally:
+    if temporary_notebook is not None:
+        temporary_notebook.unlink(missing_ok=True)
 
 print(f"Executed {NOTEBOOK}")
 print(

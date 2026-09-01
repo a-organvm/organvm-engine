@@ -1043,6 +1043,25 @@ def test_audit_scans_repositories_below_ancestor_named_like_skipped_directory(tm
     assert result["markdown_files"] == 2
 
 
+def test_audit_parses_link_titles_and_case_insensitive_readme_names(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "guide(1).md").write_text("# Guide\n", encoding="utf-8")
+    (tmp_path / "README.MD").write_text(
+        '# Project\n\n[Guide](docs/guide(1).md "Guide title")\n',
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert result["has_readme"] is True
+    assert result["markdown_files"] == 2
+    assert not any(
+        finding["code"] in {"missing-readme", "broken-local-links"}
+        for finding in result["findings"]
+    )
+
+
 def test_discover_repositories_stops_at_git_root(tmp_path):
     first = tmp_path / "organ" / "one"
     second = tmp_path / "organ" / "two"
