@@ -159,7 +159,7 @@ def load_project_record(path: str | Path) -> dict[str, Any]:
     data = _load_structured_data(record_path)
     if not isinstance(data, dict):
         raise ValueError(f"Project record is not a mapping: {record_path}")
-    return _normalize_yaml_datetimes(data)
+    return _normalize_structured_data(data, record_path)
 
 
 def validate_project_record(
@@ -1443,7 +1443,7 @@ def _load_mapping(path: Path) -> dict[str, Any]:
     data = _load_structured_data(path)
     if not isinstance(data, dict):
         raise ValueError(f"not a mapping: {path}")
-    return _normalize_yaml_datetimes(data)
+    return _normalize_structured_data(data, path)
 
 
 def _load_structured_data(path: Path) -> Any:
@@ -1454,6 +1454,8 @@ def _load_structured_data(path: Path) -> Any:
             return json.loads(payload, object_pairs_hook=_unique_json_mapping)
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid JSON in {path}: {exc}") from exc
+        except RecursionError as exc:
+            raise ValueError(f"JSON nesting exceeds supported depth: {path}") from exc
     try:
         return yaml.load(payload, Loader=_UniqueKeySafeLoader)
     except yaml.YAMLError as exc:
@@ -1468,6 +1470,17 @@ def _unique_json_mapping(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise ValueError(f"duplicate mapping key: {key!r}")
         mapping[key] = value
     return mapping
+
+
+def _normalize_structured_data(data: dict[str, Any], path: Path) -> dict[str, Any]:
+    """Normalize one parsed record while converting depth failure to validation."""
+    try:
+        return _normalize_yaml_datetimes(data)
+    except RecursionError as exc:
+        format_name = "JSON" if path.suffix.lower() == ".json" else "YAML"
+        raise ValueError(
+            f"{format_name} nesting exceeds supported depth: {path}",
+        ) from exc
 
 
 def _read_bounded_record_text(path: Path) -> str:
@@ -1491,30 +1504,43 @@ def _normalize_yaml_datetimes(
     value: Any,
     *,
     _active_container_ids: set[int] | None = None,
+    _memoized_containers: dict[int, Any] | None = None,
 ) -> Any:
-    """Normalize timestamps while rejecting recursive YAML alias graphs."""
+    """Normalize timestamps while preserving acyclic aliases and rejecting cycles."""
     if isinstance(value, datetime):
         rendered = value.isoformat()
         return rendered.replace("+00:00", "Z")
     if isinstance(value, (dict, list)):
         active = _active_container_ids if _active_container_ids is not None else set()
+        memo = _memoized_containers if _memoized_containers is not None else {}
         identity = id(value)
         if identity in active:
             raise ValueError("recursive YAML aliases are unsupported")
+        if identity in memo:
+            return memo[identity]
         active.add(identity)
         try:
             if isinstance(value, dict):
-                return {
-                    key: _normalize_yaml_datetimes(
+                normalized_mapping: dict[Any, Any] = {}
+                memo[identity] = normalized_mapping
+                for key, item in value.items():
+                    normalized_mapping[key] = _normalize_yaml_datetimes(
                         item,
                         _active_container_ids=active,
+                        _memoized_containers=memo,
                     )
-                    for key, item in value.items()
-                }
-            return [
-                _normalize_yaml_datetimes(item, _active_container_ids=active)
+                return normalized_mapping
+            normalized_list: list[Any] = []
+            memo[identity] = normalized_list
+            normalized_list.extend(
+                _normalize_yaml_datetimes(
+                    item,
+                    _active_container_ids=active,
+                    _memoized_containers=memo,
+                )
                 for item in value
-            ]
+            )
+            return normalized_list
         finally:
             active.remove(identity)
     return value

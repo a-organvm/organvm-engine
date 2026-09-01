@@ -346,6 +346,22 @@ def test_recursive_yaml_aliases_are_rejected_without_recursing(tmp_path: Path) -
         load_project_record(record_path)
 
 
+def test_acyclic_yaml_alias_expansion_is_memoized(tmp_path: Path) -> None:
+    record_path = tmp_path / "project-record.yml"
+    layers = ["base: &level0 [value, value]"]
+    for index in range(1, 28):
+        layers.append(
+            f"level{index}: &level{index} [*level{index - 1}, *level{index - 1}]",
+        )
+    record_path.write_text("\n".join(layers) + "\n", encoding="utf-8")
+
+    record = load_project_record(record_path)
+
+    deepest = record["level27"]
+    assert deepest[0] is deepest[1]
+    assert deepest[0][0] is deepest[0][1]
+
+
 def test_project_record_yaml_rejects_duplicate_mapping_keys(tmp_path: Path) -> None:
     record_path = tmp_path / "project-record.yml"
     record_path.write_text(
@@ -376,6 +392,19 @@ def test_assertion_json_rejects_duplicate_mapping_keys(tmp_path: Path) -> None:
 
     assert any("cannot load assertion" in error for error in errors)
     assert any("duplicate mapping key: 'verification_state'" in error for error in errors)
+
+
+def test_project_record_json_converts_excessive_nesting_to_value_error(
+    tmp_path: Path,
+) -> None:
+    record_path = tmp_path / "project-record.json"
+    record_path.write_text(
+        '{"nested":' * 2_000 + "null" + "}" * 2_000,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="JSON nesting exceeds supported depth"):
+        load_project_record(record_path)
 
 
 @pytest.mark.parametrize("status", [None, "deployd", []])
@@ -526,6 +555,36 @@ def test_markdown_audit_requires_exact_backtick_run_closers(tmp_path: Path) -> N
     )
 
 
+def test_markdown_audit_ignores_escaped_backticks_as_code_delimiters(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n\\`[Guide](missing-guide.md)\\`\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_markdown_audit_even_slashes_leave_backtick_delimiters_active(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n\\\\`[Guide](missing-guide.md)\\\\`\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert not any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
 def test_markdown_audit_ignores_escaped_link_openers(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text(
         "# Example\n\n\\[Literal](missing-literal.md)\n",
@@ -576,6 +635,21 @@ def test_markdown_audit_preserves_rendered_links_inside_list_items(
 ) -> None:
     (tmp_path / "README.md").write_text(
         "# Example\n\n- Resources:\n    [Guide](missing-guide.md)\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_markdown_audit_converts_encoded_nul_paths_to_broken_links(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n[Guide](docs/%00missing.md)\n",
         encoding="utf-8",
     )
 
@@ -734,6 +808,22 @@ def test_builder_scans_python_except_for_exact_structural_labels() -> None:
     assert 'queue = ["personal", "contrib", "secretproject"]' in scan_payload
     assert "secretproject" in scan_payload
 
+    notebook = nbformat.v4.new_notebook(
+        cells=[
+            nbformat.v4.new_code_cell(
+                'SOURCE_FILES = {"personal": "personal.json"}\n'
+                'queue = ["personal", "secretproject"]\n',
+            ),
+        ],
+    )
+    notebook_payload = namespace["bare_slug_scan_payload"](
+        Path("audit.ipynb"),
+        nbformat.writes(notebook),
+    )
+
+    assert '"personal": "personal.json"' not in notebook_payload
+    assert 'queue = ["personal", "secretproject"]' in notebook_payload
+
 
 def test_builder_privacy_pattern_distinguishes_structural_and_private_names() -> None:
     builder_path = (
@@ -779,7 +869,9 @@ def test_builder_privacy_pattern_distinguishes_structural_and_private_names() ->
         (match.lastgroup, match.group(0))
         for match in pattern.finditer(
             "current personal profile and contrib guide; `personal`; edu-organism; "
-            "organvm/public-project; secret/hidden-project",
+            "organvm/public-project; secret/hidden-project; "
+            "https://github.com/secret/hidden-project.git; "
+            "https://github.com/organvm/public-project.git",
         )
     ]
 
@@ -790,6 +882,8 @@ def test_builder_privacy_pattern_distinguishes_structural_and_private_names() ->
         ("private_slug", "edu-organism"),
         ("public_full", "organvm/public-project"),
         ("private_full", "secret/hidden-project"),
+        ("private_full", "secret/hidden-project"),
+        ("public_full", "organvm/public-project"),
     ]
     builder_source = builder_path.read_text(encoding="utf-8")
     assert "if public_inventory[column].dtype == object" not in builder_source
@@ -1268,6 +1362,19 @@ def test_web_uris_require_a_valid_host_and_port(uri: str) -> None:
 def test_reference_style_markdown_links_are_audited(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text(
         "# Example\n\n[Guide][guide]\n\n[guide]: docs/missing.md\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_multiline_reference_style_destinations_are_audited(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n[Guide][guide]\n\n[guide]:\n  docs/missing.md\n",
         encoding="utf-8",
     )
 

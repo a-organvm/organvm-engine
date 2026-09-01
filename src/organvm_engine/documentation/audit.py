@@ -34,6 +34,12 @@ MARKDOWN_LIST_MARKER = re.compile(
 REFERENCE_DEFINITION = re.compile(
     r"^[ ]{0,3}\[(?P<label>[^\]\n]+)\]:[ \t]*(?P<destination><[^>\n]+>|[^\s]+)",
 )
+EMPTY_REFERENCE_DEFINITION = re.compile(
+    r"^[ ]{0,3}\[(?P<label>[^\]\n]+)\]:[ \t]*(?:\r?\n)?$",
+)
+REFERENCE_DESTINATION_CONTINUATION = re.compile(
+    r"^[ ]{1,3}(?P<destination><[^>\n]+>|[^\s]+)",
+)
 REFERENCE_USAGE = re.compile(r"(?<!!)\[(?P<label>[^\]\n]+)\](?![\[(])")
 COLLAPSED_REFERENCE_USAGE = re.compile(r"(?<!!)\[(?P<label>[^\]\n]+)\]\[\]")
 
@@ -291,7 +297,11 @@ def _inspect_local_links(root: Path, markdown_files: list[Path]) -> tuple[set[Pa
             path_text = unquote(target.split("#", 1)[0].split("?", 1)[0])
             if not path_text:
                 continue
-            candidate = (source.parent / path_text).resolve()
+            try:
+                candidate = (source.parent / path_text).resolve()
+            except (OSError, RuntimeError, ValueError):
+                broken.append(f"{source.relative_to(root)} -> {target}")
+                continue
             try:
                 candidate.relative_to(root)
             except ValueError:
@@ -441,15 +451,36 @@ def _reference_destinations(text: str) -> tuple[str, list[str]]:
     """Resolve destinations used through CommonMark-style reference links."""
     definitions: dict[str, str] = {}
     visible_lines: list[str] = []
-    for line in text.splitlines(keepends=True):
+    lines = text.splitlines(keepends=True)
+    index = 0
+    while index < len(lines):
+        line = lines[index]
         match = REFERENCE_DEFINITION.match(line)
-        if match is None:
+        consumed_lines = 1
+        if match is None and (empty := EMPTY_REFERENCE_DEFINITION.match(line)) is not None:
+            if index + 1 < len(lines):
+                continuation = REFERENCE_DESTINATION_CONTINUATION.match(lines[index + 1])
+                if continuation is not None:
+                    match = empty
+                    destination = continuation.group("destination")
+                    consumed_lines = 2
+                else:
+                    destination = None
+            else:
+                destination = None
+        else:
+            destination = match.group("destination") if match is not None else None
+        if match is None or destination is None:
             visible_lines.append(line)
+            index += 1
             continue
         label = _normalize_reference_label(match.group("label"))
-        destination = match.group("destination").strip().strip("<>")
-        definitions.setdefault(label, destination)
-        visible_lines.append("".join("\n" if char == "\n" else " " for char in line))
+        definitions.setdefault(label, destination.strip().strip("<>"))
+        for consumed in lines[index : index + consumed_lines]:
+            visible_lines.append(
+                "".join("\n" if char == "\n" else " " for char in consumed),
+            )
+        index += consumed_lines
 
     visible = "".join(visible_lines)
     destinations: list[str] = []
@@ -541,6 +572,9 @@ def _mask_markdown_code(text: str) -> str:
         run_end = position
         while run_end < len(rendered) and rendered[run_end] == "`":
             run_end += 1
+        if _markdown_character_is_escaped(rendered, position):
+            position = run_end
+            continue
         delimiter_length = run_end - position
         closing = _next_exact_backtick_run(rendered, run_end, delimiter_length)
         if closing is None:
@@ -560,7 +594,10 @@ def _next_exact_backtick_run(text: str, start: int, length: int) -> int | None:
         run_end = position
         while run_end < len(text) and text[run_end] == "`":
             run_end += 1
-        if run_end - position == length:
+        if run_end - position == length and not _markdown_character_is_escaped(
+            text,
+            position,
+        ):
             return position
         position = text.find("`", run_end)
     return None

@@ -141,7 +141,11 @@ def bounded_identifier_pattern(identifiers: set[str]) -> str:
     alternatives = "|".join(
         re.escape(value) for value in sorted(identifiers, key=len, reverse=True)
     )
-    return rf"(?<![{REPOSITORY_CHARACTER}])(?:{alternatives})(?![{REPOSITORY_CHARACTER}])"
+    return (
+        rf"(?<![{REPOSITORY_CHARACTER}])(?:{alternatives})"
+        rf"(?:(?=\.git(?:$|[^{REPOSITORY_CHARACTER}]))|"
+        rf"(?![{REPOSITORY_CHARACTER}]))"
+    )
 
 
 def private_only_repository_slugs(
@@ -681,7 +685,8 @@ cells = [
             )
             return (
                 rf"(?<![{repository_character}])(?:{alternatives})"
-                rf"(?![{repository_character}])"
+                rf"(?:(?=\\.git(?:$|[^{repository_character}]))|"
+                rf"(?![{repository_character}]))"
             )
 
 
@@ -1351,6 +1356,10 @@ def bare_slug_scan_payload(path: Path, payload: str) -> str:
         for cell in document.cells:
             if cell.cell_type == "markdown":
                 cells_and_outputs.append(cell.source)
+            elif cell.cell_type == "code":
+                cells_and_outputs.append(
+                    bare_slug_scan_payload(Path("notebook-cell.py"), cell.source),
+                )
             cells_and_outputs.extend(json.dumps(output) for output in cell.get("outputs", []))
         return "\n".join(cells_and_outputs)
     if path.name == INPUT_MANIFEST.name:
