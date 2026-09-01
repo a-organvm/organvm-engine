@@ -1460,6 +1460,8 @@ def _load_structured_data(path: Path) -> Any:
         return yaml.load(payload, Loader=_UniqueKeySafeLoader)
     except yaml.YAMLError as exc:
         raise ValueError(f"Invalid YAML in {path}: {exc}") from exc
+    except RecursionError as exc:
+        raise ValueError(f"YAML nesting exceeds supported depth: {path}") from exc
 
 
 def _unique_json_mapping(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

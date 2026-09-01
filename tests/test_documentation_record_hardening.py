@@ -407,6 +407,19 @@ def test_project_record_json_converts_excessive_nesting_to_value_error(
         load_project_record(record_path)
 
 
+def test_project_record_yaml_converts_excessive_nesting_to_value_error(
+    tmp_path: Path,
+) -> None:
+    record_path = tmp_path / "project-record.yml"
+    record_path.write_text(
+        "nested: " + "[" * 2_000 + "null" + "]" * 2_000,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="YAML nesting exceeds supported depth"):
+        load_project_record(record_path)
+
+
 @pytest.mark.parametrize("status", [None, "deployd", []])
 def test_industry_status_requires_the_supported_vocabulary(status: object) -> None:
     record = _record()
