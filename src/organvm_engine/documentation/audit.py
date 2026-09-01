@@ -36,7 +36,7 @@ EMPTY_REFERENCE_DEFINITION = re.compile(
     r"^[ ]{0,3}\[(?P<label>[^\]\n]+)\]:[ \t]*(?:\r?\n)?$",
 )
 REFERENCE_DESTINATION_CONTINUATION = re.compile(
-    r"^[ ]{1,3}(?P<destination><[^>\n]+>|[^\s]+)",
+    r"^[ ]{0,3}(?P<destination><[^>\n]+>|[^\s]+)",
 )
 REFERENCE_USAGE = re.compile(r"(?<!!)\[(?P<label>[^\]\n]+)\](?![\[(])")
 COLLAPSED_REFERENCE_USAGE = re.compile(r"(?<!!)\[(?P<label>[^\]\n]+)\]\[\]")
@@ -453,7 +453,7 @@ def _reference_destinations(text: str) -> tuple[str, list[str]]:
     index = 0
     while index < len(lines):
         line = lines[index]
-        definition_line = _markdown_strip_blockquotes(line)
+        definition_line, container_prefixes = _markdown_reference_containers(line)
         match = REFERENCE_DEFINITION.match(definition_line)
         consumed_lines = 1
         if (
@@ -461,9 +461,14 @@ def _reference_destinations(text: str) -> tuple[str, list[str]]:
             and (empty := EMPTY_REFERENCE_DEFINITION.match(definition_line)) is not None
         ):
             if index + 1 < len(lines):
-                continuation_line = _markdown_strip_blockquotes(lines[index + 1])
-                continuation = REFERENCE_DESTINATION_CONTINUATION.match(
-                    continuation_line,
+                continuation_line = _markdown_apply_reference_containers(
+                    lines[index + 1],
+                    container_prefixes,
+                )
+                continuation = (
+                    REFERENCE_DESTINATION_CONTINUATION.match(continuation_line)
+                    if continuation_line is not None
+                    else None
                 )
                 if continuation is not None:
                     match = empty
@@ -497,6 +502,44 @@ def _reference_destinations(text: str) -> tuple[str, list[str]]:
             if destination is not None:
                 destinations.append(destination)
     return visible, destinations
+
+
+def _markdown_reference_containers(
+    value: str,
+) -> tuple[str, tuple[tuple[str, int], ...]]:
+    """Strip quote/list prefixes and retain operations for a continuation line."""
+    prefixes: list[tuple[str, int]] = []
+    while True:
+        quote = MARKDOWN_BLOCKQUOTE.match(value)
+        if quote is not None:
+            prefixes.append(("quote", 0))
+            value = value[quote.end() :]
+            continue
+        list_item = MARKDOWN_LIST_MARKER.match(value)
+        if list_item is None or _markdown_indent_columns(value) > 3:
+            break
+        content_indent = _markdown_column_width(value[: list_item.end()])
+        prefixes.append(("indent", content_indent))
+        value = value[list_item.end() :]
+    return value, tuple(prefixes)
+
+
+def _markdown_apply_reference_containers(
+    value: str,
+    prefixes: tuple[tuple[str, int], ...],
+) -> str | None:
+    """Apply one definition line's quote/list prefixes to its continuation."""
+    for kind, columns in prefixes:
+        if kind == "quote":
+            quote = MARKDOWN_BLOCKQUOTE.match(value)
+            if quote is None:
+                return None
+            value = value[quote.end() :]
+            continue
+        if _markdown_indent_columns(value) < columns:
+            return None
+        value = _markdown_remove_indent(value, columns)
+    return value
 
 
 def _normalize_reference_label(label: str) -> str:

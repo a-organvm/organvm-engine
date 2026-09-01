@@ -1578,6 +1578,31 @@ def test_nested_blockquote_multiline_reference_destinations_are_audited(
     )
 
 
+@pytest.mark.parametrize(
+    "definition",
+    [
+        "- [guide]: docs/missing.md\n",
+        "10. [guide]:\n    docs/missing.md\n",
+        "> - [guide]:\n>   docs/missing.md\n",
+        "[guide]:\ndocs/missing.md\n",
+    ],
+)
+def test_list_and_unindented_reference_destinations_are_audited(
+    tmp_path: Path,
+    definition: str,
+) -> None:
+    (tmp_path / "README.md").write_text(
+        f"# Example\n\n{definition}\n[Guide][guide]\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
 def test_symlinked_project_record_is_not_read(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
     repository.mkdir()
