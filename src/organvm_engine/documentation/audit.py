@@ -8,8 +8,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-import yaml
-
 from organvm_engine.documentation.record import load_project_record, validate_project_record
 
 DIMENSIONS = (
@@ -455,11 +453,18 @@ def _reference_destinations(text: str) -> tuple[str, list[str]]:
     index = 0
     while index < len(lines):
         line = lines[index]
-        match = REFERENCE_DEFINITION.match(line)
+        definition_line = _markdown_strip_blockquotes(line)
+        match = REFERENCE_DEFINITION.match(definition_line)
         consumed_lines = 1
-        if match is None and (empty := EMPTY_REFERENCE_DEFINITION.match(line)) is not None:
+        if (
+            match is None
+            and (empty := EMPTY_REFERENCE_DEFINITION.match(definition_line)) is not None
+        ):
             if index + 1 < len(lines):
-                continuation = REFERENCE_DESTINATION_CONTINUATION.match(lines[index + 1])
+                continuation_line = _markdown_strip_blockquotes(lines[index + 1])
+                continuation = REFERENCE_DESTINATION_CONTINUATION.match(
+                    continuation_line,
+                )
                 if continuation is not None:
                     match = empty
                     destination = continuation.group("destination")
@@ -524,6 +529,11 @@ def _mask_markdown_code(text: str) -> str:
         )
         match = MARKDOWN_FENCE.match(relative_line)
         if fence_character is None:
+            if match is not None:
+                opening_fence = match.group("fence")
+                info_string = relative_line[match.end() :].rstrip("\r\n")
+                if opening_fence[0] == "`" and "`" in info_string:
+                    match = None
             if match is not None:
                 fence = match.group("fence")
                 fence_character = fence[0]
@@ -721,7 +731,10 @@ def _findings(
 
 def load_schema(path: str | Path) -> dict[str, Any]:
     """Load a JSON Schema stored as YAML or JSON."""
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError(f"Schema is not a mapping: {path}")
-    return data
+    schema_path = Path(path)
+    try:
+        return load_project_record(schema_path)
+    except ValueError as exc:
+        if str(exc) == f"Project record is not a mapping: {schema_path}":
+            raise ValueError(f"Schema is not a mapping: {schema_path}") from exc
+        raise

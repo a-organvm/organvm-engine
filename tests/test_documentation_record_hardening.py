@@ -16,6 +16,7 @@ import pytest
 import yaml
 
 from organvm_engine.cli.docs import cmd_docs_audit, cmd_docs_validate
+from organvm_engine.documentation import record as documentation_record
 from organvm_engine.documentation.audit import audit_repository
 from organvm_engine.documentation.record import load_project_record, validate_project_record
 
@@ -253,6 +254,59 @@ def test_docs_validate_reports_malformed_schema_as_json(
     assert payload["valid"] is False
     assert payload["errors"]
     assert "while parsing a flow sequence" in payload["errors"][0]
+
+
+@pytest.mark.parametrize("schema_argument", ["schema", "assertion_schema"])
+def test_docs_validate_reports_excessively_nested_schema_as_json(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    schema_argument: str,
+) -> None:
+    record_path = tmp_path / "project-record.yml"
+    record_path.write_text("{}\n", encoding="utf-8")
+    schema_path = tmp_path / f"{schema_argument}.yml"
+    schema_path.write_text(
+        "nested: " + "[" * 2_000 + "null" + "]" * 2_000,
+        encoding="utf-8",
+    )
+    arguments = {
+        "record": str(record_path),
+        "root": str(tmp_path),
+        "schema": None,
+        "assertion_schema": None,
+        "json": True,
+    }
+    arguments[schema_argument] = str(schema_path)
+
+    assert cmd_docs_validate(Namespace(**arguments)) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["valid"] is False
+    assert "YAML nesting exceeds supported depth" in payload["errors"][0]
+
+
+@pytest.mark.parametrize("schema_argument", ["schema", "assertion_schema"])
+def test_docs_validate_rejects_oversized_schema_before_parsing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    schema_argument: str,
+) -> None:
+    record_path = tmp_path / "project-record.yml"
+    record_path.write_text("{}\n", encoding="utf-8")
+    schema_path = tmp_path / f"{schema_argument}.yml"
+    schema_path.write_bytes(b"{}\n" + b" " * 2_000_000)
+    arguments = {
+        "record": str(record_path),
+        "root": str(tmp_path),
+        "schema": None,
+        "assertion_schema": None,
+        "json": True,
+    }
+    arguments[schema_argument] = str(schema_path)
+
+    assert cmd_docs_validate(Namespace(**arguments)) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["valid"] is False
+    assert "structured record exceeds 2000000 bytes" in payload["errors"][0]
 
 
 def test_malformed_yaml_assertion_becomes_an_audit_finding(tmp_path: Path) -> None:
@@ -564,6 +618,34 @@ def test_markdown_audit_requires_exact_backtick_run_closers(tmp_path: Path) -> N
     result = audit_repository(tmp_path)
 
     assert any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_markdown_audit_rejects_backtick_fences_with_backticks_in_info(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n``` example`\n[Guide](missing-guide.md)\n```\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_markdown_audit_allows_backticks_in_tilde_fence_info(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n~~~ example`\n[Guide](missing-guide.md)\n~~~\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert not any(
         finding["code"] == "broken-local-links" for finding in result["findings"]
     )
 
@@ -1137,6 +1219,76 @@ def test_local_evidence_hashing_streams_without_path_read_bytes(
     assert validate_project_record(record, root=tmp_path) == []
 
 
+def test_repeated_local_evidence_references_share_one_streamed_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _write_git_fixture(tmp_path)
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    first = assertion["evidence_references"][0]
+    assertion["evidence_references"] = [
+        {**first, "evidence_id": f"validation-receipt-{index}"}
+        for index in range(32)
+    ]
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+    original = documentation_record._stream_sha256
+    stream_calls = 0
+
+    def counted_stream(path: Path) -> str:
+        nonlocal stream_calls
+        stream_calls += 1
+        return original(path)
+
+    monkeypatch.setattr(documentation_record, "_stream_sha256", counted_stream)
+
+    errors = validate_project_record(record, root=tmp_path)
+
+    assert not any("body_hash does not match" in error for error in errors)
+    assert stream_calls == 1
+
+
+def test_repeated_git_evidence_references_share_one_streamed_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _write_git_fixture(tmp_path)
+    commit = _git(tmp_path, "rev-parse", "HEAD").decode().strip()
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    first = assertion["evidence_references"][0]
+    first["reference"] = (
+        f"git:{commit}:docs/evidence/sources/validation.txt"
+    )
+    assertion["evidence_references"] = [
+        {**first, "evidence_id": f"validation-receipt-{index}"}
+        for index in range(4)
+    ]
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+    original = documentation_record._stream_git_object_sha256
+    stream_calls = 0
+
+    def counted_stream(
+        root: Path,
+        object_type: str,
+        object_name: str,
+    ) -> tuple[str | None, int]:
+        nonlocal stream_calls
+        stream_calls += 1
+        return original(root, object_type, object_name)
+
+    monkeypatch.setattr(
+        documentation_record,
+        "_stream_git_object_sha256",
+        counted_stream,
+    )
+
+    errors = validate_project_record(record, root=tmp_path)
+
+    assert not any("body_hash does not match" in error for error in errors)
+    assert stream_calls == 1
+
+
 @pytest.mark.parametrize("reference_kind", ["local", "hardlink", "git"])
 def test_external_fact_independence_requires_distinct_resolved_objects(
     tmp_path: Path,
@@ -1388,6 +1540,34 @@ def test_reference_style_markdown_links_are_audited(tmp_path: Path) -> None:
 def test_multiline_reference_style_destinations_are_audited(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text(
         "# Example\n\n[Guide][guide]\n\n[guide]:\n  docs/missing.md\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_blockquote_reference_style_destinations_are_audited(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n> [guide]: docs/missing.md\n\n[Guide][guide]\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_nested_blockquote_multiline_reference_destinations_are_audited(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n> > [guide]:\n> >   docs/missing.md\n\n[Guide][guide]\n",
         encoding="utf-8",
     )
 

@@ -596,6 +596,7 @@ def validate_project_record(
 
     if root is not None:
         root_path = Path(root).resolve()
+        evidence_digest_cache: dict[str, tuple[str | None, str | None]] = {}
         for relative in route_paths:
             _validate_local_file(root_path, relative, "audience path", errors)
 
@@ -620,6 +621,7 @@ def validate_project_record(
                 assertion_schema=assertion_schema,
                 now=validation_now,
                 require_git_tracked_evidence=require_git_tracked_evidence,
+                evidence_digest_cache=evidence_digest_cache,
             )
             errors.extend(assertion_errors)
             if assertion is not None:
@@ -634,6 +636,7 @@ def validate_project_record(
                 assertion_schema=assertion_schema,
                 now=validation_now,
                 require_git_tracked_evidence=require_git_tracked_evidence,
+                evidence_digest_cache=evidence_digest_cache,
             )
             errors.extend(assertion_errors)
 
@@ -681,6 +684,7 @@ def _validate_assertion_target(
     assertion_schema: Mapping[str, Any] | None,
     now: datetime,
     require_git_tracked_evidence: bool,
+    evidence_digest_cache: dict[str, tuple[str | None, str | None]],
 ) -> tuple[Mapping[str, Any] | None, list[str]]:
     errors: list[str] = []
     if _references_git_metadata(reference):
@@ -731,6 +735,7 @@ def _validate_assertion_target(
                 root=root,
                 reference=reference,
                 require_git_tracked_evidence=require_git_tracked_evidence,
+                evidence_digest_cache=evidence_digest_cache,
             ),
         )
     if assertion_schema is not None:
@@ -1205,6 +1210,7 @@ def _assertion_evidence_binding_errors(
     root: Path,
     reference: str,
     require_git_tracked_evidence: bool,
+    evidence_digest_cache: dict[str, tuple[str | None, str | None]],
 ) -> list[str]:
     """Bind evidence to local bytes or deterministic local Git objects."""
     errors: list[str] = []
@@ -1230,6 +1236,7 @@ def _assertion_evidence_binding_errors(
                     evidence_reference=evidence_reference,
                     body_hash=body_hash,
                     label=label,
+                    evidence_digest_cache=evidence_digest_cache,
                 ),
             )
             continue
@@ -1266,11 +1273,26 @@ def _assertion_evidence_binding_errors(
                     label=label,
                 ),
             )
-        try:
-            actual = "sha256:" + _stream_sha256(candidate)
-        except OSError as exc:
+        cache_key = _resolved_evidence_identity(root, evidence_reference)
+        if cache_key is None:
+            cache_key = f"file-path:{candidate}"
+        cached_digest = evidence_digest_cache.get(cache_key)
+        if cached_digest is None:
+            try:
+                cached_digest = ("sha256:" + _stream_sha256(candidate), None)
+            except OSError as exc:
+                cached_digest = (None, str(exc))
+            evidence_digest_cache[cache_key] = cached_digest
+        actual, read_error = cached_digest
+        if read_error is not None:
             errors.append(
-                f"{label} cannot read evidence bytes for {evidence_reference}: {exc}",
+                f"{label} cannot read evidence bytes for {evidence_reference}: "
+                f"{read_error}",
+            )
+            continue
+        if actual is None:
+            errors.append(
+                f"{label} cannot read evidence bytes for {evidence_reference}",
             )
             continue
         if body_hash != actual:
@@ -1287,13 +1309,37 @@ def _git_evidence_binding_errors(
     evidence_reference: str,
     body_hash: str,
     label: str,
+    evidence_digest_cache: dict[str, tuple[str | None, str | None]],
 ) -> list[str]:
+    def result_errors(
+        cached: tuple[str | None, str | None],
+    ) -> list[str]:
+        actual, resolution_error = cached
+        if resolution_error is not None:
+            return [f"{label} {resolution_error}"]
+        if actual is None:
+            return [f"{label} cannot resolve git evidence: {evidence_reference}"]
+        if body_hash != actual:
+            return [
+                f"{label} body_hash does not match Git object bytes for "
+                f"{evidence_reference}: expected {actual}, found {body_hash}",
+            ]
+        return []
+
+    reference_cache_key = f"git-reference:{evidence_reference}"
+    cached_digest = evidence_digest_cache.get(reference_cache_key)
+    if cached_digest is not None:
+        return result_errors(cached_digest)
+
     match = GIT_EVIDENCE_REFERENCE.fullmatch(evidence_reference)
     if match is None:
-        return [
-            f"{label} git evidence must use git:<full-40-sha> or "
-            "git:<full-40-sha>:<contained-path>",
-        ]
+        resolution_error = (
+            "git evidence must use git:<full-40-sha> or "
+            "git:<full-40-sha>:<contained-path>"
+        )
+        cached_digest = (None, resolution_error)
+        evidence_digest_cache[reference_cache_key] = cached_digest
+        return result_errors(cached_digest)
     commit = match.group("commit")
     path = match.group("path")
     if path is not None and (
@@ -1301,34 +1347,56 @@ def _git_evidence_binding_errors(
         or ".." in Path(path).parts
         or _references_git_metadata(path)
     ):
-        return [f"{label} git evidence path is not contained: {path}"]
+        cached_digest = (None, f"git evidence path is not contained: {path}")
+        evidence_digest_cache[reference_cache_key] = cached_digest
+        return result_errors(cached_digest)
 
     commit_check = _run_git(root, "cat-file", "-e", f"{commit}^{{commit}}")
     if commit_check.returncode != 0:
-        return [
-            f"{label} git commit is unavailable locally (possibly shallow): {commit}",
-        ]
+        cached_digest = (
+            None,
+            f"git commit is unavailable locally (possibly shallow): {commit}",
+        )
+        evidence_digest_cache[reference_cache_key] = cached_digest
+        return result_errors(cached_digest)
     if path is not None:
         tree_entry = _run_git(root, "ls-tree", commit, "--", path)
         if tree_entry.returncode != 0 or not tree_entry.stdout:
-            return [f"{label} git evidence path does not exist at {commit}: {path}"]
+            cached_digest = (
+                None,
+                f"git evidence path does not exist at {commit}: {path}",
+            )
+            evidence_digest_cache[reference_cache_key] = cached_digest
+            return result_errors(cached_digest)
         mode = tree_entry.stdout.split(None, 1)[0].decode("ascii", errors="replace")
         if mode not in {"100644", "100755"}:
-            return [
-                f"{label} git evidence path must be a regular blob, not mode {mode}: {path}",
-            ]
+            cached_digest = (
+                None,
+                f"git evidence path must be a regular blob, not mode {mode}: {path}",
+            )
+            evidence_digest_cache[reference_cache_key] = cached_digest
+            return result_errors(cached_digest)
     object_type = "commit" if path is None else "blob"
     object_name = commit if path is None else f"{commit}:{path}"
-    digest, returncode = _stream_git_object_sha256(root, object_type, object_name)
-    if returncode != 0 or digest is None:
-        return [f"{label} cannot resolve git evidence: {evidence_reference}"]
-    actual = "sha256:" + digest
-    if body_hash != actual:
-        return [
-            f"{label} body_hash does not match Git object bytes for {evidence_reference}: "
-            f"expected {actual}, found {body_hash}",
-        ]
-    return []
+    object_cache_key = _resolved_evidence_identity(root, evidence_reference)
+    cached_digest = (
+        evidence_digest_cache.get(object_cache_key)
+        if object_cache_key is not None
+        else None
+    )
+    if cached_digest is None:
+        digest, returncode = _stream_git_object_sha256(root, object_type, object_name)
+        if returncode != 0 or digest is None:
+            cached_digest = (
+                None,
+                f"cannot resolve git evidence: {evidence_reference}",
+            )
+        else:
+            cached_digest = ("sha256:" + digest, None)
+        if object_cache_key is not None:
+            evidence_digest_cache[object_cache_key] = cached_digest
+    evidence_digest_cache[reference_cache_key] = cached_digest
+    return result_errors(cached_digest)
 
 
 def _stream_sha256(path: Path) -> str:
