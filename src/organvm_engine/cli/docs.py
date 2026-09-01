@@ -68,8 +68,26 @@ def cmd_docs_validate(args) -> int:
 def cmd_docs_audit(args) -> int:
     """Audit one or more repository documentation surfaces."""
     paths = [Path(path).resolve() for path in args.paths]
-    if args.workspace:
-        paths.extend(discover_repositories(args.workspace))
+    workspace = getattr(args, "workspace", None)
+    if workspace is not None:
+        repositories = (
+            discover_repositories(workspace)
+            if not isinstance(workspace, str) or workspace.strip()
+            else []
+        )
+        if not repositories:
+            rendered_workspace = (
+                str(Path(workspace).resolve())
+                if not isinstance(workspace, str) or workspace.strip()
+                else "<empty>"
+            )
+            print(
+                "Error: no Git repositories discovered under explicit workspace: "
+                f"{rendered_workspace}",
+                file=sys.stderr,
+            )
+            return 1
+        paths.extend(repositories)
     if not paths:
         paths = [Path.cwd().resolve()]
     unique_paths = sorted(set(paths))

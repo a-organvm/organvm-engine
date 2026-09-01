@@ -23,6 +23,19 @@ IMPLEMENTATION_STATUSES = frozenset(
 DEPLOYMENT_STATUSES = frozenset(
     {"not-deployed", "internal", "pilot", "public", "retired", "not-applicable"},
 )
+CANONICAL_REDIRECT_STATUSES = frozenset({"planned", "active", "retired"})
+EVIDENCE_TYPES = frozenset(
+    {
+        "immutable_source_event",
+        "ratified_constitutional_record",
+        "owner_record",
+        "fresh_verifier_receipt",
+        "primary_source",
+        "secondary_source",
+        "artifact",
+        "other",
+    },
+)
 AUDIENCE_MODES = frozenset(
     {"general", "technical", "humanities", "business", "evaluator"},
 )
@@ -270,9 +283,14 @@ def validate_project_record(
         if not isinstance(target, str) or not _valid_web_uri(target):
             errors.append("redirect.target must be an absolute HTTP(S) URI")
         if canonical_redirect_required:
-            if redirect.get("status") == "none":
+            redirect_status = redirect.get("status")
+            if (
+                not isinstance(redirect_status, str)
+                or redirect_status not in CANONICAL_REDIRECT_STATUSES
+            ):
                 errors.append(
-                    f"{redirect_requirement} requires a non-none redirect status",
+                    f"{redirect_requirement} requires redirect.status to be one of: "
+                    + ", ".join(sorted(CANONICAL_REDIRECT_STATUSES)),
                 )
             target_repository = (
                 _github_repository_slug(target) if isinstance(target, str) else None
@@ -593,7 +611,7 @@ def _validate_assertion_target(
     require_git_tracked_evidence: bool,
 ) -> tuple[Mapping[str, Any] | None, list[str]]:
     errors: list[str] = []
-    if ".git" in Path(reference).parts:
+    if _references_git_metadata(reference):
         return None, [f"{label} assertion path under .git is forbidden: {reference}"]
     if _path_contains_symlink(root, reference):
         return None, [f"{label} symlink assertion is forbidden: {reference}"]
@@ -805,6 +823,11 @@ def _reference_is_remote_or_absolute(reference: str) -> bool:
     return has_scheme or Path(reference).is_absolute()
 
 
+def _references_git_metadata(reference: str) -> bool:
+    """Return whether a relative path names Git metadata on any common filesystem."""
+    return any(part.casefold() == ".git" for part in Path(reference).parts)
+
+
 def _assertion_semantic_errors(
     assertion: Mapping[str, Any],
     *,
@@ -819,6 +842,37 @@ def _assertion_semantic_errors(
         return errors
     if assertion.get("verification_state") == "verified" and not evidence:
         errors.append("a verified assertion requires a non-empty evidence_references list")
+
+    if assertion.get("verification_state") == "verified":
+        for index, item in enumerate(evidence):
+            if not isinstance(item, Mapping):
+                errors.append(f"evidence_references[{index}] must be a mapping")
+                continue
+            required_strings = ("evidence_id", "independence_group", "reference")
+            for field in required_strings:
+                value = item.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(
+                        f"evidence_references[{index}].{field} must be a non-empty string",
+                    )
+            evidence_type = item.get("evidence_type")
+            if (
+                not isinstance(evidence_type, str)
+                or evidence_type not in EVIDENCE_TYPES
+            ):
+                errors.append(
+                    f"evidence_references[{index}].evidence_type must be one of: "
+                    + ", ".join(sorted(EVIDENCE_TYPES)),
+                )
+            body_hash = item.get("body_hash")
+            if (
+                not isinstance(body_hash, str)
+                or re.fullmatch(r"sha256:[a-f0-9]{64}", body_hash) is None
+            ):
+                errors.append(
+                    f"evidence_references[{index}].body_hash must use "
+                    "sha256:<64-lowercase-hex>",
+                )
 
     evidence_ids = [
         item.get("evidence_id") for item in evidence if isinstance(item, Mapping)
@@ -909,6 +963,15 @@ def _assertion_semantic_errors(
             )
         if not isinstance(freshness, Mapping) or freshness.get("status") != "fresh":
             errors.append("a verified current_state requires freshness.status 'fresh'")
+        elif (
+            not isinstance(freshness.get("max_age_seconds"), int)
+            or isinstance(freshness.get("max_age_seconds"), bool)
+            or freshness["max_age_seconds"] <= 0
+        ):
+            errors.append(
+                "a verified current_state with freshness.status 'fresh' requires "
+                "max_age_seconds to be a positive integer",
+            )
 
     return errors
 
@@ -984,7 +1047,7 @@ def _assertion_evidence_binding_errors(
                 f"{evidence_reference}",
             )
             continue
-        if ".git" in Path(evidence_reference).parts:
+        if _references_git_metadata(evidence_reference):
             errors.append(f"{label} reference under .git is forbidden: {evidence_reference}")
             continue
         if _path_contains_symlink(root, evidence_reference):

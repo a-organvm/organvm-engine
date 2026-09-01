@@ -15,7 +15,7 @@ import nbformat
 import pytest
 import yaml
 
-from organvm_engine.cli.docs import cmd_docs_validate
+from organvm_engine.cli.docs import cmd_docs_audit, cmd_docs_validate
 from organvm_engine.documentation.audit import audit_repository
 from organvm_engine.documentation.record import load_project_record, validate_project_record
 
@@ -353,6 +353,23 @@ def test_markdown_audit_ignores_links_inside_code(tmp_path: Path) -> None:
     )
 
 
+def test_markdown_audit_ignores_links_inside_indented_code(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n"
+        "    [Indented](missing-indented.md)\n"
+        "\t[Tabbed](missing-tabbed.md)\n"
+        "    [Reference][missing]\n"
+        "    [missing]: missing-reference.md\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert not any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
 def test_markdown_audit_rejects_outside_symlink_content(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
     repository.mkdir()
@@ -477,6 +494,147 @@ def test_verified_assertion_requires_nonempty_evidence(tmp_path: Path) -> None:
         "verified assertion requires a non-empty evidence_references list" in error
         for error in validate_project_record(record, root=tmp_path)
     )
+
+
+@pytest.mark.parametrize(
+    "malformed_entry",
+    [
+        {},
+        "not-a-mapping",
+        {
+            "evidence_id": "",
+            "independence_group": "",
+            "evidence_type": "unsupported",
+            "reference": "",
+            "body_hash": "sha256:not-a-digest",
+        },
+        {
+            "evidence_id": [],
+            "independence_group": {},
+            "evidence_type": ["artifact"],
+            "reference": [],
+            "body_hash": {},
+        },
+    ],
+)
+def test_verified_assertion_rejects_malformed_evidence_entries(
+    tmp_path: Path,
+    malformed_entry: object,
+) -> None:
+    record = _write_git_fixture(tmp_path)
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    assertion["evidence_references"] = [malformed_entry]
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+
+    errors = validate_project_record(record, root=tmp_path)
+
+    assert any("evidence_references[0]" in error for error in errors)
+
+
+@pytest.mark.parametrize("max_age_seconds", [None, 0, -1, True, "60"])
+def test_verified_fresh_current_state_requires_positive_max_age(
+    tmp_path: Path,
+    max_age_seconds: object,
+) -> None:
+    record = _write_git_fixture(tmp_path)
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    assertion["assertion_class"] = "current_state"
+    assertion["freshness"] = {
+        "verified_at": "2025-01-01T00:00:00Z",
+        "status": "fresh",
+    }
+    if max_age_seconds is not None:
+        assertion["freshness"]["max_age_seconds"] = max_age_seconds
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+
+    errors = validate_project_record(
+        record,
+        root=tmp_path,
+        now=datetime(2025, 1, 1, 0, 1, tzinfo=timezone.utc),
+    )
+
+    assert any(
+        "max_age_seconds to be a positive integer" in error for error in errors
+    )
+
+
+@pytest.mark.parametrize("status", [None, "none", "unsupported", 7, ["active"]])
+def test_canonical_redirect_requires_supported_non_none_status(status: object) -> None:
+    record = _record()
+    record["documentation_class"] = "D"
+    record["repository_role"] = "deployment-artifact"
+    record["audience_routes"] = []
+    record["links"]["documentation"] = "README.md"
+    record["redirect"] = {
+        "target": "https://github.com/organvm/example",
+    }
+    if status is not None:
+        record["redirect"]["status"] = status
+
+    assert any(
+        "requires redirect.status to be one of: active, planned, retired" in error
+        for error in validate_project_record(record)
+    )
+
+
+@pytest.mark.parametrize("git_component", [".GIT", ".Git", ".gIt"])
+def test_evidence_paths_reject_git_metadata_case_insensitively(
+    tmp_path: Path,
+    git_component: str,
+) -> None:
+    record = _write_git_fixture(tmp_path)
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    assertion["evidence_references"][0]["reference"] = f"{git_component}/config"
+    assertion["evidence_references"][0]["body_hash"] = (
+        "sha256:" + "0" * 64
+    )
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+
+    assert any(
+        "reference under .git is forbidden" in error
+        for error in validate_project_record(record, root=tmp_path)
+    )
+
+
+@pytest.mark.parametrize("git_component", [".GIT", ".Git", ".gIt"])
+def test_assertion_paths_reject_git_metadata_case_insensitively(
+    tmp_path: Path,
+    git_component: str,
+) -> None:
+    record = _write_git_fixture(tmp_path)
+    record["claim_references"][0]["assertion_ref"] = f"{git_component}/config"
+
+    assert any(
+        "assertion path under .git is forbidden" in error
+        for error in validate_project_record(record, root=tmp_path)
+    )
+
+
+@pytest.mark.parametrize("workspace_argument", ["empty-directory", ""])
+def test_docs_audit_explicit_empty_workspace_fails_closed(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    workspace_argument: str,
+) -> None:
+    workspace = tmp_path / workspace_argument if workspace_argument else ""
+    if workspace_argument:
+        workspace.mkdir()
+    args = Namespace(
+        paths=[],
+        workspace=str(workspace),
+        format="json",
+        json=True,
+        output=None,
+        strict=False,
+    )
+
+    assert cmd_docs_audit(args) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "no Git repositories discovered under explicit workspace" in captured.err
 
 
 def test_strict_git_binding_treats_pathspec_magic_as_a_literal(tmp_path: Path) -> None:

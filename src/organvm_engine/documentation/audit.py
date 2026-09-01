@@ -26,6 +26,7 @@ SKIP_DIRS = frozenset(
 )
 MARKDOWN_LINK_START = re.compile(r"\]\(")
 MARKDOWN_FENCE = re.compile(r"^[ ]{0,3}(?P<fence>`{3,}|~{3,})")
+MARKDOWN_INDENTED_CODE = re.compile(r"^(?: {4}| {0,3}\t)")
 REFERENCE_DEFINITION = re.compile(
     r"^[ ]{0,3}\[(?P<label>[^\]\n]+)\]:[ \t]*(?P<destination><[^>\n]+>|[^\s]+)",
 )
@@ -414,6 +415,8 @@ def _mask_markdown_code(text: str) -> str:
                 fence = match.group("fence")
                 fence_character = fence[0]
                 fence_length = len(fence)
+                visible.append(masked(line))
+            elif MARKDOWN_INDENTED_CODE.match(line) is not None:
                 visible.append(masked(line))
             else:
                 visible.append(line)
