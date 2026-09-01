@@ -14,6 +14,35 @@ from urllib.parse import urlparse
 
 import yaml
 
+
+class _UniqueKeySafeLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects ambiguous duplicate mapping keys."""
+
+
+def _construct_unique_mapping(
+    loader: _UniqueKeySafeLoader,
+    node: yaml.MappingNode,
+    deep: bool = False,
+) -> dict[Any, Any]:
+    loader.flatten_mapping(node)
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            duplicate = key in mapping
+        except TypeError as exc:
+            raise ValueError(f"unhashable YAML mapping key: {key!r}") from exc
+        if duplicate:
+            raise ValueError(f"duplicate mapping key: {key!r}")
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_UniqueKeySafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_unique_mapping,
+)
+
 CONTRACT_NAME = "project-record.v1"
 CONTRACT_VERSION = 1
 MAX_STRUCTURED_RECORD_BYTES = 2_000_000
@@ -127,10 +156,7 @@ def load_project_record(path: str | Path) -> dict[str, Any]:
     record_path = Path(path)
     if not record_path.is_file():
         raise FileNotFoundError(record_path)
-    try:
-        data = yaml.safe_load(_read_bounded_record_text(record_path))
-    except yaml.YAMLError as exc:
-        raise ValueError(f"Invalid YAML in {record_path}: {exc}") from exc
+    data = _load_structured_data(record_path)
     if not isinstance(data, dict):
         raise ValueError(f"Project record is not a mapping: {record_path}")
     return _normalize_yaml_datetimes(data)
@@ -697,7 +723,7 @@ def _validate_assertion_target(
     if assertion_contract_matches:
         errors.extend(
             f"assertion {reference}: semantic: {error}"
-            for error in _assertion_semantic_errors(assertion, now=now)
+            for error in _assertion_semantic_errors(assertion, now=now, root=root)
         )
         errors.extend(
             _assertion_evidence_binding_errors(
@@ -885,10 +911,48 @@ def _references_git_metadata(reference: str) -> bool:
     return any(part.casefold() == ".git" for part in Path(reference).parts)
 
 
+def _resolved_evidence_identity(root: Path, reference: Any) -> str | None:
+    """Resolve an evidence reference to the local file or immutable Git object."""
+    if not isinstance(reference, str) or not reference:
+        return None
+    git_match = GIT_EVIDENCE_REFERENCE.fullmatch(reference)
+    if git_match is not None:
+        commit = git_match.group("commit")
+        path = git_match.group("path")
+        if path is not None and (
+            _reference_is_remote_or_absolute(path)
+            or ".." in Path(path).parts
+            or _references_git_metadata(path)
+        ):
+            return None
+        revision = f"{commit}^{{commit}}" if path is None else f"{commit}:{path}"
+        resolved = _run_git(root, "rev-parse", "--verify", revision)
+        identity = resolved.stdout.strip().decode("ascii", errors="replace")
+        if resolved.returncode != 0 or re.fullmatch(r"[a-f0-9]{40,64}", identity) is None:
+            return None
+        kind = "commit" if path is None else "object"
+        return f"git-{kind}:{identity}"
+    if _reference_is_remote_or_absolute(reference):
+        return None
+    if _references_git_metadata(reference) or _path_contains_symlink(root, reference):
+        return None
+    candidate = _contained_path(root, reference)
+    if candidate is None or not candidate.is_file():
+        return None
+    try:
+        file_status = candidate.stat()
+    except OSError:
+        return None
+    if file_status.st_ino:
+        return f"file:{file_status.st_dev}:{file_status.st_ino}"
+    return f"file:{candidate}"
+
+
 def _assertion_semantic_errors(
     assertion: Mapping[str, Any],
     *,
     now: datetime,
+    root: Path,
 ) -> list[str]:
     """Validate assertion-evidence invariants that JSON Schema cannot express."""
     errors: list[str] = []
@@ -1008,26 +1072,45 @@ def _assertion_semantic_errors(
     if verification_state != "verified":
         return errors
 
-    groups = {
-        item.get("independence_group")
+    evidence_bindings = [
+        (
+            item.get("independence_group"),
+            item.get("evidence_type"),
+            _resolved_evidence_identity(root, item.get("reference")),
+        )
         for item in evidence
         if isinstance(item, Mapping)
         and isinstance(item.get("independence_group"), str)
         and item.get("independence_group")
-    }
+        and isinstance(item.get("evidence_type"), str)
+        and isinstance(item.get("reference"), str)
+    ]
+    has_independent_objects = any(
+        first_group != second_group and first_identity != second_identity
+        for first_index, (first_group, _first_type, first_identity) in enumerate(
+            evidence_bindings,
+        )
+        if first_identity is not None
+        for second_group, _second_type, second_identity in evidence_bindings[
+            first_index + 1 :
+        ]
+        if second_identity is not None
+    )
     evidence_types = {
         item.get("evidence_type")
         for item in evidence
         if isinstance(item, Mapping) and isinstance(item.get("evidence_type"), str)
     }
-    if assertion_class == "external_fact" and len(groups) < 2:
+    if assertion_class == "external_fact" and not has_independent_objects:
         errors.append(
-            "a verified external_fact requires at least two independent evidence groups",
+            "a verified external_fact requires at least two independent evidence groups "
+            "backed by distinct resolved evidence objects",
         )
     if assertion_class == "operator_directive":
-        if len(groups) < 2:
+        if not has_independent_objects:
             errors.append(
-                "a verified operator_directive requires at least two independent evidence groups",
+                "a verified operator_directive requires at least two independent evidence "
+                "groups backed by distinct resolved evidence objects",
             )
         required = {"immutable_source_event", "ratified_constitutional_record"}
         missing = sorted(required - evidence_types)
@@ -1035,6 +1118,18 @@ def _assertion_semantic_errors(
             errors.append(
                 "a verified operator_directive is missing evidence types: "
                 + ", ".join(missing),
+            )
+        elif not any(
+            first_identity != second_identity
+            for first_group, first_type, first_identity in evidence_bindings
+            if first_type == "immutable_source_event" and first_identity is not None
+            for second_group, second_type, second_identity in evidence_bindings
+            if second_type == "ratified_constitutional_record"
+            and second_identity is not None
+        ):
+            errors.append(
+                "a verified operator_directive requires its immutable source event and "
+                "ratified constitutional record to resolve to distinct evidence objects",
             )
         freshness_status = freshness.get("status") if isinstance(freshness, Mapping) else None
         if (
@@ -1171,7 +1266,13 @@ def _assertion_evidence_binding_errors(
                     label=label,
                 ),
             )
-        actual = "sha256:" + hashlib.sha256(candidate.read_bytes()).hexdigest()
+        try:
+            actual = "sha256:" + _stream_sha256(candidate)
+        except OSError as exc:
+            errors.append(
+                f"{label} cannot read evidence bytes for {evidence_reference}: {exc}",
+            )
+            continue
         if body_hash != actual:
             errors.append(
                 f"{label} body_hash does not match raw bytes for {evidence_reference}: "
@@ -1198,7 +1299,7 @@ def _git_evidence_binding_errors(
     if path is not None and (
         _reference_is_remote_or_absolute(path)
         or ".." in Path(path).parts
-        or ".git" in Path(path).parts
+        or _references_git_metadata(path)
     ):
         return [f"{label} git evidence path is not contained: {path}"]
 
@@ -1207,9 +1308,7 @@ def _git_evidence_binding_errors(
         return [
             f"{label} git commit is unavailable locally (possibly shallow): {commit}",
         ]
-    if path is None:
-        payload_result = _run_git(root, "cat-file", "commit", commit)
-    else:
+    if path is not None:
         tree_entry = _run_git(root, "ls-tree", commit, "--", path)
         if tree_entry.returncode != 0 or not tree_entry.stdout:
             return [f"{label} git evidence path does not exist at {commit}: {path}"]
@@ -1218,16 +1317,50 @@ def _git_evidence_binding_errors(
             return [
                 f"{label} git evidence path must be a regular blob, not mode {mode}: {path}",
             ]
-        payload_result = _run_git(root, "cat-file", "blob", f"{commit}:{path}")
-    if payload_result.returncode != 0:
+    object_type = "commit" if path is None else "blob"
+    object_name = commit if path is None else f"{commit}:{path}"
+    digest, returncode = _stream_git_object_sha256(root, object_type, object_name)
+    if returncode != 0 or digest is None:
         return [f"{label} cannot resolve git evidence: {evidence_reference}"]
-    actual = "sha256:" + hashlib.sha256(payload_result.stdout).hexdigest()
+    actual = "sha256:" + digest
     if body_hash != actual:
         return [
             f"{label} body_hash does not match Git object bytes for {evidence_reference}: "
             f"expected {actual}, found {body_hash}",
         ]
     return []
+
+
+def _stream_sha256(path: Path) -> str:
+    """Hash one local file without allocating its complete contents."""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _stream_git_object_sha256(
+    root: Path,
+    object_type: str,
+    object_name: str,
+) -> tuple[str | None, int]:
+    """Hash a Git object through a bounded stdout stream."""
+    process = subprocess.Popen(
+        ["git", "-C", str(root), "cat-file", object_type, object_name],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if process.stdout is None:
+        process.kill()
+        process.wait()
+        return None, process.returncode
+    digest = hashlib.sha256()
+    with process.stdout:
+        while chunk := process.stdout.read(1024 * 1024):
+            digest.update(chunk)
+    returncode = process.wait()
+    return (digest.hexdigest() if returncode == 0 else None), returncode
 
 
 def _git_tracked_path_errors(
@@ -1307,18 +1440,34 @@ def _run_git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
 
 
 def _load_mapping(path: Path) -> dict[str, Any]:
-    try:
-        payload = _read_bounded_record_text(path)
-        data = (
-            json.loads(payload)
-            if path.suffix.lower() == ".json"
-            else yaml.safe_load(payload)
-        )
-    except yaml.YAMLError as exc:
-        raise ValueError(f"Invalid YAML in {path}: {exc}") from exc
+    data = _load_structured_data(path)
     if not isinstance(data, dict):
         raise ValueError(f"not a mapping: {path}")
     return _normalize_yaml_datetimes(data)
+
+
+def _load_structured_data(path: Path) -> Any:
+    """Load bounded JSON/YAML while rejecting duplicate mapping keys."""
+    payload = _read_bounded_record_text(path)
+    if path.suffix.lower() == ".json":
+        try:
+            return json.loads(payload, object_pairs_hook=_unique_json_mapping)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON in {path}: {exc}") from exc
+    try:
+        return yaml.load(payload, Loader=_UniqueKeySafeLoader)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid YAML in {path}: {exc}") from exc
+
+
+def _unique_json_mapping(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build one JSON object while rejecting repeated member names."""
+    mapping: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in mapping:
+            raise ValueError(f"duplicate mapping key: {key!r}")
+        mapping[key] = value
+    return mapping
 
 
 def _read_bounded_record_text(path: Path) -> str:

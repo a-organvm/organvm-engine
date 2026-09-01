@@ -346,6 +346,38 @@ def test_recursive_yaml_aliases_are_rejected_without_recursing(tmp_path: Path) -
         load_project_record(record_path)
 
 
+def test_project_record_yaml_rejects_duplicate_mapping_keys(tmp_path: Path) -> None:
+    record_path = tmp_path / "project-record.yml"
+    record_path.write_text(
+        "contract_name: project-record.v1\n"
+        "deployment_status: internal\n"
+        "deployment_status: public\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate mapping key: 'deployment_status'"):
+        load_project_record(record_path)
+
+
+def test_assertion_json_rejects_duplicate_mapping_keys(tmp_path: Path) -> None:
+    record = _write_git_fixture(tmp_path)
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    payload = assertion_path.read_text(encoding="utf-8")
+    assertion_path.write_text(
+        payload.replace(
+            '"verification_state": "verified",',
+            '"verification_state": "verified", "verification_state": "unverified",',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = validate_project_record(record, root=tmp_path)
+
+    assert any("cannot load assertion" in error for error in errors)
+    assert any("duplicate mapping key: 'verification_state'" in error for error in errors)
+
+
 @pytest.mark.parametrize("status", [None, "deployd", []])
 def test_industry_status_requires_the_supported_vocabulary(status: object) -> None:
     record = _record()
@@ -477,6 +509,47 @@ def test_markdown_audit_ignores_links_inside_code(tmp_path: Path) -> None:
     result = audit_repository(tmp_path)
 
     assert not any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_markdown_audit_requires_exact_backtick_run_closers(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n`x``` [Guide](missing-guide.md) ``\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_markdown_audit_ignores_escaped_link_openers(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n\\[Literal](missing-literal.md)\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert not any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_markdown_audit_treats_even_backslashes_as_an_unescaped_link(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n\\\\[Guide](missing-guide.md)\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert any(
         finding["code"] == "broken-local-links" for finding in result["findings"]
     )
 
@@ -934,6 +1007,99 @@ def test_verified_assertion_rejects_malformed_evidence_entries(
     assert any("evidence_references[0]" in error for error in errors)
 
 
+def test_local_evidence_hashing_streams_without_path_read_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _write_git_fixture(tmp_path)
+    evidence_path = tmp_path / "docs/evidence/sources/validation.txt"
+    payload = b"streamed evidence\n" * 200_000
+    evidence_path.write_bytes(payload)
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    assertion["evidence_references"][0]["body_hash"] = (
+        "sha256:" + hashlib.sha256(payload).hexdigest()
+    )
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+
+    def reject_read_bytes(_path: Path) -> bytes:
+        raise AssertionError("evidence hashing must stream")
+
+    monkeypatch.setattr(Path, "read_bytes", reject_read_bytes)
+
+    assert validate_project_record(record, root=tmp_path) == []
+
+
+@pytest.mark.parametrize("reference_kind", ["local", "hardlink", "git"])
+def test_external_fact_independence_requires_distinct_resolved_objects(
+    tmp_path: Path,
+    reference_kind: str,
+) -> None:
+    record = _write_git_fixture(tmp_path)
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    evidence = assertion["evidence_references"][0]
+    hardlink_reference: str | None = None
+    second_git_reference: str | None = None
+    if reference_kind == "git":
+        commit = _git(tmp_path, "rev-parse", "HEAD").decode().strip()
+        evidence["reference"] = (
+            f"git:{commit}:docs/evidence/sources/validation.txt"
+        )
+        _git(tmp_path, "commit", "--allow-empty", "-m", "same evidence object")
+        second_commit = _git(tmp_path, "rev-parse", "HEAD").decode().strip()
+        second_git_reference = (
+            f"git:{second_commit}:docs/evidence/sources/validation.txt"
+        )
+    elif reference_kind == "hardlink":
+        hardlink = tmp_path / "docs/evidence/sources/validation-alias.txt"
+        hardlink.hardlink_to(tmp_path / evidence["reference"])
+        hardlink_reference = hardlink.relative_to(tmp_path).as_posix()
+    assertion["assertion_class"] = "external_fact"
+    second = dict(evidence)
+    second["evidence_id"] = "same-object-second-label"
+    second["independence_group"] = "second-group"
+    if hardlink_reference is not None:
+        second["reference"] = hardlink_reference
+    if second_git_reference is not None:
+        second["reference"] = second_git_reference
+    assertion["evidence_references"].append(second)
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+
+    errors = validate_project_record(record, root=tmp_path)
+
+    assert any("distinct resolved evidence objects" in error for error in errors)
+
+
+def test_operator_directive_types_require_distinct_resolved_objects(
+    tmp_path: Path,
+) -> None:
+    record = _write_git_fixture(tmp_path)
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    assertion["assertion_class"] = "operator_directive"
+    assertion["freshness"] = {
+        "verified_at": "2025-01-01T00:00:00Z",
+        "status": "not_applicable",
+    }
+    first = assertion["evidence_references"][0]
+    first["evidence_type"] = "immutable_source_event"
+    second = dict(first)
+    second["evidence_id"] = "same-object-constitutional-label"
+    second["independence_group"] = "constitutional-record"
+    second["evidence_type"] = "ratified_constitutional_record"
+    assertion["evidence_references"].append(second)
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+
+    errors = validate_project_record(record, root=tmp_path)
+
+    assert any(
+        "ratified constitutional record to resolve to distinct evidence objects"
+        in error
+        for error in errors
+    )
+
+
 @pytest.mark.parametrize("max_age_seconds", [None, 0, -1, True, "60"])
 def test_verified_fresh_current_state_requires_positive_max_age(
     tmp_path: Path,
@@ -1011,6 +1177,26 @@ def test_assertion_paths_reject_git_metadata_case_insensitively(
 
     assert any(
         "assertion path under .git is forbidden" in error
+        for error in validate_project_record(record, root=tmp_path)
+    )
+
+
+@pytest.mark.parametrize("git_component", [".GIT", ".Git", ".gIt"])
+def test_git_object_paths_reject_git_metadata_case_insensitively(
+    tmp_path: Path,
+    git_component: str,
+) -> None:
+    record = _write_git_fixture(tmp_path)
+    commit = _git(tmp_path, "rev-parse", "HEAD").decode().strip()
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    assertion["evidence_references"][0]["reference"] = (
+        f"git:{commit}:{git_component}/config"
+    )
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+
+    assert any(
+        "git evidence path is not contained" in error
         for error in validate_project_record(record, root=tmp_path)
     )
 

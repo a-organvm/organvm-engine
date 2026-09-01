@@ -315,6 +315,11 @@ def _markdown_destinations(text: str) -> list[str]:
     text, reference_destinations = _reference_destinations(text)
     destinations: list[str] = list(reference_destinations)
     for match in MARKDOWN_LINK_START.finditer(text):
+        if _markdown_character_is_escaped(
+            text,
+            match.start(),
+        ) or not _has_unescaped_link_opener(text, match.start()):
+            continue
         position = match.end()
         while position < len(text) and text[position] in " \t\n":
             position += 1
@@ -373,6 +378,37 @@ def _markdown_destinations(text: str) -> list[str]:
     return destinations
 
 
+def _has_unescaped_link_opener(text: str, closing_bracket: int) -> bool:
+    """Return whether ``closing_bracket`` pairs with an unescaped ``[``."""
+    nested = 0
+    for position in range(closing_bracket - 1, -1, -1):
+        character = text[position]
+        if character not in "[]":
+            continue
+        escaped = _markdown_character_is_escaped(text, position)
+        if escaped:
+            if character == "[" and nested == 0:
+                return False
+            continue
+        if character == "]":
+            nested += 1
+        elif nested:
+            nested -= 1
+        else:
+            return True
+    return False
+
+
+def _markdown_character_is_escaped(text: str, position: int) -> bool:
+    """Return whether a Markdown punctuation character has an odd slash prefix."""
+    backslashes = 0
+    position -= 1
+    while position >= 0 and text[position] == "\\":
+        backslashes += 1
+        position -= 1
+    return backslashes % 2 == 1
+
+
 def _safe_markdown_file(root: Path, path: Path) -> bool:
     """Reject symlinked Markdown inputs and paths resolving outside the root."""
     return _safe_audit_file(root, path)
@@ -419,6 +455,8 @@ def _reference_destinations(text: str) -> tuple[str, list[str]]:
     destinations: list[str] = []
     for pattern in (COLLAPSED_REFERENCE_USAGE, REFERENCE_USAGE):
         for match in pattern.finditer(visible):
+            if _markdown_character_is_escaped(visible, match.start()):
+                continue
             destination = definitions.get(_normalize_reference_label(match.group("label")))
             if destination is not None:
                 destinations.append(destination)
@@ -503,16 +541,29 @@ def _mask_markdown_code(text: str) -> str:
         run_end = position
         while run_end < len(rendered) and rendered[run_end] == "`":
             run_end += 1
-        delimiter = rendered[position:run_end]
-        closing = rendered.find(delimiter, run_end)
-        if closing < 0:
+        delimiter_length = run_end - position
+        closing = _next_exact_backtick_run(rendered, run_end, delimiter_length)
+        if closing is None:
             position = run_end
             continue
-        for index in range(position, closing + len(delimiter)):
+        for index in range(position, closing + delimiter_length):
             if characters[index] != "\n":
                 characters[index] = " "
-        position = closing + len(delimiter)
+        position = closing + delimiter_length
     return "".join(characters)
+
+
+def _next_exact_backtick_run(text: str, start: int, length: int) -> int | None:
+    """Find a whole backtick run whose length exactly matches ``length``."""
+    position = text.find("`", start)
+    while position >= 0:
+        run_end = position
+        while run_end < len(text) and text[run_end] == "`":
+            run_end += 1
+        if run_end - position == length:
+            return position
+        position = text.find("`", run_end)
+    return None
 
 
 def _markdown_indent_columns(value: str) -> int:
