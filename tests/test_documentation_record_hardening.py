@@ -279,6 +279,20 @@ def test_malformed_yaml_assertion_becomes_an_audit_finding(tmp_path: Path) -> No
     )
 
 
+def test_oversized_assertion_is_rejected_before_parsing(tmp_path: Path) -> None:
+    record = _write_git_fixture(tmp_path)
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    with assertion_path.open("wb") as stream:
+        stream.write(b"{")
+        stream.seek(2_000_000)
+        stream.write(b"}")
+
+    errors = validate_project_record(record, root=tmp_path)
+
+    assert any("cannot load assertion" in error for error in errors)
+    assert any("structured record exceeds 2000000 bytes" in error for error in errors)
+
+
 @pytest.mark.parametrize(
     "key",
     ["project_page", "demo", "deployment", "documentation", "evidence"],
@@ -319,6 +333,28 @@ def test_yaml_native_datetimes_are_normalized_before_validation(tmp_path: Path) 
         record,
         now=datetime(2026, 1, 1, tzinfo=timezone.utc),
     ) == []
+
+
+def test_recursive_yaml_aliases_are_rejected_without_recursing(tmp_path: Path) -> None:
+    record_path = tmp_path / "project-record.yml"
+    record_path.write_text(
+        "contract_name: project-record.v1\ncycle: &cycle\n  - *cycle\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="recursive YAML aliases are unsupported"):
+        load_project_record(record_path)
+
+
+@pytest.mark.parametrize("status", [None, "deployd", []])
+def test_industry_status_requires_the_supported_vocabulary(status: object) -> None:
+    record = _record()
+    record["industries"] = [{"name": "Education", "status": status}]
+
+    assert (
+        f"industries[0] has invalid status: {status!r}"
+        in validate_project_record(record)
+    )
 
 
 def test_verified_deployment_status_requires_a_repository_root() -> None:
@@ -494,6 +530,35 @@ def test_markdown_audit_masks_code_nested_inside_list_items(tmp_path: Path) -> N
     )
 
 
+def test_markdown_audit_masks_fenced_code_inside_blockquotes(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n> ```markdown\n> [Guide](missing-guide.md)\n> ```\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert not any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_markdown_audit_masks_blockquote_fences_inside_lists(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n- Samples:\n\n"
+        "    > ```markdown\n"
+        "    > [Guide](missing-guide.md)\n"
+        "    > ```\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert not any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
 def test_markdown_audit_does_not_read_an_oversized_root_readme(
     tmp_path: Path,
 ) -> None:
@@ -508,6 +573,22 @@ def test_markdown_audit_does_not_read_an_oversized_root_readme(
     assert result["has_readme"] is False
     assert result["markdown_files"] == 0
     assert any(finding["code"] == "missing-readme" for finding in result["findings"])
+
+
+def test_markdown_audit_bounds_project_record_reads(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("# Example\n", encoding="utf-8")
+    record_path = tmp_path / "project-record.yml"
+    with record_path.open("wb") as stream:
+        stream.write(b"contract_name: project-record.v1\n")
+        stream.seek(2_000_000)
+        stream.write(b"x")
+
+    result = audit_repository(tmp_path)
+
+    assert any("structured record exceeds 2000000 bytes" in error for error in result["record_errors"])
+    assert any(
+        finding["code"] == "invalid-project-record" for finding in result["findings"]
+    )
 
 
 def test_markdown_audit_rejects_outside_symlink_content(tmp_path: Path) -> None:
@@ -555,21 +636,28 @@ def test_builder_scans_python_except_for_exact_structural_labels() -> None:
             ("current personal profile", "current individual profile"),
         ),
         "PUBLIC_EXACT_REWRITES": {"contrib": "contribution"},
+        "ast": ast,
+        "io": __import__("io"),
         "json": json,
         "nbformat": nbformat,
         "re": re,
+        "tokenize": __import__("tokenize"),
     }
     exec(compile(ast.Module(body=[function], type_ignores=[]), str(builder_path), "exec"), namespace)
 
     payload = (
-        'SOURCE_FILES = {\n    "personal": "personal.json",\n}\n'
+        'SOURCE_FILES = {\n    "personal": "personal.json",\n'
+        '    "unrelated": "secretproject",  # personal\n}\n'
         'PUBLIC_PROSE_REWRITES = (("current personal profile", "safe"),)\n'
         'PUBLIC_EXACT_REWRITES = {"contrib": "contribution"}\n'
+        'note = "personal.json"\n'
         'queue = ["personal", "contrib", "secretproject"]\n'
     )
     scan_payload = namespace["bare_slug_scan_payload"](Path("builder.py"), payload)
 
     assert '"personal": "personal.json"' not in scan_payload
+    assert '"unrelated": "secretproject",  # personal' in scan_payload
+    assert 'note = "personal.json"' in scan_payload
     assert 'queue = ["personal", "contrib", "secretproject"]' in scan_payload
     assert "secretproject" in scan_payload
 
@@ -735,6 +823,58 @@ def test_assertion_contract_version_requires_a_non_boolean_integer(
         "unsupported assertion contract_version" in error
         for error in validate_project_record(record, root=tmp_path)
     )
+
+
+def test_assertion_class_requires_the_supported_vocabulary(tmp_path: Path) -> None:
+    record = _write_git_fixture(tmp_path)
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    assertion["assertion_class"] = "current-state"
+    assertion["evidence_references"] = ["not-a-mapping"]
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+
+    errors = validate_project_record(record, root=tmp_path)
+
+    assert any("invalid assertion_class: 'current-state'" in error for error in errors)
+    assert any("evidence_references[0] must be a mapping" in error for error in errors)
+
+
+def test_assertion_verification_state_requires_the_supported_vocabulary(
+    tmp_path: Path,
+) -> None:
+    record = _write_git_fixture(tmp_path)
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    assertion["verification_state"] = "verifyd"
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+
+    assert any(
+        "invalid verification_state: 'verifyd'" in error
+        for error in validate_project_record(record, root=tmp_path)
+    )
+
+
+def test_freshness_max_age_is_bounded_before_datetime_arithmetic(
+    tmp_path: Path,
+) -> None:
+    record = _write_git_fixture(tmp_path)
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    assertion["assertion_class"] = "current_state"
+    assertion["freshness"] = {
+        "verified_at": "2025-01-01T00:00:00Z",
+        "status": "fresh",
+        "max_age_seconds": 10**30,
+    }
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+
+    errors = validate_project_record(
+        record,
+        root=tmp_path,
+        now=datetime(2025, 1, 1, 0, 1, tzinfo=timezone.utc),
+    )
+
+    assert any("315576000" in error for error in errors)
 
 
 @pytest.mark.parametrize("status", [[], {}])

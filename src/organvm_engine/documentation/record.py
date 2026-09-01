@@ -7,7 +7,7 @@ import json
 import re
 import subprocess
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -16,6 +16,8 @@ import yaml
 
 CONTRACT_NAME = "project-record.v1"
 CONTRACT_VERSION = 1
+MAX_STRUCTURED_RECORD_BYTES = 2_000_000
+MAX_FRESHNESS_AGE_SECONDS = 315_576_000
 DOCUMENTATION_CLASSES = frozenset("ABCDEF")
 IMPLEMENTATION_STATUSES = frozenset(
     {"ACTIVE", "PROTOTYPE", "SKELETON", "DESIGN_ONLY", "ARCHIVED"},
@@ -42,6 +44,19 @@ AUDIENCE_MODES = frozenset(
 CLAIM_POSTURES = frozenset(
     {"implemented", "partial", "proposed", "unknown", "contradicted"},
 )
+ASSERTION_CLASSES = frozenset(
+    {
+        "external_fact",
+        "operator_directive",
+        "current_state",
+        "inference",
+        "historical_record",
+        "ratified_axiom",
+    },
+)
+VERIFICATION_STATES = frozenset({"unverified", "verified", "stale", "disputed"})
+FRESHNESS_STATUSES = frozenset({"fresh", "stale", "not_applicable"})
+INDUSTRY_STATUSES = frozenset({"deployed", "piloted", "proposed"})
 DEPLOYMENT_STATUS_POSTURES: dict[str, frozenset[str]] = {
     "pilot": frozenset({"implemented", "partial"}),
     "public": frozenset({"implemented", "partial"}),
@@ -113,7 +128,7 @@ def load_project_record(path: str | Path) -> dict[str, Any]:
     if not record_path.is_file():
         raise FileNotFoundError(record_path)
     try:
-        data = yaml.safe_load(record_path.read_text(encoding="utf-8"))
+        data = yaml.safe_load(_read_bounded_record_text(record_path))
     except yaml.YAMLError as exc:
         raise ValueError(f"Invalid YAML in {record_path}: {exc}") from exc
     if not isinstance(data, dict):
@@ -524,6 +539,8 @@ def validate_project_record(
         if isinstance(path, str) and path:
             industry_paths.append((index, path))
         status = industry.get("status")
+        if not isinstance(status, str) or status not in INDUSTRY_STATUSES:
+            errors.append(f"industries[{index}] has invalid status: {status!r}")
         refs = industry.get("claim_references", [])
         if isinstance(status, str) and status in {"deployed", "piloted"} and not refs:
             errors.append(f"industries[{index}] status {status!r} requires claim_references")
@@ -875,15 +892,25 @@ def _assertion_semantic_errors(
 ) -> list[str]:
     """Validate assertion-evidence invariants that JSON Schema cannot express."""
     errors: list[str] = []
+    assertion_class = assertion.get("assertion_class")
+    if not isinstance(assertion_class, str) or assertion_class not in ASSERTION_CLASSES:
+        errors.append(f"invalid assertion_class: {assertion_class!r}")
+    verification_state = assertion.get("verification_state")
+    if (
+        not isinstance(verification_state, str)
+        or verification_state not in VERIFICATION_STATES
+    ):
+        errors.append(f"invalid verification_state: {verification_state!r}")
+
     evidence = assertion.get("evidence_references")
     if not isinstance(evidence, list):
-        if assertion.get("verification_state") == "verified":
+        if verification_state == "verified":
             errors.append("a verified assertion requires a non-empty evidence_references list")
-        return errors
-    if assertion.get("verification_state") == "verified" and not evidence:
+        evidence = []
+    if verification_state == "verified" and not evidence:
         errors.append("a verified assertion requires a non-empty evidence_references list")
 
-    if assertion.get("verification_state") == "verified":
+    if verification_state == "verified":
         for index, item in enumerate(evidence):
             if not isinstance(item, Mapping):
                 errors.append(f"evidence_references[{index}] must be a mapping")
@@ -928,6 +955,34 @@ def _assertion_semantic_errors(
 
     freshness = assertion.get("freshness")
     if isinstance(freshness, Mapping):
+        freshness_status = freshness.get("status")
+        if (
+            not isinstance(freshness_status, str)
+            or freshness_status not in FRESHNESS_STATUSES
+        ):
+            errors.append(f"freshness.status is invalid: {freshness_status!r}")
+        raw_max_age_seconds = freshness.get("max_age_seconds")
+        max_age_seconds = (
+            raw_max_age_seconds
+            if isinstance(raw_max_age_seconds, int)
+            and not isinstance(raw_max_age_seconds, bool)
+            and 0 < raw_max_age_seconds <= MAX_FRESHNESS_AGE_SECONDS
+            else None
+        )
+        if (
+            isinstance(freshness_status, str)
+            and freshness_status in {"fresh", "stale"}
+            and max_age_seconds is None
+        ):
+            errors.append(
+                "freshness.max_age_seconds must be an integer between 1 and "
+                f"{MAX_FRESHNESS_AGE_SECONDS}",
+            )
+        elif raw_max_age_seconds is not None and max_age_seconds is None:
+            errors.append(
+                "freshness.max_age_seconds, when present, must be an integer between "
+                f"1 and {MAX_FRESHNESS_AGE_SECONDS}",
+            )
         verified_at = freshness.get("verified_at")
         parsed_verified_at = (
             _parse_datetime(verified_at) if isinstance(verified_at, str) else None
@@ -940,20 +995,17 @@ def _assertion_semantic_errors(
             normalized_now = now.astimezone(timezone.utc)
             if parsed_verified_at > normalized_now:
                 errors.append("freshness.verified_at cannot be in the future")
-            max_age_seconds = freshness.get("max_age_seconds")
             if (
-                freshness.get("status") == "fresh"
-                and isinstance(max_age_seconds, int)
-                and not isinstance(max_age_seconds, bool)
-                and max_age_seconds > 0
-                and parsed_verified_at + timedelta(seconds=max_age_seconds)
-                < normalized_now
+                freshness_status == "fresh"
+                and max_age_seconds is not None
+                and (normalized_now - parsed_verified_at).total_seconds()
+                > max_age_seconds
             ):
                 errors.append(
                     "freshness.status 'fresh' is expired at validation time",
                 )
 
-    if assertion.get("verification_state") != "verified":
+    if verification_state != "verified":
         return errors
 
     groups = {
@@ -968,8 +1020,6 @@ def _assertion_semantic_errors(
         for item in evidence
         if isinstance(item, Mapping) and isinstance(item.get("evidence_type"), str)
     }
-    assertion_class = assertion.get("assertion_class")
-
     if assertion_class == "external_fact" and len(groups) < 2:
         errors.append(
             "a verified external_fact requires at least two independent evidence groups",
@@ -1004,15 +1054,22 @@ def _assertion_semantic_errors(
             )
         if not isinstance(freshness, Mapping) or freshness.get("status") != "fresh":
             errors.append("a verified current_state requires freshness.status 'fresh'")
-        elif (
-            not isinstance(freshness.get("max_age_seconds"), int)
-            or isinstance(freshness.get("max_age_seconds"), bool)
-            or freshness["max_age_seconds"] <= 0
-        ):
-            errors.append(
-                "a verified current_state with freshness.status 'fresh' requires "
-                "max_age_seconds to be a positive integer",
-            )
+        else:
+            current_state_max_age = freshness.get("max_age_seconds")
+            if (
+                not isinstance(current_state_max_age, int)
+                or isinstance(current_state_max_age, bool)
+                or current_state_max_age <= 0
+            ):
+                errors.append(
+                    "a verified current_state with freshness.status 'fresh' requires "
+                    "max_age_seconds to be a positive integer",
+                )
+            elif current_state_max_age > MAX_FRESHNESS_AGE_SECONDS:
+                errors.append(
+                    "a verified current_state freshness.max_age_seconds must not exceed "
+                    f"{MAX_FRESHNESS_AGE_SECONDS}",
+                )
 
     return errors
 
@@ -1251,10 +1308,12 @@ def _run_git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
 
 def _load_mapping(path: Path) -> dict[str, Any]:
     try:
-        if path.suffix.lower() == ".json":
-            data = json.loads(path.read_text(encoding="utf-8"))
-        else:
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        payload = _read_bounded_record_text(path)
+        data = (
+            json.loads(payload)
+            if path.suffix.lower() == ".json"
+            else yaml.safe_load(payload)
+        )
     except yaml.YAMLError as exc:
         raise ValueError(f"Invalid YAML in {path}: {exc}") from exc
     if not isinstance(data, dict):
@@ -1262,15 +1321,53 @@ def _load_mapping(path: Path) -> dict[str, Any]:
     return _normalize_yaml_datetimes(data)
 
 
-def _normalize_yaml_datetimes(value: Any) -> Any:
-    """Convert PyYAML timestamp scalars back to JSON-Schema-compatible strings."""
+def _read_bounded_record_text(path: Path) -> str:
+    """Read one structured record without allowing unbounded allocation."""
+    try:
+        with path.open("rb") as stream:
+            payload = stream.read(MAX_STRUCTURED_RECORD_BYTES + 1)
+    except OSError:
+        raise
+    if len(payload) > MAX_STRUCTURED_RECORD_BYTES:
+        raise ValueError(
+            f"structured record exceeds {MAX_STRUCTURED_RECORD_BYTES} bytes: {path}",
+        )
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"structured record is not valid UTF-8: {path}") from exc
+
+
+def _normalize_yaml_datetimes(
+    value: Any,
+    *,
+    _active_container_ids: set[int] | None = None,
+) -> Any:
+    """Normalize timestamps while rejecting recursive YAML alias graphs."""
     if isinstance(value, datetime):
         rendered = value.isoformat()
         return rendered.replace("+00:00", "Z")
-    if isinstance(value, dict):
-        return {key: _normalize_yaml_datetimes(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_normalize_yaml_datetimes(item) for item in value]
+    if isinstance(value, (dict, list)):
+        active = _active_container_ids if _active_container_ids is not None else set()
+        identity = id(value)
+        if identity in active:
+            raise ValueError("recursive YAML aliases are unsupported")
+        active.add(identity)
+        try:
+            if isinstance(value, dict):
+                return {
+                    key: _normalize_yaml_datetimes(
+                        item,
+                        _active_container_ids=active,
+                    )
+                    for key, item in value.items()
+                }
+            return [
+                _normalize_yaml_datetimes(item, _active_container_ids=active)
+                for item in value
+            ]
+        finally:
+            active.remove(identity)
     return value
 
 

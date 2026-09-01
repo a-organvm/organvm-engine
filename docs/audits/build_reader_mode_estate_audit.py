@@ -7,11 +7,14 @@ artifacts contain aggregate private counts and public-repository rows only.
 
 from __future__ import annotations
 
+import ast
 import hashlib
+import io
 import json
 import os
 import re
 import tempfile
+import tokenize
 import traceback
 from pathlib import Path
 from textwrap import dedent
@@ -1243,32 +1246,104 @@ def bare_slug_scan_payload(path: Path, payload: str) -> str:
     """Return privacy-bearing content while excluding structural source labels."""
     if path.suffix == ".py":
         declaration = re.compile(
-            r"(?m)^[ \t]*(?:SOURCE_FILES|PUBLIC_PROSE_REWRITES|"
+            r"(?m)^[ \t]*(?P<name>SOURCE_FILES|PUBLIC_PROSE_REWRITES|"
             r"PUBLIC_EXACT_REWRITES|public_prose_rewrites|public_exact_rewrites)"
             r"[ \t]*=[ \t]*(?P<opening>[{([])",
         )
         spans: list[tuple[int, int]] = []
-        closing_for = {"{": "}", "(": ")", "[": "]"}
-        for match in declaration.finditer(payload):
-            opening = match.group("opening")
-            closing = closing_for[opening]
-            depth = 0
-            for position in range(match.start("opening"), len(payload)):
-                character = payload[position]
-                if character == opening:
-                    depth += 1
-                elif character == closing:
-                    depth -= 1
-                    if depth == 0:
-                        spans.append((match.start("opening"), position + 1))
-                        break
-            else:
-                raise RuntimeError("Unterminated privacy-control declaration")
-        for start, end in reversed(spans):
-            masked = "".join(
-                "\n" if character == "\n" else " " for character in payload[start:end]
+
+        def offset_for(fragment: str, row: int, column: int) -> int:
+            line_offsets = [0]
+            line_offsets.extend(
+                match.end() for match in re.finditer("\n", fragment)
             )
-            payload = payload[:start] + masked + payload[end:]
+            return line_offsets[row - 1] + column
+
+        for match in declaration.finditer(payload):
+            declaration_tail = payload[match.start("opening") :]
+            bracket_stack: list[str] = []
+            declaration_end: int | None = None
+            tokens = tokenize.generate_tokens(io.StringIO(declaration_tail).readline)
+            try:
+                for token in tokens:
+                    if token.type != tokenize.OP:
+                        continue
+                    if token.string in "({[":
+                        bracket_stack.append(token.string)
+                    elif token.string in ")}]":
+                        if not bracket_stack:
+                            break
+                        bracket_stack.pop()
+                        if not bracket_stack:
+                            declaration_end = offset_for(
+                                declaration_tail,
+                                token.end[0],
+                                token.end[1],
+                            )
+                            break
+            except tokenize.TokenError:
+                pass
+            if declaration_end is None:
+                raise RuntimeError("Unterminated privacy-control declaration")
+            fragment = declaration_tail[:declaration_end]
+            try:
+                expression = ast.parse(fragment, mode="eval").body
+            except SyntaxError as exc:
+                raise RuntimeError("Malformed privacy-control declaration") from exc
+            structural_nodes: list[ast.Constant] = []
+            declaration_name = match.group("name")
+            if declaration_name == "SOURCE_FILES" and isinstance(expression, ast.Dict):
+                for key, value in zip(expression.keys, expression.values, strict=True):
+                    if (
+                        isinstance(key, ast.Constant)
+                        and isinstance(key.value, str)
+                        and isinstance(value, ast.Constant)
+                        and isinstance(value.value, str)
+                        and SOURCE_FILES.get(key.value) == value.value
+                    ):
+                        structural_nodes.extend((key, value))
+            elif declaration_name in {
+                "PUBLIC_PROSE_REWRITES",
+                "public_prose_rewrites",
+            } and isinstance(expression, (ast.List, ast.Tuple)):
+                expected_pairs = set(PUBLIC_PROSE_REWRITES)
+                for element in expression.elts:
+                    if not isinstance(element, (ast.List, ast.Tuple)):
+                        continue
+                    if len(element.elts) != 2 or not all(
+                        isinstance(item, ast.Constant) and isinstance(item.value, str)
+                        for item in element.elts
+                    ):
+                        continue
+                    pair = tuple(item.value for item in element.elts)
+                    if pair in expected_pairs:
+                        structural_nodes.extend(element.elts)
+            elif declaration_name in {
+                "PUBLIC_EXACT_REWRITES",
+                "public_exact_rewrites",
+            } and isinstance(expression, ast.Dict):
+                for key, value in zip(expression.keys, expression.values, strict=True):
+                    if (
+                        isinstance(key, ast.Constant)
+                        and isinstance(key.value, str)
+                        and isinstance(value, ast.Constant)
+                        and isinstance(value.value, str)
+                        and PUBLIC_EXACT_REWRITES.get(key.value) == value.value
+                    ):
+                        structural_nodes.extend((key, value))
+            for node in structural_nodes:
+                if node.end_lineno is None or node.end_col_offset is None:
+                    raise RuntimeError("Privacy-control string lacks a source span")
+                spans.append(
+                    (
+                        match.start("opening")
+                        + offset_for(fragment, node.lineno, node.col_offset),
+                        match.start("opening")
+                        + offset_for(fragment, node.end_lineno, node.end_col_offset),
+                    ),
+                )
+        for start, end in reversed(sorted(set(spans))):
+            payload = payload[:start] + " " * (end - start) + payload[end:]
         return payload
     if path.suffix == ".ipynb":
         document = nbformat.reads(payload, as_version=4)

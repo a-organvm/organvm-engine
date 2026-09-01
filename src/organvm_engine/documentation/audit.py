@@ -27,6 +27,7 @@ SKIP_DIRS = frozenset(
 MAX_MARKDOWN_FILE_BYTES = 2_000_000
 MARKDOWN_LINK_START = re.compile(r"\]\(")
 MARKDOWN_FENCE = re.compile(r"^[ ]{0,3}(?P<fence>`{3,}|~{3,})")
+MARKDOWN_BLOCKQUOTE = re.compile(r"^[ ]{0,3}>[ \t]?")
 MARKDOWN_LIST_MARKER = re.compile(
     r"^(?P<indent>[ \t]*)(?P<marker>[-+*]|\d{1,9}[.)])(?P<spacing>[ \t]+)",
 )
@@ -441,14 +442,17 @@ def _mask_markdown_code(text: str) -> str:
     fence_container_indent = 0
     list_content_indents: list[int] = []
     for line in lines:
-        stripped = line.strip(" \t\r\n")
-        leading_columns = _markdown_indent_columns(line)
+        container_line = _markdown_strip_blockquotes(line)
+        stripped = container_line.strip(" \t\r\n")
+        leading_columns = _markdown_indent_columns(container_line)
         if stripped and fence_character is None:
             while list_content_indents and leading_columns < list_content_indents[-1]:
                 list_content_indents.pop()
 
         container_indent = list_content_indents[-1] if list_content_indents else 0
-        relative_line = _markdown_remove_indent(line, container_indent)
+        relative_line = _markdown_strip_blockquotes(
+            _markdown_remove_indent(container_line, container_indent),
+        )
         match = MARKDOWN_FENCE.match(relative_line)
         if fence_character is None:
             if match is not None:
@@ -458,11 +462,11 @@ def _mask_markdown_code(text: str) -> str:
                 fence_container_indent = container_indent
                 visible.append(masked(line))
             else:
-                list_match = MARKDOWN_LIST_MARKER.match(line)
-                relative_indent = leading_columns - container_indent
+                list_match = MARKDOWN_LIST_MARKER.match(relative_line)
+                relative_indent = _markdown_indent_columns(relative_line)
                 if list_match is not None and 0 <= relative_indent <= 3:
-                    content_indent = _markdown_column_width(
-                        line[: list_match.end()],
+                    content_indent = container_indent + _markdown_column_width(
+                        relative_line[: list_match.end()],
                     )
                     list_content_indents.append(content_indent)
                     visible.append(line)
@@ -473,7 +477,12 @@ def _mask_markdown_code(text: str) -> str:
             continue
 
         visible.append(masked(line))
-        relative_line = _markdown_remove_indent(line, fence_container_indent)
+        relative_line = _markdown_strip_blockquotes(
+            _markdown_remove_indent(
+                container_line,
+                fence_container_indent,
+            ),
+        )
         match = MARKDOWN_FENCE.match(relative_line)
         if match is None:
             continue
@@ -517,6 +526,13 @@ def _markdown_indent_columns(value: str) -> int:
         else:
             break
     return columns
+
+
+def _markdown_strip_blockquotes(value: str) -> str:
+    """Strip nested CommonMark blockquote markers for code classification."""
+    while (match := MARKDOWN_BLOCKQUOTE.match(value)) is not None:
+        value = value[match.end() :]
+    return value
 
 
 def _markdown_column_width(value: str) -> int:
