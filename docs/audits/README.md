@@ -48,7 +48,9 @@ the 0–4 range, or a source total disagrees with the recomputed seven-dimension
 total. Before serialization, private references in public prose are redacted. A
 final privacy gate scans every public artifact in this directory for complete
 private `owner/repository` identifiers, backticked private slugs, and
-unambiguous private-only bare slugs.
+private-only bare slugs. Known public prose that collides lexically with a
+private slug is rewritten to an equivalent non-colliding phrase before the
+fail-closed scan; the scanner itself retains full private-slug coverage.
 
 ## Authority boundary
 

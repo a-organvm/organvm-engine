@@ -3043,7 +3043,7 @@
         "knowledge management",
         "browser productivity",
         "AI SaaS",
-        "personal information management"
+        "individual information management"
       ],
       "concept_clusters": [
         "semantic search",
@@ -4462,7 +4462,7 @@
       "total": 2,
       "integrity_attention": true,
       "finding": "Archived root landing-page repository with a 46-character README. Its metadata still advertises a Pages homepage, so it is the highest-risk ambiguous doorway in this tranche.",
-      "recommended_treatment": "Treat as a retired deployment: add an explicit canonical destination to the current personal profile/portfolio and verify that any surviving Pages route redirects there. Do not revive it as a parallel home.",
+      "recommended_treatment": "Treat as a retired deployment: add an explicit canonical destination to the current individual profile/portfolio and verify that any surviving Pages route redirects there. Do not revive it as a parallel home.",
       "url": "https://github.com/organvm/4444J99.github.io",
       "recommended_reader_modes": [],
       "industry_clusters": [],
@@ -5131,7 +5131,7 @@
       "concept_clusters": [],
       "topics": [
         "adenhq",
-        "contrib",
+        "contribution",
         "hive",
         "mermaid",
         "open-source-contribution",
@@ -5599,7 +5599,7 @@
       "total": 2,
       "integrity_attention": false,
       "finding": "Archived public community-health/profile mirror with no README. The description alone cannot tell a reader what superseded it.",
-      "recommended_treatment": "Add a one-screen archive pointer to the active organization profile and current personal profile; keep it out of project and SEO navigation.",
+      "recommended_treatment": "Add a one-screen archive pointer to the active organization profile and current individual profile; keep it out of project and SEO navigation.",
       "url": "https://github.com/organvm/dot-github--4444j99",
       "recommended_reader_modes": [],
       "industry_clusters": [],
@@ -6071,7 +6071,7 @@
       "total": 8,
       "integrity_attention": false,
       "finding": "Active public canonical repository, but the README is a 394-character membership stub: a terse label, status, and non-clickable standards references. It does not show the profile artifact, workflow, schema, consumers, or proof.",
-      "recommended_treatment": "Add a plain-language distribution example, profile schema/sample, generate/validate commands, producer-consumer map, status/evidence/limitations, and links to the personal profile, portfolio, and Kerygma organization.",
+      "recommended_treatment": "Add a plain-language distribution example, profile schema/sample, generate/validate commands, producer-consumer map, status/evidence/limitations, and links to the individual profile, portfolio, and Kerygma organization.",
       "url": "https://github.com/organvm/kerygma-profiles",
       "recommended_reader_modes": [],
       "industry_clusters": [],

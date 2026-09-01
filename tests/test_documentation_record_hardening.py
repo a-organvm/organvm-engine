@@ -411,6 +411,10 @@ def test_builder_scans_python_except_for_exact_structural_labels() -> None:
             "personal": "personal.json",
             "ergon": "ergon.json",
         },
+        "PUBLIC_PROSE_REWRITES": (
+            ("current personal profile", "current individual profile"),
+        ),
+        "PUBLIC_EXACT_REWRITES": {"contrib": "contribution"},
         "json": json,
         "nbformat": nbformat,
         "re": re,
@@ -422,6 +426,69 @@ def test_builder_scans_python_except_for_exact_structural_labels() -> None:
 
     assert '"personal"' not in scan_payload
     assert "secretproject" in scan_payload
+
+
+def test_builder_privacy_pattern_distinguishes_structural_and_private_names() -> None:
+    builder_path = (
+        Path(__file__).parents[1] / "docs/audits/build_reader_mode_estate_audit.py"
+    )
+    tree = ast.parse(builder_path.read_text(encoding="utf-8"))
+    function_names = {
+        "bounded_identifier_pattern",
+        "private_only_repository_slugs",
+        "repository_reference_pattern",
+    }
+    functions = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in function_names
+    ]
+    namespace = {
+        "REPOSITORY_CHARACTER": r"A-Za-z0-9._-",
+        "re": re,
+    }
+    exec(
+        compile(ast.Module(body=functions, type_ignores=[]), str(builder_path), "exec"),
+        namespace,
+    )
+    private_identifiers = {
+        "secret/personal",
+        "secret/contrib",
+        "secret/edu-organism",
+        "secret/hidden-project",
+    }
+    public_identifiers = {"organvm/public-project"}
+    private_only = namespace["private_only_repository_slugs"](
+        private_identifiers,
+        public_identifiers,
+    )
+    pattern = namespace["repository_reference_pattern"](
+        private_identifiers,
+        private_only,
+        public_identifiers,
+    )
+
+    matches = [
+        (match.lastgroup, match.group(0))
+        for match in pattern.finditer(
+            "current personal profile and contrib guide; `personal`; edu-organism; "
+            "organvm/public-project; secret/hidden-project",
+        )
+    ]
+
+    assert matches == [
+        ("private_slug", "personal"),
+        ("private_slug", "contrib"),
+        ("private_slug", "personal"),
+        ("private_slug", "edu-organism"),
+        ("public_full", "organvm/public-project"),
+        ("private_full", "secret/hidden-project"),
+    ]
+    builder_source = builder_path.read_text(encoding="utf-8")
+    assert "if public_inventory[column].dtype == object" not in builder_source
+    assert "public_inventory[column] = public_inventory[column].map(" in builder_source
+    assert '"current personal profile", "current individual profile"' in builder_source
+    assert 'public_exact_rewrites = {"contrib": "contribution"}' in builder_source
 
 
 def test_committed_notebook_uses_pinned_inputs_and_explicit_integrity_gates() -> None:
@@ -436,8 +503,16 @@ def test_committed_notebook_uses_pinned_inputs_and_explicit_integrity_gates() ->
 
     assert "pinned_input_manifest" in code
     assert "input_manifest = pinned_input_manifest" in code
+    assert 'generated_at = pinned_input_manifest["generated_at"]' in code
+    assert "datetime.now" not in code
+    assert "verify_integrity=True" not in code
     assert "input_manifest = {" not in code
     assert "assert " not in code
+    for cell in notebook.cells:
+        expected_id = hashlib.sha256(
+            f"{cell.cell_type}\0{cell.source}".encode(),
+        ).hexdigest()[:8]
+        assert cell.id == expected_id
 
 
 def test_lifecycle_assertion_fact_must_match_the_project_state(tmp_path: Path) -> None:

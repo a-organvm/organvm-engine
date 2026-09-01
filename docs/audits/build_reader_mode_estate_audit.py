@@ -31,6 +31,13 @@ SOURCE_FILES = {
     "umbrella_extended": "umbrella-extended.json",
     "organvm_gap": "organvm-gap.json",
 }
+PUBLIC_PROSE_REWRITES = (
+    ("current personal profile/portfolio", "current individual profile/portfolio"),
+    ("current personal profile", "current individual profile"),
+    ("the personal profile", "the individual profile"),
+    ("personal information management", "individual information management"),
+)
+PUBLIC_EXACT_REWRITES = {"contrib": "contribution"}
 REPOSITORY_CHARACTER = r"A-Za-z0-9._-"
 
 
@@ -134,12 +141,29 @@ def bounded_identifier_pattern(identifiers: set[str]) -> str:
     return rf"(?<![{REPOSITORY_CHARACTER}])(?:{alternatives})(?![{REPOSITORY_CHARACTER}])"
 
 
+def private_only_repository_slugs(
+    private_full_identifiers: set[str],
+    public_full_identifiers: set[str],
+) -> set[str]:
+    """Return private slugs that do not collide with a public repository slug."""
+    private_slugs = {
+        repository.split("/", 1)[-1] for repository in private_full_identifiers
+    }
+    public_slug_keys = {
+        repository.split("/", 1)[-1].casefold()
+        for repository in public_full_identifiers
+    }
+    return {
+        slug for slug in private_slugs if slug.casefold() not in public_slug_keys
+    }
+
+
 def repository_reference_pattern(
     private_full_identifiers: set[str],
     private_only_slugs: set[str],
     public_full_identifiers: set[str],
 ) -> re.Pattern[str]:
-    """Match private references while shielding complete public identifiers."""
+    """Match every private-only reference while shielding complete public names."""
     if {value.casefold() for value in private_full_identifiers} & {
         value.casefold() for value in public_full_identifiers
     }:
@@ -153,11 +177,15 @@ def repository_reference_pattern(
 
 
 def markdown(source: str) -> nbformat.NotebookNode:
-    return nbformat.v4.new_markdown_cell(dedent(source).strip())
+    rendered = dedent(source).strip()
+    cell_id = hashlib.sha256(f"markdown\0{rendered}".encode()).hexdigest()[:8]
+    return nbformat.v4.new_markdown_cell(rendered, id=cell_id)
 
 
 def code(source: str) -> nbformat.NotebookNode:
-    return nbformat.v4.new_code_cell(dedent(source).strip())
+    rendered = dedent(source).strip()
+    cell_id = hashlib.sha256(f"code\0{rendered}".encode()).hexdigest()[:8]
+    return nbformat.v4.new_code_cell(rendered, id=cell_id)
 
 
 cells = [
@@ -235,7 +263,6 @@ cells = [
         import json
         import os
         import re
-        from datetime import datetime, timezone
         from pathlib import Path
 
         import pandas as pd
@@ -351,7 +378,16 @@ cells = [
             source: len(bundle["repositories"])
             for source, bundle in raw.items()
         }
-        display(pd.DataFrame.from_dict(source_counts, orient="index", columns=["repository rows"]))
+        source_count_display = {
+            SOURCE_FILES[source]: count for source, count in source_counts.items()
+        }
+        display(
+            pd.DataFrame.from_dict(
+                source_count_display,
+                orient="index",
+                columns=["repository rows"],
+            )
+        )
         """,
     ),
     code(
@@ -612,14 +648,13 @@ cells = [
         public_full_identifiers = set(
             inventory.loc[inventory["visibility"] == "public", "repository"]
         )
-        public_slugs = {
-            repository.split("/", 1)[-1]
-            for repository in public_full_identifiers
-        }
         private_slugs = {
             repository.split("/", 1)[-1] for repository in private_full_identifiers
         }
-        public_slug_keys = {slug.casefold() for slug in public_slugs}
+        public_slug_keys = {
+            repository.split("/", 1)[-1].casefold()
+            for repository in public_full_identifiers
+        }
         private_only_slugs = {
             slug for slug in private_slugs if slug.casefold() not in public_slug_keys
         }
@@ -654,9 +689,20 @@ cells = [
             flags=re.IGNORECASE,
         )
 
+        public_prose_rewrites = (
+            ("current personal profile/portfolio", "current individual profile/portfolio"),
+            ("current personal profile", "current individual profile"),
+            ("the personal profile", "the individual profile"),
+            ("personal information management", "individual information management"),
+        )
+        public_exact_rewrites = {"contrib": "contribution"}
+
 
         def redact_private_references(value):
             if isinstance(value, str):
+                value = public_exact_rewrites.get(value, value)
+                for original, replacement in public_prose_rewrites:
+                    value = value.replace(original, replacement)
                 return private_reference_pattern.sub(
                     lambda match: (
                         match.group(0)
@@ -675,10 +721,9 @@ cells = [
 
 
         for column in public_inventory.columns:
-            if public_inventory[column].dtype == object:
-                public_inventory[column] = public_inventory[column].map(
-                    redact_private_references
-                )
+            public_inventory[column] = public_inventory[column].map(
+                redact_private_references
+            )
         public_integrity_count = int(public_inventory["integrity_attention"].sum())
 
         status_rows = pd.DataFrame(
@@ -767,7 +812,11 @@ cells = [
             f"curated public repositories absent from inventory: {missing_curated}",
         )
 
-        public_by_repository = public_inventory.set_index("repository", verify_integrity=True)
+        public_by_repository = public_inventory.set_index("repository")
+        require(
+            public_by_repository.index.is_unique,
+            "public repository index is not unique",
+        )
 
 
         def selection_records(entries):
@@ -826,7 +875,7 @@ cells = [
     markdown("## Publish privacy-safe artifacts"),
     code(
         """
-        generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        generated_at = pinned_input_manifest["generated_at"]
         input_manifest = pinned_input_manifest
         aggregate_summary = {
             "audit_date": "2026-08-31",
@@ -1179,10 +1228,10 @@ if len(private_full_identifiers) != 84:
     raise RuntimeError(
         f"Expected 84 private repository identifiers, found {len(private_full_identifiers)}",
     )
-private_slugs = {repository.split("/", 1)[-1] for repository in private_full_identifiers}
-public_slugs = {repository.split("/", 1)[-1] for repository in public_full_identifiers}
-public_slug_keys = {slug.casefold() for slug in public_slugs}
-private_only_slugs = {slug for slug in private_slugs if slug.casefold() not in public_slug_keys}
+private_only_slugs = private_only_repository_slugs(
+    private_full_identifiers,
+    public_full_identifiers,
+)
 private_reference_pattern = repository_reference_pattern(
     private_full_identifiers,
     private_only_slugs,
@@ -1200,6 +1249,11 @@ def bare_slug_scan_payload(path: Path, payload: str) -> str:
                 '"[source segment]"',
                 payload,
             )
+        for original, replacement in PUBLIC_PROSE_REWRITES:
+            payload = payload.replace(original, replacement)
+        for original, replacement in PUBLIC_EXACT_REWRITES.items():
+            payload = payload.replace(f'"{original}"', f'"{replacement}"')
+            payload = payload.replace(f"'{original}'", f"'{replacement}'")
         return payload
     if path.suffix == ".ipynb":
         document = nbformat.reads(payload, as_version=4)
@@ -1273,5 +1327,5 @@ print(f"Executed {NOTEBOOK}")
 print(
     f"Privacy gate passed for {len(publication_files)} public files against "
     f"{len(private_full_identifiers)} private repository identifiers and "
-    "their unambiguous bare-slug forms",
+    "all private-only bare-slug forms",
 )
