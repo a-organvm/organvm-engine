@@ -383,9 +383,14 @@ def test_pilot_and_public_deployments_require_bounded_verified_claims(tmp_path):
         )
 
         deployment_claim["claim_posture"] = "partial"
+        assertion = _load_assertion(tmp_path)
+        assertion["fact"] = {
+            "predicate": "deployment_status",
+            "value": deployment_status,
+        }
+        _write_assertion(tmp_path, assertion)
         assert validate_project_record(record, root=tmp_path) == []
 
-        assertion = _load_assertion(tmp_path)
         assertion["verification_state"] = "unverified"
         _write_assertion(tmp_path, assertion)
         assert any(
@@ -406,6 +411,9 @@ def test_retired_deployment_requires_verified_history_or_unavailability(tmp_path
     }
     record["deployment_status"] = "retired"
     record["claim_references"].append(deployment_claim)
+    assertion = _load_assertion(tmp_path)
+    assertion["fact"] = {"predicate": "deployment_status", "value": "retired"}
+    _write_assertion(tmp_path, assertion)
     assert validate_project_record(record, root=tmp_path) == []
 
     deployment_claim["claim_posture"] = "proposed"
@@ -415,7 +423,6 @@ def test_retired_deployment_requires_verified_history_or_unavailability(tmp_path
     )
 
     deployment_claim["claim_posture"] = "contradicted"
-    assertion = _load_assertion(tmp_path)
     assertion["verification_state"] = "unverified"
     _write_assertion(tmp_path, assertion)
     assert any(

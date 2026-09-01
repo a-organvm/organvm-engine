@@ -421,3 +421,164 @@ def test_committed_notebook_uses_pinned_inputs_and_explicit_integrity_gates() ->
     assert "input_manifest = pinned_input_manifest" in code
     assert "input_manifest = {" not in code
     assert "assert " not in code
+
+
+def test_lifecycle_assertion_fact_must_match_the_project_state(tmp_path: Path) -> None:
+    record = _write_git_fixture(tmp_path)
+    record["deployment_status"] = "public"
+    record["claim_references"].append(
+        {
+            **record["claim_references"][0],
+            "id": "public-deployment",
+            "scope": "deployment",
+            "claim_posture": "partial",
+        },
+    )
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    assertion["fact"] = {"predicate": "deployment_status", "value": "public"}
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+
+    assert validate_project_record(record, root=tmp_path) == []
+
+    invalid_facts = [
+        None,
+        {"predicate": "capability", "value": "public"},
+        {"predicate": "deployment_status", "value": "pilot"},
+    ]
+    for fact in invalid_facts:
+        candidate = dict(assertion)
+        if fact is None:
+            candidate.pop("fact")
+        else:
+            candidate["fact"] = fact
+        assertion_path.write_text(json.dumps(candidate), encoding="utf-8")
+
+        assert any(
+            "fact predicate/value exactly matches deployment_status" in error
+            for error in validate_project_record(record, root=tmp_path)
+        )
+
+
+def test_non_lifecycle_assertions_do_not_require_a_deployment_fact(tmp_path: Path) -> None:
+    record = _write_git_fixture(tmp_path)
+
+    assert validate_project_record(record, root=tmp_path) == []
+
+
+def test_verified_assertion_requires_nonempty_evidence(tmp_path: Path) -> None:
+    record = _write_git_fixture(tmp_path)
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    assertion.pop("evidence_references")
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+
+    assert any(
+        "verified assertion requires a non-empty evidence_references list" in error
+        for error in validate_project_record(record, root=tmp_path)
+    )
+
+
+def test_strict_git_binding_treats_pathspec_magic_as_a_literal(tmp_path: Path) -> None:
+    record = _write_git_fixture(tmp_path)
+    magic_name = ":(glob)**"
+    magic_path = tmp_path / magic_name
+    magic_path.write_text("untracked magic evidence\n", encoding="utf-8")
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    assertion["evidence_references"][0]["reference"] = magic_name
+    assertion["evidence_references"][0]["body_hash"] = (
+        "sha256:" + hashlib.sha256(magic_path.read_bytes()).hexdigest()
+    )
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+    _git(tmp_path, "add", "--", "docs/evidence/claims/validation.json")
+    _git(tmp_path, "commit", "-m", "bind magic path fixture")
+
+    assert any(
+        "evidence is ignored or untracked" in error
+        for error in validate_project_record(
+            record,
+            root=tmp_path,
+            require_git_tracked_evidence=True,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "https://:443/path",
+        "https://example.test:notaport/path",
+        "https://example.test:99999/path",
+    ],
+)
+def test_web_uris_require_a_valid_host_and_port(uri: str) -> None:
+    record = _record()
+    record["links"]["demo"] = uri
+
+    assert "links.demo must be an absolute HTTP(S) URI" in validate_project_record(record)
+
+
+def test_reference_style_markdown_links_are_audited(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n[Guide][guide]\n\n[guide]: docs/missing.md\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_symlinked_project_record_is_not_read(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / "README.md").write_text("# Repository\n", encoding="utf-8")
+    outside = tmp_path / "outside.yml"
+    outside.write_text(
+        "documentation_class: SECRET_OUTSIDE_RECORD\n",
+        encoding="utf-8",
+    )
+    (repository / "project-record.yml").symlink_to(outside)
+
+    result = audit_repository(repository)
+
+    assert result["has_project_record"] is False
+    assert "SECRET_OUTSIDE_RECORD" not in json.dumps(result)
+
+
+def test_workspace_discovery_keeps_repositories_named_like_generated_dirs(
+    tmp_path: Path,
+) -> None:
+    expected = []
+    for name in ("build", "vendor"):
+        repository = tmp_path / name
+        (repository / ".git").mkdir(parents=True)
+        expected.append(repository.resolve())
+
+    from organvm_engine.documentation.audit import discover_repositories
+
+    assert discover_repositories(tmp_path) == expected
+
+
+def test_builder_rejects_explicit_invalid_visibility() -> None:
+    builder_path = (
+        Path(__file__).parents[1] / "docs/audits/build_reader_mode_estate_audit.py"
+    )
+    tree = ast.parse(builder_path.read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "source_visibility"
+    )
+    namespace: dict[str, object] = {}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(builder_path), "exec"), namespace)
+
+    with pytest.raises(RuntimeError, match="invalid visibility"):
+        namespace["source_visibility"](
+            {"visibility": "internal", "metadata": {"public": True}},
+            source="fixture",
+            index=0,
+        )

@@ -195,7 +195,11 @@ def validate_project_record(
     if isinstance(repository_link, str) and _web_uri_has_credentials(repository_link):
         errors.append("links.repository must be a canonical GitHub repository URL")
     elif not isinstance(repository_link, str) or not _valid_web_uri(repository_link):
-        errors.append("links.repository must be an absolute HTTP(S) URI")
+        errors.append(
+            "links.repository must be a canonical GitHub repository URL"
+            if isinstance(repository_link, str) and _has_http_authority(repository_link)
+            else "links.repository must be an absolute HTTP(S) URI",
+        )
     else:
         linked_repository = _github_repository_slug(repository_link)
         if linked_repository is None:
@@ -543,17 +547,24 @@ def validate_project_record(
             )
             errors.extend(assertion_errors)
 
-        if allowed_deployment_postures is not None and qualifying_deployment_claim_ids:
+        if (
+            allowed_deployment_postures is not None
+            and qualifying_deployment_claim_ids
+            and isinstance(deployment_status, str)
+        ):
             verified_deployment_claims = [
                 claim_id
                 for claim_id in qualifying_deployment_claim_ids
-                if resolved_claim_assertions.get(claim_id, {}).get("verification_state")
-                == "verified"
+                if _verified_deployment_fact_matches(
+                    resolved_claim_assertions.get(claim_id),
+                    deployment_status,
+                )
             ]
             if not verified_deployment_claims:
                 errors.append(
                     f"deployment_status {deployment_status!r} requires at least one "
-                    "qualifying deployment claim that resolves to a verified assertion",
+                    "qualifying deployment claim that resolves to a verified assertion "
+                    "whose fact predicate/value exactly matches deployment_status",
                 )
 
         errors.extend(
@@ -719,11 +730,13 @@ def _valid_web_uri(value: str) -> bool:
         return False
     try:
         parsed = urlparse(value)
+        port = parsed.port
     except ValueError:
         return False
     return (
         parsed.scheme in {"http", "https"}
-        and bool(parsed.netloc)
+        and parsed.hostname is not None
+        and (port is None or 1 <= port <= 65535)
         and parsed.username is None
         and parsed.password is None
     )
@@ -735,6 +748,14 @@ def _web_uri_has_credentials(value: str) -> bool:
     except ValueError:
         return False
     return parsed.username is not None or parsed.password is not None
+
+
+def _has_http_authority(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return False
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 def _valid_repository_slug(value: str) -> bool:
@@ -793,7 +814,11 @@ def _assertion_semantic_errors(
     errors: list[str] = []
     evidence = assertion.get("evidence_references")
     if not isinstance(evidence, list):
+        if assertion.get("verification_state") == "verified":
+            errors.append("a verified assertion requires a non-empty evidence_references list")
         return errors
+    if assertion.get("verification_state") == "verified" and not evidence:
+        errors.append("a verified assertion requires a non-empty evidence_references list")
 
     evidence_ids = [
         item.get("evidence_id") for item in evidence if isinstance(item, Mapping)
@@ -886,6 +911,21 @@ def _assertion_semantic_errors(
             errors.append("a verified current_state requires freshness.status 'fresh'")
 
     return errors
+
+
+def _verified_deployment_fact_matches(
+    assertion: Mapping[str, Any] | None,
+    deployment_status: str,
+) -> bool:
+    """Return whether verified evidence asserts this exact deployment state."""
+    if assertion is None or assertion.get("verification_state") != "verified":
+        return False
+    fact = assertion.get("fact")
+    return (
+        isinstance(fact, Mapping)
+        and fact.get("predicate") == "deployment_status"
+        and fact.get("value") == deployment_status
+    )
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -1050,11 +1090,12 @@ def _git_tracked_path_errors(
                 f"{label} {object_name} inside a submodule is forbidden: {relative}",
             ]
 
-    tracked = _run_git(root, "ls-files", "--error-unmatch", "--", relative)
+    literal_pathspec = f":(literal){relative}"
+    tracked = _run_git(root, "ls-files", "--error-unmatch", "--", literal_pathspec)
     if tracked.returncode != 0:
         return [f"{label} {object_name} is ignored or untracked: {relative}"]
 
-    index_state = _run_git(root, "ls-files", "-v", "-z", "--", relative)
+    index_state = _run_git(root, "ls-files", "-v", "-z", "--", literal_pathspec)
     if index_state.returncode != 0 or not index_state.stdout:
         return [f"{label} cannot inspect committed {object_name} path: {relative}"]
     tag = index_state.stdout[:1]
@@ -1071,8 +1112,8 @@ def _git_tracked_path_errors(
         return index_errors
 
     for args in (
-        ("diff", "--quiet", "HEAD", "--", relative),
-        ("diff", "--cached", "--quiet", "HEAD", "--", relative),
+        ("diff", "--quiet", "HEAD", "--", literal_pathspec),
+        ("diff", "--cached", "--quiet", "HEAD", "--", literal_pathspec),
     ):
         result = _run_git(root, *args)
         if result.returncode == 1:

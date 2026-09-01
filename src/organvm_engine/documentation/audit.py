@@ -26,6 +26,11 @@ SKIP_DIRS = frozenset(
 )
 MARKDOWN_LINK_START = re.compile(r"\]\(")
 MARKDOWN_FENCE = re.compile(r"^[ ]{0,3}(?P<fence>`{3,}|~{3,})")
+REFERENCE_DEFINITION = re.compile(
+    r"^[ ]{0,3}\[(?P<label>[^\]\n]+)\]:[ \t]*(?P<destination><[^>\n]+>|[^\s]+)",
+)
+REFERENCE_USAGE = re.compile(r"(?<!!)\[(?P<label>[^\]\n]+)\](?![\[(])")
+COLLAPSED_REFERENCE_USAGE = re.compile(r"(?<!!)\[(?P<label>[^\]\n]+)\]\[\]")
 
 
 def discover_repositories(workspace: str | Path) -> list[Path]:
@@ -33,8 +38,12 @@ def discover_repositories(workspace: str | Path) -> list[Path]:
     workspace_path = Path(workspace).resolve()
     repositories: list[Path] = []
     for current, dirs, _files in os.walk(workspace_path):
-        dirs[:] = [item for item in dirs if item not in SKIP_DIRS]
         current_path = Path(current)
+        dirs[:] = [
+            item
+            for item in dirs
+            if item not in SKIP_DIRS or (current_path / item / ".git").exists()
+        ]
         if (current_path / ".git").exists():
             repositories.append(current_path)
             dirs[:] = []
@@ -154,7 +163,7 @@ def _readme_path(root: Path) -> Path | None:
 def _record_path(root: Path) -> Path | None:
     for name in ("project-record.yml", "project-record.yaml", "project-record.json"):
         path = root / name
-        if path.is_file():
+        if _safe_audit_file(root, path):
             return path
     return None
 
@@ -283,7 +292,8 @@ def _markdown_destinations(text: str) -> list[str]:
     characters, balanced parentheses, and optional whitespace-separated titles.
     """
     text = _mask_markdown_code(text)
-    destinations: list[str] = []
+    text, reference_destinations = _reference_destinations(text)
+    destinations: list[str] = list(reference_destinations)
     for match in MARKDOWN_LINK_START.finditer(text):
         position = match.end()
         while position < len(text) and text[position] in " \t\n":
@@ -345,6 +355,11 @@ def _markdown_destinations(text: str) -> list[str]:
 
 def _safe_markdown_file(root: Path, path: Path) -> bool:
     """Reject symlinked Markdown inputs and paths resolving outside the root."""
+    return _safe_audit_file(root, path)
+
+
+def _safe_audit_file(root: Path, path: Path) -> bool:
+    """Return whether an audit input is a regular in-repository file."""
     try:
         if path.is_symlink() or not path.is_file():
             return False
@@ -352,6 +367,34 @@ def _safe_markdown_file(root: Path, path: Path) -> bool:
     except (OSError, ValueError):
         return False
     return True
+
+
+def _reference_destinations(text: str) -> tuple[str, list[str]]:
+    """Resolve destinations used through CommonMark-style reference links."""
+    definitions: dict[str, str] = {}
+    visible_lines: list[str] = []
+    for line in text.splitlines(keepends=True):
+        match = REFERENCE_DEFINITION.match(line)
+        if match is None:
+            visible_lines.append(line)
+            continue
+        label = _normalize_reference_label(match.group("label"))
+        destination = match.group("destination").strip().strip("<>")
+        definitions.setdefault(label, destination)
+        visible_lines.append("".join("\n" if char == "\n" else " " for char in line))
+
+    visible = "".join(visible_lines)
+    destinations: list[str] = []
+    for pattern in (COLLAPSED_REFERENCE_USAGE, REFERENCE_USAGE):
+        for match in pattern.finditer(visible):
+            destination = definitions.get(_normalize_reference_label(match.group("label")))
+            if destination is not None:
+                destinations.append(destination)
+    return visible, destinations
+
+
+def _normalize_reference_label(label: str) -> str:
+    return re.sub(r"\s+", " ", label.strip()).casefold()
 
 
 def _mask_markdown_code(text: str) -> str:

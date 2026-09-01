@@ -47,6 +47,8 @@ def source_visibility(row: dict, *, source: str, index: int) -> str:
     visibility = row.get("visibility")
     if visibility in {"public", "private"}:
         return visibility
+    if visibility is not None:
+        raise RuntimeError(f"{source} row {index} has invalid visibility: {visibility!r}")
     public = row.get("metadata", {}).get("public")
     if isinstance(public, bool):
         return "public" if public else "private"
@@ -295,6 +297,10 @@ cells = [
             visibility = row.get("visibility")
             if visibility in {"public", "private"}:
                 return visibility
+            if visibility is not None:
+                raise ValueError(
+                    f"{source} row {index} has invalid visibility: {visibility!r}"
+                )
             public = row.get("metadata", {}).get("public")
             if isinstance(public, bool):
                 return "public" if public else "private"
@@ -351,8 +357,13 @@ cells = [
     code(
         """
         def normalize_visibility(row):
-            if row.get("visibility") in {"public", "private"}:
-                return row["visibility"]
+            visibility = row.get("visibility")
+            if visibility in {"public", "private"}:
+                return visibility
+            if visibility is not None:
+                raise ValueError(
+                    f"Invalid visibility for {row.get('repository')}: {visibility!r}"
+                )
             public = row.get("metadata", {}).get("public")
             if isinstance(public, bool):
                 return "public" if public else "private"
@@ -1150,11 +1161,8 @@ def repository_identifiers_by_visibility() -> tuple[set[str], set[str]]:
     input_dir = audit_input_dir()
     for source, filename in SOURCE_FILES.items():
         bundle = json.loads((input_dir / filename).read_text(encoding="utf-8"))
-        for row in bundle["repositories"]:
-            visibility = row.get("visibility")
-            if visibility is None:
-                public = row.get("metadata", {}).get("public")
-                visibility = "public" if public is True else "private"
+        for index, row in enumerate(bundle["repositories"]):
+            visibility = source_visibility(row, source=source, index=index)
             if source == "personal":
                 repository = f"{bundle.get('owner', '4444J99')}/{row['name']}"
             else:
