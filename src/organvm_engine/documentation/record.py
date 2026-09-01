@@ -93,7 +93,7 @@ def load_project_record(path: str | Path) -> dict[str, Any]:
         raise ValueError(f"Invalid YAML in {record_path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"Project record is not a mapping: {record_path}")
-    return data
+    return _normalize_yaml_datetimes(data)
 
 
 def validate_project_record(
@@ -152,13 +152,13 @@ def validate_project_record(
         errors.append(f"invalid deployment_status: {record.get('deployment_status')!r}")
 
     repository = record.get("canonical_repository")
-    if not isinstance(repository, str) or REPOSITORY_SLUG.fullmatch(repository) is None:
+    if not isinstance(repository, str) or not _valid_repository_slug(repository):
         errors.append("canonical_repository must use owner/name form")
 
     if actual_repository is not None:
-        if REPOSITORY_SLUG.fullmatch(actual_repository) is None:
+        if not _valid_repository_slug(actual_repository):
             errors.append("actual_repository must use owner/name form")
-        elif isinstance(repository, str) and REPOSITORY_SLUG.fullmatch(repository):
+        elif isinstance(repository, str) and _valid_repository_slug(repository):
             repository_role = record.get("repository_role")
             same_repository = repository.casefold() == actual_repository.casefold()
             if repository_role == "canonical" and not same_repository:
@@ -175,7 +175,7 @@ def validate_project_record(
     project_timestamps: dict[str, datetime] = {}
     for field in ("generated_at", "verified_at"):
         value = record.get(field)
-        parsed = _parse_datetime(value) if isinstance(value, str) else None
+        parsed = _parse_datetime(value)
         if parsed is None:
             errors.append(f"{field} must be an ISO 8601 date-time with a timezone")
         else:
@@ -192,7 +192,9 @@ def validate_project_record(
         errors.append("links must be a mapping")
         links = {}
     repository_link = links.get("repository")
-    if not isinstance(repository_link, str) or not _valid_web_uri(repository_link):
+    if isinstance(repository_link, str) and _web_uri_has_credentials(repository_link):
+        errors.append("links.repository must be a canonical GitHub repository URL")
+    elif not isinstance(repository_link, str) or not _valid_web_uri(repository_link):
         errors.append("links.repository must be an absolute HTTP(S) URI")
     else:
         linked_repository = _github_repository_slug(repository_link)
@@ -366,6 +368,11 @@ def validate_project_record(
             errors.append(
                 f"deployment_status {deployment_status!r} requires at least one "
                 f"deployment claim with claim_posture in {{{rendered_postures}}}",
+            )
+        if root is None:
+            errors.append(
+                f"deployment_status {deployment_status!r} requires a repository root "
+                "to verify assertion evidence",
             )
     if doc_class == "F":
         for required_scope in ("provenance",):
@@ -558,7 +565,9 @@ def validate_project_record(
         )
 
     if schema is not None:
-        errors.extend(_schema_errors(dict(record), schema, prefix="schema"))
+        errors.extend(
+            _schema_errors(_normalize_yaml_datetimes(dict(record)), schema, prefix="schema"),
+        )
     return sorted(set(errors))
 
 
@@ -712,7 +721,27 @@ def _valid_web_uri(value: str) -> bool:
         parsed = urlparse(value)
     except ValueError:
         return False
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+    return (
+        parsed.scheme in {"http", "https"}
+        and bool(parsed.netloc)
+        and parsed.username is None
+        and parsed.password is None
+    )
+
+
+def _web_uri_has_credentials(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return False
+    return parsed.username is not None or parsed.password is not None
+
+
+def _valid_repository_slug(value: str) -> bool:
+    """Return whether a repository identifier is a non-traversal owner/name slug."""
+    if REPOSITORY_SLUG.fullmatch(value) is None:
+        return False
+    return all(part not in {".", ".."} for part in value.split("/"))
 
 
 def _github_repository_slug(value: str) -> str | None:
@@ -740,9 +769,10 @@ def _github_repository_slug(value: str) -> str | None:
     owner, name = parts
     if name.endswith(".git"):
         name = name[:-4]
-    if not owner or not name:
+    slug = f"{owner}/{name}"
+    if not _valid_repository_slug(slug):
         return None
-    return f"{owner}/{name}"
+    return slug
 
 
 def _reference_is_remote_or_absolute(reference: str) -> bool:
@@ -858,10 +888,15 @@ def _assertion_semantic_errors(
     return errors
 
 
-def _parse_datetime(value: str) -> datetime | None:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
         return None
     if parsed.tzinfo is None:
         return None
@@ -1070,13 +1105,28 @@ def _run_git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
 
 
 def _load_mapping(path: Path) -> dict[str, Any]:
-    if path.suffix.lower() == ".json":
-        data = json.loads(path.read_text(encoding="utf-8"))
-    else:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    try:
+        if path.suffix.lower() == ".json":
+            data = json.loads(path.read_text(encoding="utf-8"))
+        else:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid YAML in {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"not a mapping: {path}")
-    return data
+    return _normalize_yaml_datetimes(data)
+
+
+def _normalize_yaml_datetimes(value: Any) -> Any:
+    """Convert PyYAML timestamp scalars back to JSON-Schema-compatible strings."""
+    if isinstance(value, datetime):
+        rendered = value.isoformat()
+        return rendered.replace("+00:00", "Z")
+    if isinstance(value, dict):
+        return {key: _normalize_yaml_datetimes(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_normalize_yaml_datetimes(item) for item in value]
+    return value
 
 
 def _schema_errors(data: dict, schema: Mapping[str, Any], *, prefix: str) -> list[str]:

@@ -476,6 +476,11 @@ cells = [
             }
 
 
+        def require(condition, message):
+            if not condition:
+                raise ValueError(message)
+
+
         rows = [
             normalize_row(source, bundle, row)
             for source, bundle in raw.items()
@@ -483,22 +488,39 @@ cells = [
         ]
         inventory = pd.DataFrame(rows).sort_values("repository").reset_index(drop=True)
 
-        assert len(inventory) == 323, f"expected 323 rows, found {len(inventory)}"
-        assert inventory["repository"].nunique() == 323, "repository keys are not unique"
-        assert len(SOURCE_FILES) == 7, f"expected seven source segments, found {len(SOURCE_FILES)}"
-        assert inventory["source_segment"].nunique() == 7
-        assert set(inventory["documentation_class"]) <= set("ABCDEF")
-        assert set(inventory["visibility"]) <= {"public", "private"}
+        require(len(inventory) == 323, f"expected 323 rows, found {len(inventory)}")
+        require(inventory["repository"].nunique() == 323, "repository keys are not unique")
+        require(
+            len(SOURCE_FILES) == 7,
+            f"expected seven source segments, found {len(SOURCE_FILES)}",
+        )
+        require(inventory["source_segment"].nunique() == 7, "source segment coverage drifted")
+        require(
+            set(inventory["documentation_class"]) <= set("ABCDEF"),
+            "documentation classes must be limited to A-F",
+        )
+        require(
+            set(inventory["visibility"]) <= {"public", "private"},
+            "visibility values must be public or private",
+        )
         for dimension in DIMENSIONS:
-            assert inventory[dimension].between(0, 4).all(), dimension
-        assert (
-            inventory[list(DIMENSIONS)].sum(axis=1) == inventory["total"]
-        ).all(), "normalized totals do not equal the seven dimensions"
-        assert (
-            inventory["source_total"] == inventory["total"]
-        ).all(), "source totals do not equal recomputed totals"
+            require(
+                inventory[dimension].between(0, 4).all(),
+                f"{dimension} contains an out-of-range score",
+            )
+        require(
+            (inventory[list(DIMENSIONS)].sum(axis=1) == inventory["total"]).all(),
+            "normalized totals do not equal the seven dimensions",
+        )
+        require(
+            (inventory["source_total"] == inventory["total"]).all(),
+            "source totals do not equal recomputed totals",
+        )
         visibility_validation = inventory["visibility"].value_counts().to_dict()
-        assert visibility_validation == {"public": 239, "private": 84}, visibility_validation
+        require(
+            visibility_validation == {"public": 239, "private": 84},
+            f"visibility counts drifted: {visibility_validation}",
+        )
 
         input_sources = []
         for source, filename in SOURCE_FILES.items():
@@ -515,11 +537,21 @@ cells = [
                     "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
                 }
             )
-        assert sum(item["rows"] for item in input_sources) == 323
-        assert sum(item["public"] for item in input_sources) == 239
-        assert sum(item["private"] for item in input_sources) == 84
-        assert input_sources == live_input_sources, (
-            "normalized source counts or bytes drifted after manifest verification"
+        require(
+            sum(item["rows"] for item in input_sources) == 323,
+            "normalized source row count drifted",
+        )
+        require(
+            sum(item["public"] for item in input_sources) == 239,
+            "normalized public row count drifted",
+        )
+        require(
+            sum(item["private"] for item in input_sources) == 84,
+            "normalized private row count drifted",
+        )
+        require(
+            input_sources == live_input_sources,
+            "normalized source counts or bytes drifted after manifest verification",
         )
 
         print(
@@ -580,11 +612,14 @@ cells = [
         private_only_slugs = {
             slug for slug in private_slugs if slug.casefold() not in public_slug_keys
         }
-        assert not {
-            repository.casefold() for repository in private_full_identifiers
-        } & {
-            repository.casefold() for repository in public_full_identifiers
-        }, "a repository identifier is both public and private"
+        require(
+            not {
+                repository.casefold() for repository in private_full_identifiers
+            } & {
+                repository.casefold() for repository in public_full_identifiers
+            },
+            "a repository identifier is both public and private",
+        )
 
 
         def bounded_identifier_pattern(identifiers):
@@ -700,14 +735,26 @@ cells = [
             (20, "organvm/4444J99", "problem-domain top-of-funnel above the internal ontology"),
         ]
 
-        assert [rank for rank, _, _ in pilots] == list(range(1, 6))
-        assert [rank for rank, _, _ in next_twenty] == list(range(1, 21))
+        require(
+            [rank for rank, _, _ in pilots] == list(range(1, 6)),
+            "pilot ranks must be contiguous from 1 through 5",
+        )
+        require(
+            [rank for rank, _, _ in next_twenty] == list(range(1, 21)),
+            "next-twenty ranks must be contiguous from 1 through 20",
+        )
         curated_sequence = [repo for _, repo, _ in pilots + next_twenty]
-        assert len(curated_sequence) == len(set(curated_sequence)), "curated queues overlap"
+        require(
+            len(curated_sequence) == len(set(curated_sequence)),
+            "curated queues overlap",
+        )
         curated_names = set(curated_sequence)
         public_names = set(public_inventory["repository"])
         missing_curated = sorted(curated_names - public_names)
-        assert not missing_curated, f"curated public repositories absent from inventory: {missing_curated}"
+        require(
+            not missing_curated,
+            f"curated public repositories absent from inventory: {missing_curated}",
+        )
 
         public_by_repository = public_inventory.set_index("repository", verify_integrity=True)
 
@@ -716,7 +763,10 @@ cells = [
             selected = []
             for rank, repository, reason in entries:
                 source_row = public_by_repository.loc[repository]
-                assert source_row["finding"] or source_row["priority"] != "unranked"
+                require(
+                    source_row["finding"] or source_row["priority"] != "unranked",
+                    f"{repository}: curated entry lacks a finding or priority",
+                )
                 selected.append(
                     {
                         "rank": rank,
@@ -971,9 +1021,10 @@ cells = [
             )
             for filename, payload in privacy_scan_artifacts.items()
         }
-        assert not any(privacy_hits.values()), (
+        require(
+            not any(privacy_hits.values()),
             "private repository identifiers detected in public payloads: "
-            f"{sum(privacy_hits.values())} hit(s)"
+            f"{sum(privacy_hits.values())} hit(s)",
         )
 
         for filename, payload in serialized_artifacts.items():
@@ -1134,7 +1185,14 @@ private_reference_pattern = repository_reference_pattern(
 def bare_slug_scan_payload(path: Path, payload: str) -> str:
     """Return privacy-bearing content while excluding structural source labels."""
     if path.suffix == ".py":
-        return ""
+        structural_labels = set(SOURCE_FILES) | set(SOURCE_FILES.values())
+        for label in sorted(structural_labels, key=len, reverse=True):
+            payload = re.sub(
+                rf"(?P<quote>['\"]){re.escape(label)}(?P=quote)",
+                '"[source segment]"',
+                payload,
+            )
+        return payload
     if path.suffix == ".ipynb":
         document = nbformat.reads(payload, as_version=4)
         cells_and_outputs: list[str] = []

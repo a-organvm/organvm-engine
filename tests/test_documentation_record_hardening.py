@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
+import re
 import subprocess
 from argparse import Namespace
+from datetime import datetime, timezone
 from pathlib import Path
 
+import nbformat
 import pytest
+import yaml
 
 from organvm_engine.cli.docs import cmd_docs_validate
-from organvm_engine.documentation.record import validate_project_record
+from organvm_engine.documentation.audit import audit_repository
+from organvm_engine.documentation.record import load_project_record, validate_project_record
 
 
 def _record() -> dict:
@@ -247,3 +253,171 @@ def test_docs_validate_reports_malformed_schema_as_json(
     assert payload["valid"] is False
     assert payload["errors"]
     assert "while parsing a flow sequence" in payload["errors"][0]
+
+
+def test_malformed_yaml_assertion_becomes_an_audit_finding(tmp_path: Path) -> None:
+    record = _record()
+    for route in record["audience_routes"]:
+        route_path = tmp_path / route["path"]
+        route_path.parent.mkdir(parents=True, exist_ok=True)
+        route_path.write_text(f"# {route['mode']}\n", encoding="utf-8")
+    for claim in record["claim_references"]:
+        claim["assertion_ref"] = "docs/evidence/claims/validation.yml"
+    assertion_path = tmp_path / "docs/evidence/claims/validation.yml"
+    assertion_path.parent.mkdir(parents=True, exist_ok=True)
+    assertion_path.write_text("evidence_references: [unterminated\n", encoding="utf-8")
+    (tmp_path / "project-record.yml").write_text(
+        yaml.safe_dump(record, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert any("cannot load assertion" in error for error in result["record_errors"])
+    assert any(
+        finding["code"] == "invalid-project-record" for finding in result["findings"]
+    )
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["project_page", "demo", "deployment", "documentation", "evidence"],
+)
+def test_every_web_link_rejects_credentials(key: str) -> None:
+    record = _record()
+    record["links"][key] = "https://user:password@example.test/path"
+
+    assert any(f"links.{key}" in error for error in validate_project_record(record))
+
+
+@pytest.mark.parametrize("repository", ["./example", "../..", "organvm/..", "./."])
+def test_repository_slugs_reject_dot_segments(repository: str) -> None:
+    record = _record()
+    record["canonical_repository"] = repository
+    record["links"]["repository"] = f"https://github.com/{repository}"
+
+    errors = validate_project_record(record)
+
+    assert "canonical_repository must use owner/name form" in errors
+    assert "links.repository must be a canonical GitHub repository URL" in errors
+
+
+def test_yaml_native_datetimes_are_normalized_before_validation(tmp_path: Path) -> None:
+    record_path = tmp_path / "project-record.yml"
+    record_path.write_text(
+        yaml.safe_dump(_record(), sort_keys=False).replace(
+            "'2025-01-01T00:00:00Z'",
+            "2025-01-01T00:00:00Z",
+        ),
+        encoding="utf-8",
+    )
+
+    record = load_project_record(record_path)
+
+    assert isinstance(record["generated_at"], str)
+    assert validate_project_record(
+        record,
+        now=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    ) == []
+
+
+def test_verified_deployment_status_requires_a_repository_root() -> None:
+    record = _record()
+    record["deployment_status"] = "public"
+    record["claim_references"].append(
+        {
+            **record["claim_references"][0],
+            "id": "public-deployment",
+            "scope": "deployment",
+            "claim_posture": "partial",
+        },
+    )
+
+    assert (
+        "deployment_status 'public' requires a repository root to verify assertion evidence"
+        in validate_project_record(record)
+    )
+
+
+def test_markdown_audit_ignores_links_inside_code(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n`[Inline](missing-inline.md)`\n\n"
+        "```markdown\n[Fenced](missing-fenced.md)\n```\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert not any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_markdown_audit_rejects_outside_symlink_content(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    outside = tmp_path / "outside.md"
+    outside.write_text("[Secret](token-from-outside.txt)\n", encoding="utf-8")
+    (repository / "README.md").symlink_to(outside)
+
+    result = audit_repository(repository)
+
+    assert result["has_readme"] is False
+    assert result["markdown_files"] == 0
+    assert "token-from-outside" not in json.dumps(result)
+
+
+def test_malformed_absolute_markdown_url_is_a_finding(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("# Example\n\n[Link](http://[)\n", encoding="utf-8")
+
+    result = audit_repository(tmp_path)
+
+    assert any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_builder_scans_python_except_for_exact_structural_labels() -> None:
+    builder_path = (
+        Path(__file__).parents[1] / "docs/audits/build_reader_mode_estate_audit.py"
+    )
+    tree = ast.parse(builder_path.read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "bare_slug_scan_payload"
+    )
+    namespace = {
+        "INPUT_MANIFEST": Path("reader-mode-input-manifest.json"),
+        "Path": Path,
+        "SOURCE_FILES": {
+            "personal": "personal.json",
+            "ergon": "ergon.json",
+        },
+        "json": json,
+        "nbformat": nbformat,
+        "re": re,
+    }
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(builder_path), "exec"), namespace)
+
+    payload = 'segment = "personal"\n# secretproject\nqueue = ["secretproject"]\n'
+    scan_payload = namespace["bare_slug_scan_payload"](Path("builder.py"), payload)
+
+    assert '"personal"' not in scan_payload
+    assert "secretproject" in scan_payload
+
+
+def test_committed_notebook_uses_pinned_inputs_and_explicit_integrity_gates() -> None:
+    notebook_path = (
+        Path(__file__).parents[1]
+        / "docs/audits/2026-08-31-reader-mode-estate-audit.ipynb"
+    )
+    notebook = nbformat.read(notebook_path, as_version=4)
+    code = "\n".join(
+        cell.source for cell in notebook.cells if cell.cell_type == "code"
+    )
+
+    assert "pinned_input_manifest" in code
+    assert "input_manifest = pinned_input_manifest" in code
+    assert "input_manifest = {" not in code
+    assert "assert " not in code

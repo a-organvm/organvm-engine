@@ -25,6 +25,7 @@ SKIP_DIRS = frozenset(
     {".git", ".venv", "node_modules", "vendor", "dist", "build", "__pycache__"},
 )
 MARKDOWN_LINK_START = re.compile(r"\]\(")
+MARKDOWN_FENCE = re.compile(r"^[ ]{0,3}(?P<fence>`{3,}|~{3,})")
 
 
 def discover_repositories(workspace: str | Path) -> list[Path]:
@@ -143,7 +144,7 @@ def _readme_path(root: Path) -> Path | None:
         candidates = [
             path
             for path in root.iterdir()
-            if path.is_file() and path.name.casefold() == "readme.md"
+            if _safe_markdown_file(root, path) and path.name.casefold() == "readme.md"
         ]
     except OSError:
         return None
@@ -168,7 +169,7 @@ def _markdown_files(root: Path) -> list[Path]:
                 continue
             path = current_path / name
             try:
-                if path.is_file() and path.stat().st_size <= 2_000_000:
+                if _safe_markdown_file(root, path) and path.stat().st_size <= 2_000_000:
                     files.append(path)
             except OSError:
                 continue
@@ -251,7 +252,11 @@ def _inspect_local_links(root: Path, markdown_files: list[Path]) -> tuple[set[Pa
             target = raw_target.strip().strip("<>")
             if not target or target.startswith("#") or target.startswith("//"):
                 continue
-            parsed = urlparse(target)
+            try:
+                parsed = urlparse(target)
+            except ValueError:
+                broken.append(f"{source.relative_to(root)} -> {target}")
+                continue
             if parsed.scheme:
                 continue
             path_text = unquote(target.split("#", 1)[0].split("?", 1)[0])
@@ -277,6 +282,7 @@ def _markdown_destinations(text: str) -> list[str]:
     needed for repository link validation: angle-bracket destinations, escaped
     characters, balanced parentheses, and optional whitespace-separated titles.
     """
+    text = _mask_markdown_code(text)
     destinations: list[str] = []
     for match in MARKDOWN_LINK_START.finditer(text):
         position = match.end()
@@ -335,6 +341,70 @@ def _markdown_destinations(text: str) -> list[str]:
         if rendered:
             destinations.append(rendered)
     return destinations
+
+
+def _safe_markdown_file(root: Path, path: Path) -> bool:
+    """Reject symlinked Markdown inputs and paths resolving outside the root."""
+    try:
+        if path.is_symlink() or not path.is_file():
+            return False
+        path.resolve(strict=True).relative_to(root)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _mask_markdown_code(text: str) -> str:
+    """Mask fenced blocks and inline code while preserving source positions."""
+
+    def masked(value: str) -> str:
+        return "".join("\n" if character == "\n" else " " for character in value)
+
+    lines = text.splitlines(keepends=True)
+    visible: list[str] = []
+    fence_character: str | None = None
+    fence_length = 0
+    for line in lines:
+        match = MARKDOWN_FENCE.match(line)
+        if fence_character is None:
+            if match is not None:
+                fence = match.group("fence")
+                fence_character = fence[0]
+                fence_length = len(fence)
+                visible.append(masked(line))
+            else:
+                visible.append(line)
+            continue
+
+        visible.append(masked(line))
+        if match is None:
+            continue
+        fence = match.group("fence")
+        remainder = line[match.end() :].strip()
+        if fence[0] == fence_character and len(fence) >= fence_length and not remainder:
+            fence_character = None
+            fence_length = 0
+
+    rendered = "".join(visible)
+    characters = list(rendered)
+    position = 0
+    while position < len(rendered):
+        if rendered[position] != "`":
+            position += 1
+            continue
+        run_end = position
+        while run_end < len(rendered) and rendered[run_end] == "`":
+            run_end += 1
+        delimiter = rendered[position:run_end]
+        closing = rendered.find(delimiter, run_end)
+        if closing < 0:
+            position = run_end
+            continue
+        for index in range(position, closing + len(delimiter)):
+            if characters[index] != "\n":
+                characters[index] = " "
+        position = closing + len(delimiter)
+    return "".join(characters)
 
 
 def _suggest_class(root: Path, readme: str) -> str:
