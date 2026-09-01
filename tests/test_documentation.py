@@ -783,6 +783,63 @@ def test_commit_bound_evidence_rejects_untracked_ignored_symlink_and_git_paths(t
     )
 
 
+def test_commit_bound_validation_binds_assertion_record_itself(tmp_path):
+    dirty_root = tmp_path / "dirty"
+    dirty_root.mkdir()
+    record = _record()
+    _write_routes(dirty_root, record)
+    _commit_fixture(dirty_root)
+    assertion = _load_assertion(dirty_root)
+    assertion["statement"] = "A dirty assertion must not establish a claim."
+    _write_assertion(dirty_root, assertion)
+
+    assert any(
+        "assertion differs from the checked-out commit" in error
+        for error in validate_project_record(
+            record,
+            root=dirty_root,
+            require_git_tracked_evidence=True,
+        )
+    )
+
+    untracked_root = tmp_path / "untracked"
+    untracked_root.mkdir()
+    record = _record()
+    _write_routes(untracked_root, record)
+    _commit_fixture(untracked_root)
+    assertion_path = _assertion_path(untracked_root)
+    _git(
+        untracked_root,
+        "rm",
+        "--cached",
+        assertion_path.relative_to(untracked_root).as_posix(),
+    )
+
+    assert any(
+        "assertion is ignored or untracked" in error
+        for error in validate_project_record(
+            record,
+            root=untracked_root,
+            require_git_tracked_evidence=True,
+        )
+    )
+
+    symlink_root = tmp_path / "symlink"
+    symlink_root.mkdir()
+    record = _record()
+    _write_routes(symlink_root, record)
+    assertion_path = _assertion_path(symlink_root)
+    target = assertion_path.with_name("target.json")
+    target.write_bytes(assertion_path.read_bytes())
+    assertion_path.unlink()
+    assertion_path.symlink_to(target.name)
+
+    assert any(
+        "symlink assertion is forbidden" in error
+        for error in validate_project_record(record, root=symlink_root)
+    )
+
+
 def test_commit_bound_evidence_rejects_submodule_boundaries(tmp_path):
     record = _record()
     _write_routes(tmp_path, record)
@@ -972,6 +1029,18 @@ def test_audit_excludes_broken_local_links_from_cross_link_signals(tmp_path):
         finding["code"] == "broken-local-links" and finding["severity"] == "error"
         for finding in result["findings"]
     )
+
+
+def test_audit_scans_repositories_below_ancestor_named_like_skipped_directory(tmp_path):
+    root = tmp_path / "build" / "repository"
+    docs = root / "docs"
+    docs.mkdir(parents=True)
+    (root / "README.md").write_text("# Project\n", encoding="utf-8")
+    (docs / "guide.md").write_text("# Guide\n", encoding="utf-8")
+
+    result = audit_repository(root)
+
+    assert result["markdown_files"] == 2
 
 
 def test_discover_repositories_stops_at_git_root(tmp_path):

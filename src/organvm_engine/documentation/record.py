@@ -567,11 +567,23 @@ def _validate_assertion_target(
     require_git_tracked_evidence: bool,
 ) -> tuple[Mapping[str, Any] | None, list[str]]:
     errors: list[str] = []
+    if ".git" in Path(reference).parts:
+        return None, [f"{label} assertion path under .git is forbidden: {reference}"]
+    if _path_contains_symlink(root, reference):
+        return None, [f"{label} symlink assertion is forbidden: {reference}"]
     candidate = _contained_path(root, reference)
     if candidate is None:
         return None, [f"{label} assertion path escapes repository root: {reference}"]
     if not candidate.is_file():
         return None, [f"{label} assertion path does not exist: {reference}"]
+    if require_git_tracked_evidence:
+        assertion_binding_errors = _git_tracked_path_errors(
+            root=root,
+            relative=reference,
+            label=label,
+            object_name="assertion",
+        )
+        errors.extend(assertion_binding_errors)
     try:
         assertion = _load_mapping(candidate)
     except (OSError, ValueError) as exc:
@@ -971,7 +983,13 @@ def _git_evidence_binding_errors(
     return []
 
 
-def _git_tracked_path_errors(*, root: Path, relative: str, label: str) -> list[str]:
+def _git_tracked_path_errors(
+    *,
+    root: Path,
+    relative: str,
+    label: str,
+    object_name: str = "evidence",
+) -> list[str]:
     inside = _run_git(root, "rev-parse", "--is-inside-work-tree")
     if inside.returncode != 0 or inside.stdout.strip() != b"true":
         return [f"{label} commit-bound validation requires a Git work tree"]
@@ -982,11 +1000,13 @@ def _git_tracked_path_errors(*, root: Path, relative: str, label: str) -> list[s
             continue
         submodule_path = fields[3].decode("utf-8", errors="replace")
         if relative == submodule_path or relative.startswith(submodule_path + "/"):
-            return [f"{label} evidence inside a submodule is forbidden: {relative}"]
+            return [
+                f"{label} {object_name} inside a submodule is forbidden: {relative}",
+            ]
 
     tracked = _run_git(root, "ls-files", "--error-unmatch", "--", relative)
     if tracked.returncode != 0:
-        return [f"{label} evidence is ignored or untracked: {relative}"]
+        return [f"{label} {object_name} is ignored or untracked: {relative}"]
 
     for args in (
         ("diff", "--quiet", "HEAD", "--", relative),
@@ -994,9 +1014,13 @@ def _git_tracked_path_errors(*, root: Path, relative: str, label: str) -> list[s
     ):
         result = _run_git(root, *args)
         if result.returncode == 1:
-            return [f"{label} evidence differs from the checked-out commit: {relative}"]
+            return [
+                f"{label} {object_name} differs from the checked-out commit: {relative}",
+            ]
         if result.returncode > 1:
-            return [f"{label} cannot verify committed evidence path: {relative}"]
+            return [
+                f"{label} cannot verify committed {object_name} path: {relative}",
+            ]
     return []
 
 

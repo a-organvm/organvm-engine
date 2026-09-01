@@ -157,7 +157,11 @@ def _record_path(root: Path) -> Path | None:
 def _markdown_files(root: Path) -> list[Path]:
     files: list[Path] = []
     for path in root.rglob("*.md"):
-        if any(part in SKIP_DIRS for part in path.parts):
+        try:
+            relative_parts = path.relative_to(root).parts
+        except ValueError:
+            continue
+        if any(part in SKIP_DIRS for part in relative_parts):
             continue
         try:
             if path.stat().st_size <= 2_000_000:
