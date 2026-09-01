@@ -56,6 +56,18 @@ ROLE_CLASS_RULES: dict[str, str] = {
     "upstream-fork": "F",
     "contribution": "F",
 }
+REPOSITORY_ROLES = frozenset(
+    {
+        "canonical",
+        "mirror",
+        "deployment-artifact",
+        "archive",
+        "contribution",
+        "upstream-fork",
+        "profile",
+        "governance",
+    },
+)
 GIT_EVIDENCE_REFERENCE = re.compile(
     r"^git:(?P<commit>[0-9a-fA-F]{40})(?::(?P<path>.+))?$",
 )
@@ -142,9 +154,14 @@ def validate_project_record(
             f"unsupported contract_name: {record.get('contract_name')!r}; "
             f"expected {CONTRACT_NAME!r}",
         )
-    if record.get("contract_version") != CONTRACT_VERSION:
+    contract_version = record.get("contract_version")
+    if (
+        not isinstance(contract_version, int)
+        or isinstance(contract_version, bool)
+        or contract_version != CONTRACT_VERSION
+    ):
         errors.append(
-            f"unsupported contract_version: {record.get('contract_version')!r}; "
+            f"unsupported contract_version: {contract_version!r}; "
             f"expected {CONTRACT_VERSION}",
         )
 
@@ -167,19 +184,28 @@ def validate_project_record(
     repository = record.get("canonical_repository")
     if not isinstance(repository, str) or not _valid_repository_slug(repository):
         errors.append("canonical_repository must use owner/name form")
+    repository_role = record.get("repository_role")
+    repository_role_valid = (
+        isinstance(repository_role, str) and repository_role in REPOSITORY_ROLES
+    )
+    if not repository_role_valid:
+        errors.append(f"invalid repository_role: {repository_role!r}")
 
     if actual_repository is not None:
         if not _valid_repository_slug(actual_repository):
             errors.append("actual_repository must use owner/name form")
         elif isinstance(repository, str) and _valid_repository_slug(repository):
-            repository_role = record.get("repository_role")
             same_repository = repository.casefold() == actual_repository.casefold()
-            if repository_role == "canonical" and not same_repository:
+            if repository_role_valid and repository_role == "canonical" and not same_repository:
                 errors.append(
                     "repository_role 'canonical' requires canonical_repository to "
                     "equal actual_repository",
                 )
-            if repository_role in {"mirror", "deployment-artifact", "upstream-fork"} and same_repository:
+            if (
+                repository_role_valid
+                and repository_role in {"mirror", "deployment-artifact", "upstream-fork"}
+                and same_repository
+            ):
                 errors.append(
                     f"repository_role {repository_role!r} requires canonical_repository "
                     "to differ from actual_repository",
@@ -251,8 +277,10 @@ def validate_project_record(
         else:
             local_link_paths.append((key, value))
 
-    repository_role = record.get("repository_role")
-    if doc_class == "D" and repository_role not in {"mirror", "deployment-artifact"}:
+    if doc_class == "D" and (
+        not repository_role_valid
+        or repository_role not in {"mirror", "deployment-artifact"}
+    ):
         errors.append(
             "documentation_class D requires repository_role 'mirror' or "
             "'deployment-artifact'",
@@ -376,7 +404,8 @@ def validate_project_record(
         qualifying_deployment_claim_ids = [
             claim_id
             for claim_id, claim in deployment_claims
-            if claim.get("claim_posture") in allowed_deployment_postures
+            if isinstance(claim.get("claim_posture"), str)
+            and claim.get("claim_posture") in allowed_deployment_postures
         ]
         if not deployment_claims:
             errors.append(
@@ -636,6 +665,16 @@ def _validate_assertion_target(
     assertion_contract_matches = assertion.get("contract_name") == "assertion-evidence.v1"
     if not assertion_contract_matches:
         errors.append(f"{label} target is not assertion-evidence.v1: {reference}")
+    assertion_contract_version = assertion.get("contract_version")
+    if (
+        not isinstance(assertion_contract_version, int)
+        or isinstance(assertion_contract_version, bool)
+        or assertion_contract_version != CONTRACT_VERSION
+    ):
+        errors.append(
+            f"{label} target has unsupported assertion contract_version: "
+            f"{assertion_contract_version!r}; expected {CONTRACT_VERSION}",
+        )
     if assertion.get("assertion_id") != assertion_id:
         errors.append(f"{label} assertion_id does not match {reference}")
     if assertion_contract_matches:
@@ -683,7 +722,8 @@ def _industry_evidence_errors(
             claim = claims_by_id[claim_id]
             assertion = resolved_assertions.get(claim_id)
             if isinstance(status, str) and status in {"deployed", "piloted"}:
-                if claim.get("scope") not in evidence_scopes:
+                claim_scope = claim.get("scope")
+                if not isinstance(claim_scope, str) or claim_scope not in evidence_scopes:
                     errors.append(
                         f"industries[{index}] {status!r} claim {claim_id!r} must use "
                         "deployment, adoption, or outcome scope",
@@ -946,10 +986,11 @@ def _assertion_semantic_errors(
                 "a verified operator_directive is missing evidence types: "
                 + ", ".join(missing),
             )
-        if not isinstance(freshness, Mapping) or freshness.get("status") not in {
-            "fresh",
-            "not_applicable",
-        }:
+        freshness_status = freshness.get("status") if isinstance(freshness, Mapping) else None
+        if (
+            not isinstance(freshness_status, str)
+            or freshness_status not in {"fresh", "not_applicable"}
+        ):
             errors.append(
                 "a verified operator_directive requires non-stale freshness",
             )

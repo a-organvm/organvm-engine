@@ -339,6 +339,98 @@ def test_verified_deployment_status_requires_a_repository_root() -> None:
     )
 
 
+@pytest.mark.parametrize("contract_version", [True, 1.0])
+def test_project_contract_version_requires_a_non_boolean_integer(
+    contract_version: object,
+) -> None:
+    record = _record()
+    record["contract_version"] = contract_version
+
+    assert (
+        f"unsupported contract_version: {contract_version!r}; expected 1"
+        in validate_project_record(record)
+    )
+
+
+@pytest.mark.parametrize("repository_role", ["canonica1", [], {}])
+def test_repository_role_requires_the_supported_schema_vocabulary(
+    repository_role: object,
+) -> None:
+    record = _record()
+    record["repository_role"] = repository_role
+
+    assert (
+        f"invalid repository_role: {repository_role!r}"
+        in validate_project_record(
+            record,
+            actual_repository="organvm/different",
+        )
+    )
+
+
+@pytest.mark.parametrize("repository_role", ["profile", "governance"])
+def test_schema_supported_noncanonical_roles_remain_valid(
+    repository_role: str,
+) -> None:
+    record = _record()
+    record["repository_role"] = repository_role
+
+    assert validate_project_record(record) == []
+
+
+@pytest.mark.parametrize("repository_role", [[], {}])
+def test_class_d_rejects_unhashable_repository_roles(
+    repository_role: object,
+) -> None:
+    record = _record()
+    record["documentation_class"] = "D"
+    record["repository_role"] = repository_role
+    record["audience_routes"] = []
+
+    errors = validate_project_record(record)
+
+    assert f"invalid repository_role: {repository_role!r}" in errors
+    assert any("documentation_class D requires repository_role" in error for error in errors)
+
+
+@pytest.mark.parametrize("claim_posture", [[], {}])
+def test_deployment_posture_membership_rejects_unhashable_values(
+    claim_posture: object,
+) -> None:
+    record = _record()
+    record["deployment_status"] = "public"
+    record["claim_references"].append(
+        {
+            **record["claim_references"][0],
+            "id": "public-deployment",
+            "scope": "deployment",
+            "claim_posture": claim_posture,
+        },
+    )
+
+    errors = validate_project_record(record)
+
+    assert any("has invalid claim_posture" in error for error in errors)
+    assert any("requires at least one deployment claim" in error for error in errors)
+
+
+def test_industry_evidence_rejects_an_unhashable_claim_scope(tmp_path: Path) -> None:
+    record = _write_git_fixture(tmp_path)
+    record["claim_references"][0]["scope"] = []
+    record["industries"] = [
+        {
+            "name": "Education",
+            "status": "deployed",
+            "claim_references": ["project-status"],
+        },
+    ]
+
+    assert any(
+        "must use deployment, adoption, or outcome scope" in error
+        for error in validate_project_record(record, root=tmp_path)
+    )
+
+
 def test_markdown_audit_ignores_links_inside_code(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text(
         "# Example\n\n`[Inline](missing-inline.md)`\n\n"
@@ -368,6 +460,54 @@ def test_markdown_audit_ignores_links_inside_indented_code(tmp_path: Path) -> No
     assert not any(
         finding["code"] == "broken-local-links" for finding in result["findings"]
     )
+
+
+def test_markdown_audit_preserves_rendered_links_inside_list_items(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n- Resources:\n    [Guide](missing-guide.md)\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_markdown_audit_masks_code_nested_inside_list_items(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n- Samples:\n\n"
+        "      [Indented](missing-indented.md)\n\n"
+        "    ```markdown\n"
+        "    [Fenced](missing-fenced.md)\n"
+        "    ```\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert not any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_markdown_audit_does_not_read_an_oversized_root_readme(
+    tmp_path: Path,
+) -> None:
+    readme = tmp_path / "README.md"
+    with readme.open("wb") as stream:
+        stream.write(b"# Oversized\n")
+        stream.seek(2_000_000)
+        stream.write(b"x")
+
+    result = audit_repository(tmp_path)
+
+    assert result["has_readme"] is False
+    assert result["markdown_files"] == 0
+    assert any(finding["code"] == "missing-readme" for finding in result["findings"])
 
 
 def test_markdown_audit_rejects_outside_symlink_content(tmp_path: Path) -> None:
@@ -421,10 +561,16 @@ def test_builder_scans_python_except_for_exact_structural_labels() -> None:
     }
     exec(compile(ast.Module(body=[function], type_ignores=[]), str(builder_path), "exec"), namespace)
 
-    payload = 'segment = "personal"\n# secretproject\nqueue = ["secretproject"]\n'
+    payload = (
+        'SOURCE_FILES = {\n    "personal": "personal.json",\n}\n'
+        'PUBLIC_PROSE_REWRITES = (("current personal profile", "safe"),)\n'
+        'PUBLIC_EXACT_REWRITES = {"contrib": "contribution"}\n'
+        'queue = ["personal", "contrib", "secretproject"]\n'
+    )
     scan_payload = namespace["bare_slug_scan_payload"](Path("builder.py"), payload)
 
-    assert '"personal"' not in scan_payload
+    assert '"personal": "personal.json"' not in scan_payload
+    assert 'queue = ["personal", "contrib", "secretproject"]' in scan_payload
     assert "secretproject" in scan_payload
 
 
@@ -567,6 +713,47 @@ def test_verified_assertion_requires_nonempty_evidence(tmp_path: Path) -> None:
 
     assert any(
         "verified assertion requires a non-empty evidence_references list" in error
+        for error in validate_project_record(record, root=tmp_path)
+    )
+
+
+@pytest.mark.parametrize("contract_version", [None, True, 1.0])
+def test_assertion_contract_version_requires_a_non_boolean_integer(
+    tmp_path: Path,
+    contract_version: object,
+) -> None:
+    record = _write_git_fixture(tmp_path)
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    if contract_version is None:
+        assertion.pop("contract_version")
+    else:
+        assertion["contract_version"] = contract_version
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+
+    assert any(
+        "unsupported assertion contract_version" in error
+        for error in validate_project_record(record, root=tmp_path)
+    )
+
+
+@pytest.mark.parametrize("status", [[], {}])
+def test_operator_directive_freshness_rejects_unhashable_status(
+    tmp_path: Path,
+    status: object,
+) -> None:
+    record = _write_git_fixture(tmp_path)
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    assertion = json.loads(assertion_path.read_text(encoding="utf-8"))
+    assertion["assertion_class"] = "operator_directive"
+    assertion["freshness"] = {
+        "status": status,
+        "verified_at": "2025-01-01T00:00:00Z",
+    }
+    assertion_path.write_text(json.dumps(assertion), encoding="utf-8")
+
+    assert any(
+        "requires non-stale freshness" in error
         for error in validate_project_record(record, root=tmp_path)
     )
 

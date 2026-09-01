@@ -407,7 +407,7 @@ cells = [
 
 
         def normalize_repository(source, bundle, row):
-            if source == "personal":
+            if SOURCE_FILES[source] == "personal.json":
                 return f"{bundle.get('owner', '4444J99')}/{row['name']}"
             return row["repository"]
 
@@ -464,15 +464,15 @@ cells = [
 
 
         def normalize_readme(source, row):
-            if source == "personal":
+            if SOURCE_FILES[source] == "personal.json":
                 return bool(row.get("readme", {}).get("present"))
-            if source == "ergon":
+            if SOURCE_FILES[source] == "ergon.json":
                 return bool(row.get("readme_observation", {}).get("fetched"))
-            if source == "theoria_poiesis":
+            if SOURCE_FILES[source] == "theoria-poiesis.json":
                 return int(row.get("readme_words", 0)) > 0
-            if source == "umbrella_extended":
+            if SOURCE_FILES[source] == "umbrella-extended.json":
                 return bool(row.get("readme", {}).get("present"))
-            if source == "organvm_gap":
+            if SOURCE_FILES[source] == "organvm-gap.json":
                 return bool(row.get("readme", {}).get("present"))
             return None
 
@@ -1212,7 +1212,7 @@ def repository_identifiers_by_visibility() -> tuple[set[str], set[str]]:
         bundle = json.loads((input_dir / filename).read_text(encoding="utf-8"))
         for index, row in enumerate(bundle["repositories"]):
             visibility = source_visibility(row, source=source, index=index)
-            if source == "personal":
+            if filename == "personal.json":
                 repository = f"{bundle.get('owner', '4444J99')}/{row['name']}"
             else:
                 repository = row["repository"]
@@ -1242,18 +1242,33 @@ private_reference_pattern = repository_reference_pattern(
 def bare_slug_scan_payload(path: Path, payload: str) -> str:
     """Return privacy-bearing content while excluding structural source labels."""
     if path.suffix == ".py":
-        structural_labels = set(SOURCE_FILES) | set(SOURCE_FILES.values())
-        for label in sorted(structural_labels, key=len, reverse=True):
-            payload = re.sub(
-                rf"(?P<quote>['\"]){re.escape(label)}(?P=quote)",
-                '"[source segment]"',
-                payload,
+        declaration = re.compile(
+            r"(?m)^[ \t]*(?:SOURCE_FILES|PUBLIC_PROSE_REWRITES|"
+            r"PUBLIC_EXACT_REWRITES|public_prose_rewrites|public_exact_rewrites)"
+            r"[ \t]*=[ \t]*(?P<opening>[{([])",
+        )
+        spans: list[tuple[int, int]] = []
+        closing_for = {"{": "}", "(": ")", "[": "]"}
+        for match in declaration.finditer(payload):
+            opening = match.group("opening")
+            closing = closing_for[opening]
+            depth = 0
+            for position in range(match.start("opening"), len(payload)):
+                character = payload[position]
+                if character == opening:
+                    depth += 1
+                elif character == closing:
+                    depth -= 1
+                    if depth == 0:
+                        spans.append((match.start("opening"), position + 1))
+                        break
+            else:
+                raise RuntimeError("Unterminated privacy-control declaration")
+        for start, end in reversed(spans):
+            masked = "".join(
+                "\n" if character == "\n" else " " for character in payload[start:end]
             )
-        for original, replacement in PUBLIC_PROSE_REWRITES:
-            payload = payload.replace(original, replacement)
-        for original, replacement in PUBLIC_EXACT_REWRITES.items():
-            payload = payload.replace(f'"{original}"', f'"{replacement}"')
-            payload = payload.replace(f"'{original}'", f"'{replacement}'")
+            payload = payload[:start] + masked + payload[end:]
         return payload
     if path.suffix == ".ipynb":
         document = nbformat.reads(payload, as_version=4)
@@ -1294,27 +1309,32 @@ try:
     nbformat.write(executed, temporary_notebook)
     temporary_notebook.chmod(0o644)
 
-    privacy_hit_count = 0
+    privacy_hits_by_file: dict[str, int] = {}
     for path in publication_files:
         payload = (
             temporary_notebook.read_text(encoding="utf-8")
             if path == NOTEBOOK
             else path.read_text(encoding="utf-8")
         )
-        privacy_hit_count += sum(
+        private_full_hits = sum(
             match.lastgroup == "private_full"
             for match in private_reference_pattern.finditer(payload)
         )
-        privacy_hit_count += sum(
+        private_reference_hits = sum(
             match.lastgroup != "public_full"
             for match in private_reference_pattern.finditer(
                 bare_slug_scan_payload(path, payload),
             )
         )
-    if privacy_hit_count:
+        if hit_count := private_full_hits + private_reference_hits:
+            privacy_hits_by_file[path.name] = hit_count
+    if privacy_hits_by_file:
+        rendered_hits = ", ".join(
+            f"{name}={count}" for name, count in sorted(privacy_hits_by_file.items())
+        )
         raise RuntimeError(
-            f"Detected {privacy_hit_count} private repository identifier hit(s) "
-            "in public artifacts",
+            "Detected private repository identifier hits in public artifacts: "
+            + rendered_hits,
         )
 
     temporary_notebook.replace(NOTEBOOK)

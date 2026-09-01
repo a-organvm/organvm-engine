@@ -24,9 +24,12 @@ DIMENSIONS = (
 SKIP_DIRS = frozenset(
     {".git", ".venv", "node_modules", "vendor", "dist", "build", "__pycache__"},
 )
+MAX_MARKDOWN_FILE_BYTES = 2_000_000
 MARKDOWN_LINK_START = re.compile(r"\]\(")
 MARKDOWN_FENCE = re.compile(r"^[ ]{0,3}(?P<fence>`{3,}|~{3,})")
-MARKDOWN_INDENTED_CODE = re.compile(r"^(?: {4}| {0,3}\t)")
+MARKDOWN_LIST_MARKER = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<marker>[-+*]|\d{1,9}[.)])(?P<spacing>[ \t]+)",
+)
 REFERENCE_DEFINITION = re.compile(
     r"^[ ]{0,3}\[(?P<label>[^\]\n]+)\]:[ \t]*(?P<destination><[^>\n]+>|[^\s]+)",
 )
@@ -55,9 +58,17 @@ def audit_repository(root: str | Path) -> dict[str, Any]:
     """Audit a repository's reader-mode documentation without mutating it."""
     root_path = Path(root).resolve()
     readme_path = _readme_path(root_path)
-    readme = readme_path.read_text(encoding="utf-8", errors="replace") if readme_path else ""
-    markdown_files = _markdown_files(root_path)
-    corpus = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in markdown_files)
+    readme = _read_bounded_markdown(readme_path) if readme_path else None
+    if readme is None:
+        readme_path = None
+        readme = ""
+    markdown_inputs = [
+        (path, text)
+        for path in _markdown_files(root_path)
+        if (text := _read_bounded_markdown(path)) is not None
+    ]
+    markdown_files = [path for path, _text in markdown_inputs]
+    corpus = "\n".join(text for _path, text in markdown_inputs)
     lowered = corpus.lower()
     readme_lower = readme.lower()
     valid_local_links, broken_local_links = _inspect_local_links(root_path, markdown_files)
@@ -154,7 +165,9 @@ def _readme_path(root: Path) -> Path | None:
         candidates = [
             path
             for path in root.iterdir()
-            if _safe_markdown_file(root, path) and path.name.casefold() == "readme.md"
+            if _safe_markdown_file(root, path)
+            and path.name.casefold() == "readme.md"
+            and path.stat().st_size <= MAX_MARKDOWN_FILE_BYTES
         ]
     except OSError:
         return None
@@ -179,7 +192,10 @@ def _markdown_files(root: Path) -> list[Path]:
                 continue
             path = current_path / name
             try:
-                if _safe_markdown_file(root, path) and path.stat().st_size <= 2_000_000:
+                if (
+                    _safe_markdown_file(root, path)
+                    and path.stat().st_size <= MAX_MARKDOWN_FILE_BYTES
+                ):
                     files.append(path)
             except OSError:
                 continue
@@ -257,7 +273,9 @@ def _inspect_local_links(root: Path, markdown_files: list[Path]) -> tuple[set[Pa
     valid: set[Path] = set()
     broken: list[str] = []
     for source in markdown_files:
-        text = source.read_text(encoding="utf-8", errors="replace")
+        text = _read_bounded_markdown(source)
+        if text is None:
+            continue
         for raw_target in _markdown_destinations(text):
             target = raw_target.strip().strip("<>")
             if not target or target.startswith("#") or target.startswith("//"):
@@ -359,6 +377,18 @@ def _safe_markdown_file(root: Path, path: Path) -> bool:
     return _safe_audit_file(root, path)
 
 
+def _read_bounded_markdown(path: Path) -> str | None:
+    """Read at most the documented Markdown input limit, including races."""
+    try:
+        with path.open("rb") as stream:
+            payload = stream.read(MAX_MARKDOWN_FILE_BYTES + 1)
+    except OSError:
+        return None
+    if len(payload) > MAX_MARKDOWN_FILE_BYTES:
+        return None
+    return payload.decode("utf-8", errors="replace")
+
+
 def _safe_audit_file(root: Path, path: Path) -> bool:
     """Return whether an audit input is a regular in-repository file."""
     try:
@@ -399,7 +429,7 @@ def _normalize_reference_label(label: str) -> str:
 
 
 def _mask_markdown_code(text: str) -> str:
-    """Mask fenced blocks and inline code while preserving source positions."""
+    """Mask code while preserving rendered content inside list containers."""
 
     def masked(value: str) -> str:
         return "".join("\n" if character == "\n" else " " for character in value)
@@ -408,28 +438,51 @@ def _mask_markdown_code(text: str) -> str:
     visible: list[str] = []
     fence_character: str | None = None
     fence_length = 0
+    fence_container_indent = 0
+    list_content_indents: list[int] = []
     for line in lines:
-        match = MARKDOWN_FENCE.match(line)
+        stripped = line.strip(" \t\r\n")
+        leading_columns = _markdown_indent_columns(line)
+        if stripped and fence_character is None:
+            while list_content_indents and leading_columns < list_content_indents[-1]:
+                list_content_indents.pop()
+
+        container_indent = list_content_indents[-1] if list_content_indents else 0
+        relative_line = _markdown_remove_indent(line, container_indent)
+        match = MARKDOWN_FENCE.match(relative_line)
         if fence_character is None:
             if match is not None:
                 fence = match.group("fence")
                 fence_character = fence[0]
                 fence_length = len(fence)
-                visible.append(masked(line))
-            elif MARKDOWN_INDENTED_CODE.match(line) is not None:
+                fence_container_indent = container_indent
                 visible.append(masked(line))
             else:
-                visible.append(line)
+                list_match = MARKDOWN_LIST_MARKER.match(line)
+                relative_indent = leading_columns - container_indent
+                if list_match is not None and 0 <= relative_indent <= 3:
+                    content_indent = _markdown_column_width(
+                        line[: list_match.end()],
+                    )
+                    list_content_indents.append(content_indent)
+                    visible.append(line)
+                elif relative_indent >= 4:
+                    visible.append(masked(line))
+                else:
+                    visible.append(line)
             continue
 
         visible.append(masked(line))
+        relative_line = _markdown_remove_indent(line, fence_container_indent)
+        match = MARKDOWN_FENCE.match(relative_line)
         if match is None:
             continue
         fence = match.group("fence")
-        remainder = line[match.end() :].strip()
+        remainder = relative_line[match.end() :].strip()
         if fence[0] == fence_character and len(fence) >= fence_length and not remainder:
             fence_character = None
             fence_length = 0
+            fence_container_indent = 0
 
     rendered = "".join(visible)
     characters = list(rendered)
@@ -451,6 +504,48 @@ def _mask_markdown_code(text: str) -> str:
                 characters[index] = " "
         position = closing + len(delimiter)
     return "".join(characters)
+
+
+def _markdown_indent_columns(value: str) -> int:
+    """Return CommonMark-style columns occupied by leading spaces and tabs."""
+    columns = 0
+    for character in value:
+        if character == " ":
+            columns += 1
+        elif character == "\t":
+            columns += 4 - (columns % 4)
+        else:
+            break
+    return columns
+
+
+def _markdown_column_width(value: str) -> int:
+    """Return display columns occupied by a single Markdown line prefix."""
+    columns = 0
+    for character in value:
+        if character in "\r\n":
+            break
+        if character == "\t":
+            columns += 4 - (columns % 4)
+        else:
+            columns += 1
+    return columns
+
+
+def _markdown_remove_indent(value: str, columns: int) -> str:
+    """Remove up to ``columns`` of container indentation from a line."""
+    consumed_columns = 0
+    position = 0
+    while position < len(value) and consumed_columns < columns:
+        character = value[position]
+        if character == " ":
+            consumed_columns += 1
+        elif character == "\t":
+            consumed_columns += 4 - (consumed_columns % 4)
+        else:
+            break
+        position += 1
+    return value[position:]
 
 
 def _suggest_class(root: Path, readme: str) -> str:

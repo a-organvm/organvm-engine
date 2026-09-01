@@ -51,6 +51,9 @@ private `owner/repository` identifiers, backticked private slugs, and
 private-only bare slugs. Known public prose that collides lexically with a
 private slug is rewritten to an equivalent non-colliding phrase before the
 fail-closed scan; the scanner itself retains full private-slug coverage.
+For the Python builder, only the literal values inside the named source and
+rewrite-control declarations are excluded. Identical strings anywhere else in
+the program remain privacy-bearing and fail the scan.
 
 ## Authority boundary
 
