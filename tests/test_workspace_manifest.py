@@ -1,7 +1,9 @@
 """Tests for workspace manifest."""
 
+import os
 from pathlib import Path
 
+import pytest
 import yaml
 
 from organvm_engine.seed.manifest import (
@@ -11,6 +13,20 @@ from organvm_engine.seed.manifest import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _replace_manifest(path: Path, kind: str, outside: Path) -> None:
+    path.unlink()
+    if kind == "fifo":
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("FIFO creation is unavailable")
+        os.mkfifo(path)
+    elif kind == "symlink":
+        path.symlink_to(outside)
+    elif kind == "directory":
+        path.mkdir()
+    else:  # pragma: no cover - parametrization is closed above
+        raise AssertionError(f"unknown replacement kind: {kind}")
 
 
 class TestManifestLoading:
@@ -38,6 +54,38 @@ class TestManifestLoading:
 
     def test_full_workspace_not_partial(self):
         assert is_partial_workspace(None) is False
+
+    @pytest.mark.parametrize("replacement_kind", ["fifo", "symlink", "directory"])
+    def test_is_file_to_nonregular_swap_returns_none_without_blocking(
+        self,
+        tmp_path,
+        monkeypatch,
+        replacement_kind,
+    ):
+        import organvm_engine.seed.manifest as manifest_mod
+
+        manifest_path = tmp_path / "workspace-manifest.yaml"
+        manifest_path.write_text("organs_present: [II]\n", encoding="utf-8")
+        outside = tmp_path / "outside.yaml"
+        outside.write_text("organs_present: [META]\n", encoding="utf-8")
+        real_read = manifest_mod.read_stable_regular_bytes
+        swapped = False
+
+        def swap_after_is_file(path, *args, **kwargs):
+            nonlocal swapped
+            if Path(path) == manifest_path and not swapped:
+                _replace_manifest(manifest_path, replacement_kind, outside)
+                swapped = True
+            return real_read(path, *args, **kwargs)
+
+        monkeypatch.setattr(
+            manifest_mod,
+            "read_stable_regular_bytes",
+            swap_after_is_file,
+        )
+
+        assert load_workspace_manifest(manifest_path) is None
+        assert swapped is True
 
 
 class TestDiscoverWithManifest:

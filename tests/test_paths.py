@@ -1,6 +1,9 @@
 """Tests for workspace path resolution."""
 
+import os
 from pathlib import Path
+
+import pytest
 
 from organvm_engine import paths
 
@@ -47,6 +50,48 @@ class TestPaths:
             Path.home() / "Code" / "organvm",
             Path("/tmp/other-root"),
         ]
+
+    @pytest.mark.parametrize("replacement_kind", ["fifo", "symlink", "directory"])
+    def test_governance_config_nonregular_swap_never_blocks(
+        self,
+        tmp_path,
+        monkeypatch,
+        replacement_kind,
+    ):
+        config_dir = tmp_path / "meta-organvm" / "organvm-corpvs-testamentvm"
+        config_dir.mkdir(parents=True)
+        config_path = config_dir / "governance-config.yaml"
+        config_path.write_text(
+            "additional_workspace_roots: [/tmp/foreign]\n",
+            encoding="utf-8",
+        )
+        outside = tmp_path / "outside.yaml"
+        outside.write_text(
+            "additional_workspace_roots: [/tmp/outside]\n",
+            encoding="utf-8",
+        )
+        real_read = paths.read_stable_regular_bytes
+        swapped = False
+
+        def swap_after_is_file(path, *args, **kwargs):
+            nonlocal swapped
+            if Path(path) == config_path and not swapped:
+                config_path.unlink()
+                if replacement_kind == "fifo":
+                    if not hasattr(os, "mkfifo"):
+                        pytest.skip("FIFO creation is unavailable")
+                    os.mkfifo(config_path)
+                elif replacement_kind == "symlink":
+                    config_path.symlink_to(outside)
+                else:
+                    config_path.mkdir()
+                swapped = True
+            return real_read(path, *args, **kwargs)
+
+        monkeypatch.setattr(paths, "read_stable_regular_bytes", swap_after_is_file)
+
+        assert paths.additional_workspace_roots(workspace=tmp_path) == []
+        assert swapped is True
 
     def test_corpus_dir_skips_husk_and_probes_code_root(self, tmp_path, monkeypatch):
         # Legacy location exists but holds no registry (relocation husk);
