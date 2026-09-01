@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -23,7 +24,8 @@ SKIP_DIRS = frozenset(
     {".git", ".venv", "node_modules", "vendor", "dist", "build", "__pycache__"},
 )
 MAX_MARKDOWN_FILE_BYTES = 2_000_000
-MARKDOWN_LINK_START = re.compile(r"\]\(")
+MAX_MARKDOWN_REPOSITORY_BYTES = 16_000_000
+MAX_MARKDOWN_FILES = 4_096
 MARKDOWN_FENCE = re.compile(r"^[ ]{0,3}(?P<fence>`{3,}|~{3,})")
 MARKDOWN_BLOCKQUOTE = re.compile(r"^[ ]{0,3}>[ \t]?")
 MARKDOWN_LIST_MARKER = re.compile(
@@ -40,6 +42,7 @@ REFERENCE_DESTINATION_CONTINUATION = re.compile(
 )
 REFERENCE_USAGE = re.compile(r"(?<!!)\[(?P<label>[^\]\n]+)\](?![\[(])")
 COLLAPSED_REFERENCE_USAGE = re.compile(r"(?<!!)\[(?P<label>[^\]\n]+)\]\[\]")
+MARKDOWN_ESCAPABLE = frozenset(r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~""")
 
 
 def discover_repositories(workspace: str | Path) -> list[Path]:
@@ -67,16 +70,12 @@ def audit_repository(root: str | Path) -> dict[str, Any]:
     if readme is None:
         readme_path = None
         readme = ""
-    markdown_inputs = [
-        (path, text)
-        for path in _markdown_files(root_path)
-        if (text := _read_bounded_markdown(path)) is not None
-    ]
+    markdown_inputs, markdown_limit_exceeded = _markdown_inputs(root_path)
     markdown_files = [path for path, _text in markdown_inputs]
     corpus = "\n".join(text for _path, text in markdown_inputs)
     lowered = corpus.lower()
     readme_lower = readme.lower()
-    valid_local_links, broken_local_links = _inspect_local_links(root_path, markdown_files)
+    valid_local_links, broken_local_links = _inspect_local_links(root_path, markdown_inputs)
 
     record_path = _record_path(root_path)
     record: dict[str, Any] | None = None
@@ -148,6 +147,7 @@ def audit_repository(root: str | Path) -> dict[str, Any]:
         record_errors,
         signals,
         broken_local_links,
+        markdown_limit_exceeded,
     )
 
     return {
@@ -158,6 +158,7 @@ def audit_repository(root: str | Path) -> dict[str, Any]:
         "has_readme": readme_path is not None,
         "has_project_record": record_path is not None,
         "markdown_files": len(markdown_files),
+        "markdown_input_limit_exceeded": markdown_limit_exceeded,
         "signals": signals,
         "signal_semantics": "structural markers only; not a quality score",
         "record_errors": record_errors,
@@ -187,24 +188,34 @@ def _record_path(root: Path) -> Path | None:
     return None
 
 
-def _markdown_files(root: Path) -> list[Path]:
-    files: list[Path] = []
+def _markdown_inputs(root: Path) -> tuple[list[tuple[Path, str]], bool]:
+    """Read a deterministic repository-bounded Markdown corpus."""
+    inputs: list[tuple[Path, str]] = []
+    total_bytes = 0
     for current, dirs, names in os.walk(root):
-        dirs[:] = [name for name in dirs if name not in SKIP_DIRS]
+        dirs[:] = sorted(name for name in dirs if name not in SKIP_DIRS)
         current_path = Path(current)
-        for name in names:
+        for name in sorted(names):
             if Path(name).suffix.casefold() != ".md":
                 continue
             path = current_path / name
             try:
-                if (
-                    _safe_markdown_file(root, path)
-                    and path.stat().st_size <= MAX_MARKDOWN_FILE_BYTES
-                ):
-                    files.append(path)
+                if not _safe_markdown_file(root, path):
+                    continue
             except OSError:
                 continue
-    return sorted(files)
+            payload = _read_bounded_markdown_payload(path)
+            if payload is None:
+                continue
+            text, byte_count = payload
+            if (
+                len(inputs) >= MAX_MARKDOWN_FILES
+                or total_bytes + byte_count > MAX_MARKDOWN_REPOSITORY_BYTES
+            ):
+                return inputs, True
+            inputs.append((path, text))
+            total_bytes += byte_count
+    return inputs, False
 
 
 def _score_orientation(readme_lower: str) -> int:
@@ -274,13 +285,13 @@ def _score_cross_linking(root: Path, corpus: str, *, valid_local_links: int) -> 
     return min(4, score)
 
 
-def _inspect_local_links(root: Path, markdown_files: list[Path]) -> tuple[set[Path], list[str]]:
+def _inspect_local_links(
+    root: Path,
+    markdown_inputs: list[tuple[Path, str]],
+) -> tuple[set[Path], list[str]]:
     valid: set[Path] = set()
     broken: list[str] = []
-    for source in markdown_files:
-        text = _read_bounded_markdown(source)
-        if text is None:
-            continue
+    for source, text in markdown_inputs:
         for raw_target in _markdown_destinations(text):
             target = raw_target.strip().strip("<>")
             if not target or target.startswith("#") or target.startswith("//"):
@@ -319,16 +330,11 @@ def _markdown_destinations(text: str) -> list[str]:
     needed for repository link validation: angle-bracket destinations, escaped
     characters, balanced parentheses, and optional whitespace-separated titles.
     """
-    text = _mask_markdown_code(text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _mask_markdown_html_comments(_mask_markdown_code(text))
     text, reference_destinations = _reference_destinations(text)
     destinations: list[str] = list(reference_destinations)
-    for match in MARKDOWN_LINK_START.finditer(text):
-        if _markdown_character_is_escaped(
-            text,
-            match.start(),
-        ) or not _has_unescaped_link_opener(text, match.start()):
-            continue
-        position = match.end()
+    for position in _markdown_link_destination_starts(text):
         while position < len(text) and text[position] in " \t\n":
             position += 1
         if position >= len(text):
@@ -344,7 +350,11 @@ def _markdown_destinations(text: str) -> list[str]:
                 if escaped:
                     destination.append(character)
                     escaped = False
-                elif character == "\\":
+                elif (
+                    character == "\\"
+                    and position < len(text)
+                    and text[position] in MARKDOWN_ESCAPABLE
+                ):
                     escaped = True
                 elif character == ">":
                     break
@@ -361,7 +371,11 @@ def _markdown_destinations(text: str) -> list[str]:
                     destination.append(character)
                     escaped = False
                     position += 1
-                elif character == "\\":
+                elif (
+                    character == "\\"
+                    and position + 1 < len(text)
+                    and text[position + 1] in MARKDOWN_ESCAPABLE
+                ):
                     escaped = True
                     position += 1
                 elif character == "(":
@@ -381,30 +395,59 @@ def _markdown_destinations(text: str) -> list[str]:
                     position += 1
 
         rendered = "".join(destination)
-        if rendered:
+        if rendered and _markdown_link_has_closing_delimiter(text, position):
             destinations.append(rendered)
     return destinations
 
 
-def _has_unescaped_link_opener(text: str, closing_bracket: int) -> bool:
-    """Return whether ``closing_bracket`` pairs with an unescaped ``[``."""
-    nested = 0
-    for position in range(closing_bracket - 1, -1, -1):
-        character = text[position]
-        if character not in "[]":
+def _markdown_link_destination_starts(text: str) -> Iterator[int]:
+    """Yield inline-link destination starts in one forward bracket pass."""
+    open_brackets = 0
+    for position, character in enumerate(text):
+        if character not in "[]" or _markdown_character_is_escaped(text, position):
             continue
-        escaped = _markdown_character_is_escaped(text, position)
-        if escaped:
-            if character == "[" and nested == 0:
-                return False
+        if character == "[":
+            open_brackets += 1
             continue
-        if character == "]":
-            nested += 1
-        elif nested:
-            nested -= 1
-        else:
-            return True
-    return False
+        if open_brackets == 0:
+            continue
+        open_brackets -= 1
+        if text.startswith("](", position):
+            yield position + 2
+
+
+def _markdown_link_has_closing_delimiter(text: str, position: int) -> bool:
+    """Return whether a parsed destination has a valid outer closing delimiter."""
+    if position < len(text) and text[position] == ")":
+        return True
+    if position >= len(text) or not text[position].isspace():
+        return False
+    while position < len(text) and text[position].isspace():
+        position += 1
+    if position < len(text) and text[position] == ")":
+        return True
+    if position >= len(text) or text[position] not in "\"'(":
+        return False
+    opener = text[position]
+    closer = ")" if opener == "(" else opener
+    position += 1
+    while position < len(text):
+        if (
+            text[position] == "\\"
+            and position + 1 < len(text)
+            and text[position + 1] in MARKDOWN_ESCAPABLE
+        ):
+            position += 2
+            continue
+        if text[position] == closer:
+            position += 1
+            break
+        position += 1
+    else:
+        return False
+    while position < len(text) and text[position].isspace():
+        position += 1
+    return position < len(text) and text[position] == ")"
 
 
 def _markdown_character_is_escaped(text: str, position: int) -> bool:
@@ -424,6 +467,12 @@ def _safe_markdown_file(root: Path, path: Path) -> bool:
 
 def _read_bounded_markdown(path: Path) -> str | None:
     """Read at most the documented Markdown input limit, including races."""
+    payload = _read_bounded_markdown_payload(path)
+    return payload[0] if payload is not None else None
+
+
+def _read_bounded_markdown_payload(path: Path) -> tuple[str, int] | None:
+    """Read one bounded Markdown input and retain its exact byte count."""
     try:
         with path.open("rb") as stream:
             payload = stream.read(MAX_MARKDOWN_FILE_BYTES + 1)
@@ -431,7 +480,7 @@ def _read_bounded_markdown(path: Path) -> str | None:
         return None
     if len(payload) > MAX_MARKDOWN_FILE_BYTES:
         return None
-    return payload.decode("utf-8", errors="replace")
+    return payload.decode("utf-8", errors="replace"), len(payload)
 
 
 def _safe_audit_file(root: Path, path: Path) -> bool:
@@ -485,7 +534,10 @@ def _reference_destinations(text: str) -> tuple[str, list[str]]:
             index += 1
             continue
         label = _normalize_reference_label(match.group("label"))
-        definitions.setdefault(label, destination.strip().strip("<>"))
+        definitions.setdefault(
+            label,
+            _markdown_unescape(destination.strip().strip("<>")),
+        )
         for consumed in lines[index : index + consumed_lines]:
             visible_lines.append(
                 "".join("\n" if char == "\n" else " " for char in consumed),
@@ -515,12 +567,12 @@ def _markdown_reference_containers(
             prefixes.append(("quote", 0))
             value = value[quote.end() :]
             continue
-        list_item = MARKDOWN_LIST_MARKER.match(value)
-        if list_item is None or _markdown_indent_columns(value) > 3:
+        list_prefix = _markdown_list_prefix(value)
+        if list_prefix is None:
             break
-        content_indent = _markdown_column_width(value[: list_item.end()])
+        prefix_end, content_indent = list_prefix
         prefixes.append(("indent", content_indent))
-        value = value[list_item.end() :]
+        value = value[prefix_end:]
     return value, tuple(prefixes)
 
 
@@ -546,6 +598,36 @@ def _normalize_reference_label(label: str) -> str:
     return re.sub(r"\s+", " ", label.strip()).casefold()
 
 
+def _markdown_unescape(value: str) -> str:
+    """Decode the ASCII punctuation escapes permitted by CommonMark."""
+    rendered: list[str] = []
+    position = 0
+    while position < len(value):
+        if (
+            value[position] == "\\"
+            and position + 1 < len(value)
+            and value[position + 1] in MARKDOWN_ESCAPABLE
+        ):
+            position += 1
+        rendered.append(value[position])
+        position += 1
+    return "".join(rendered)
+
+
+def _mask_markdown_html_comments(text: str) -> str:
+    """Mask rendered-out HTML comments while retaining source line structure."""
+    characters = list(text)
+    position = 0
+    while (start := text.find("<!--", position)) >= 0:
+        closing = text.find("-->", start + 4)
+        end = len(text) if closing < 0 else closing + 3
+        for index in range(start, end):
+            if characters[index] != "\n":
+                characters[index] = " "
+        position = end
+    return "".join(characters)
+
+
 def _mask_markdown_code(text: str) -> str:
     """Mask code while preserving rendered content inside list containers."""
 
@@ -557,63 +639,90 @@ def _mask_markdown_code(text: str) -> str:
     fence_character: str | None = None
     fence_length = 0
     fence_container_indent = 0
+    fence_quote_depth = 0
     list_content_indents: list[int] = []
+    paragraph_container: tuple[int, int] | None = None
+    paragraph_open = False
     for line in lines:
-        container_line = _markdown_strip_blockquotes(line)
+        container_line, quote_depth = _markdown_strip_blockquotes_with_depth(line)
         stripped = container_line.strip(" \t\r\n")
         leading_columns = _markdown_indent_columns(container_line)
+        if fence_character is not None and (
+            quote_depth < fence_quote_depth
+            or (stripped and leading_columns < fence_container_indent)
+        ):
+            fence_character = None
+            fence_length = 0
+            fence_container_indent = 0
+            fence_quote_depth = 0
         if stripped and fence_character is None:
             while list_content_indents and leading_columns < list_content_indents[-1]:
                 list_content_indents.pop()
 
         container_indent = list_content_indents[-1] if list_content_indents else 0
-        relative_line = _markdown_strip_blockquotes(
-            _markdown_remove_indent(container_line, container_indent),
-        )
-        match = MARKDOWN_FENCE.match(relative_line)
-        if fence_character is None:
-            if match is not None:
-                opening_fence = match.group("fence")
-                info_string = relative_line[match.end() :].rstrip("\r\n")
-                if opening_fence[0] == "`" and "`" in info_string:
-                    match = None
-            if match is not None:
-                fence = match.group("fence")
-                fence_character = fence[0]
-                fence_length = len(fence)
-                fence_container_indent = container_indent
-                visible.append(masked(line))
-            else:
-                list_match = MARKDOWN_LIST_MARKER.match(relative_line)
-                relative_indent = _markdown_indent_columns(relative_line)
-                if list_match is not None and 0 <= relative_indent <= 3:
-                    content_indent = container_indent + _markdown_column_width(
-                        relative_line[: list_match.end()],
-                    )
-                    list_content_indents.append(content_indent)
-                    visible.append(line)
-                elif relative_indent >= 4:
-                    visible.append(masked(line))
-                else:
-                    visible.append(line)
-            continue
+        current_container = (quote_depth, container_indent)
+        if paragraph_container != current_container:
+            paragraph_open = False
+            paragraph_container = current_container
 
-        visible.append(masked(line))
-        relative_line = _markdown_strip_blockquotes(
-            _markdown_remove_indent(
+        if fence_character is not None:
+            visible.append(masked(line))
+            relative_line = _markdown_remove_indent(
                 container_line,
                 fence_container_indent,
-            ),
-        )
-        match = MARKDOWN_FENCE.match(relative_line)
-        if match is None:
+            )
+            match = MARKDOWN_FENCE.match(relative_line)
+            if match is None:
+                continue
+            fence = match.group("fence")
+            remainder = relative_line[match.end() :].strip()
+            if (
+                fence[0] == fence_character
+                and len(fence) >= fence_length
+                and not remainder
+            ):
+                fence_character = None
+                fence_length = 0
+                fence_container_indent = 0
+                fence_quote_depth = 0
             continue
-        fence = match.group("fence")
-        remainder = relative_line[match.end() :].strip()
-        if fence[0] == fence_character and len(fence) >= fence_length and not remainder:
-            fence_character = None
-            fence_length = 0
-            fence_container_indent = 0
+
+        relative_line = _markdown_remove_indent(container_line, container_indent)
+        match = MARKDOWN_FENCE.match(relative_line)
+        if match is not None:
+            opening_fence = match.group("fence")
+            info_string = relative_line[match.end() :].rstrip("\r\n")
+            if opening_fence[0] == "`" and "`" in info_string:
+                match = None
+        if match is not None:
+            fence = match.group("fence")
+            fence_character = fence[0]
+            fence_length = len(fence)
+            fence_container_indent = container_indent
+            fence_quote_depth = quote_depth
+            paragraph_open = False
+            visible.append(masked(line))
+            continue
+
+        list_prefix = _markdown_list_prefix(relative_line)
+        relative_indent = _markdown_indent_columns(relative_line)
+        if list_prefix is not None:
+            prefix_end, prefix_columns = list_prefix
+            content_indent = container_indent + prefix_columns
+            list_content_indents.append(content_indent)
+            content = relative_line[prefix_end:]
+            paragraph_container = (quote_depth, content_indent)
+            if _markdown_indent_columns(content) >= 4:
+                paragraph_open = False
+                visible.append(masked(line))
+            else:
+                paragraph_open = _markdown_opens_paragraph(content)
+                visible.append(line)
+        elif relative_indent >= 4 and not paragraph_open:
+            visible.append(masked(line))
+        else:
+            visible.append(line)
+            paragraph_open = _markdown_opens_paragraph(relative_line)
 
     rendered = "".join(visible)
     characters = list(rendered)
@@ -669,11 +778,44 @@ def _markdown_indent_columns(value: str) -> int:
     return columns
 
 
+def _markdown_list_prefix(value: str) -> tuple[int, int] | None:
+    """Return a list prefix end/width while preserving excess marker padding."""
+    match = MARKDOWN_LIST_MARKER.match(value)
+    if match is None or _markdown_indent_columns(value) > 3:
+        return None
+    spacing_start = match.start("spacing")
+    prefix_before_spacing = _markdown_column_width(value[:spacing_start])
+    spacing_columns = (
+        _markdown_column_width(value[: match.end()]) - prefix_before_spacing
+    )
+    prefix_end = match.end() if spacing_columns <= 4 else spacing_start + 1
+    return prefix_end, _markdown_column_width(value[:prefix_end])
+
+
 def _markdown_strip_blockquotes(value: str) -> str:
     """Strip nested CommonMark blockquote markers for code classification."""
+    return _markdown_strip_blockquotes_with_depth(value)[0]
+
+
+def _markdown_strip_blockquotes_with_depth(value: str) -> tuple[str, int]:
+    """Strip nested blockquote markers and return their container depth."""
+    depth = 0
     while (match := MARKDOWN_BLOCKQUOTE.match(value)) is not None:
         value = value[match.end() :]
-    return value
+        depth += 1
+    return value, depth
+
+
+def _markdown_opens_paragraph(value: str) -> bool:
+    """Return whether a visible line keeps an ordinary paragraph open."""
+    stripped = value.strip(" \t\r\n")
+    if not stripped or _markdown_indent_columns(value) >= 4:
+        return False
+    if re.match(r"^(?:#{1,6}(?:[ \t]+|$)|(?:[-*_][ \t]*){3,}$)", stripped):
+        return False
+    if MARKDOWN_FENCE.match(value) is not None or _markdown_list_prefix(value) is not None:
+        return False
+    return not stripped.startswith(("<", ">"))
 
 
 def _markdown_column_width(value: str) -> int:
@@ -726,6 +868,7 @@ def _findings(
     record_errors: list[str],
     signals: dict[str, int],
     broken_local_links: list[str],
+    markdown_limit_exceeded: bool,
 ) -> list[dict[str, str]]:
     findings: list[dict[str, str]] = []
     if not readme:
@@ -747,6 +890,18 @@ def _findings(
                 "severity": "error",
                 "code": "broken-local-links",
                 "message": f"{len(broken_local_links)} broken local link(s): {preview}",
+            },
+        )
+    if markdown_limit_exceeded:
+        findings.append(
+            {
+                "severity": "error",
+                "code": "markdown-input-limit",
+                "message": (
+                    "Markdown audit input exceeds the repository-wide "
+                    f"{MAX_MARKDOWN_FILES}-file or "
+                    f"{MAX_MARKDOWN_REPOSITORY_BYTES}-byte limit."
+                ),
             },
         )
     for dimension, signal_count in signals.items():

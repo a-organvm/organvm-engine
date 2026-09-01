@@ -16,6 +16,7 @@ import pytest
 import yaml
 
 from organvm_engine.cli.docs import cmd_docs_audit, cmd_docs_validate
+from organvm_engine.documentation import audit as documentation_audit
 from organvm_engine.documentation import record as documentation_record
 from organvm_engine.documentation.audit import audit_repository
 from organvm_engine.documentation.record import load_project_record, validate_project_record
@@ -708,6 +709,66 @@ def test_markdown_audit_treats_even_backslashes_as_an_unescaped_link(
     )
 
 
+def test_markdown_link_opener_matching_has_linear_aggregate_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    original = documentation_audit._markdown_character_is_escaped
+
+    def bounded_escape_check(text: str, position: int) -> bool:
+        nonlocal calls
+        calls += 1
+        if calls > 1_000:
+            raise AssertionError("link opener matching rescanned the Markdown prefix")
+        return original(text, position)
+
+    monkeypatch.setattr(
+        documentation_audit,
+        "_markdown_character_is_escaped",
+        bounded_escape_check,
+    )
+
+    assert documentation_audit._markdown_destinations("](" * 500) == []
+    assert calls <= 500
+
+
+@pytest.mark.parametrize(
+    "markdown",
+    [
+        "[Guide](docs/missing.md",
+        '[Guide](docs/missing.md "unfinished title"',
+    ],
+)
+def test_markdown_audit_ignores_unclosed_inline_links(
+    tmp_path: Path,
+    markdown: str,
+) -> None:
+    (tmp_path / "README.md").write_text(f"# Example\n\n{markdown}\n", encoding="utf-8")
+
+    result = audit_repository(tmp_path)
+
+    assert not any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+@pytest.mark.parametrize(
+    "comment",
+    [
+        "<!-- [Retired](missing.md) -->",
+        "<!-- disabled\n[Retired](missing.md)",
+    ],
+)
+def test_markdown_audit_masks_html_comments(tmp_path: Path, comment: str) -> None:
+    (tmp_path / "README.md").write_text(f"# Example\n\n{comment}\n", encoding="utf-8")
+
+    result = audit_repository(tmp_path)
+
+    assert not any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
 def test_markdown_audit_ignores_links_inside_indented_code(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text(
         "# Example\n\n"
@@ -801,6 +862,54 @@ def test_markdown_audit_masks_blockquote_fences_inside_lists(tmp_path: Path) -> 
     )
 
 
+@pytest.mark.parametrize(
+    "fenced_container",
+    [
+        "> ```markdown\n> code\n",
+        "- Samples:\n\n    ```markdown\n    code\n",
+    ],
+)
+def test_unclosed_fences_end_with_their_container(
+    tmp_path: Path,
+    fenced_container: str,
+) -> None:
+    (tmp_path / "README.md").write_text(
+        f"# Example\n\n{fenced_container}[Guide](missing-guide.md)\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_indented_paragraph_continuations_remain_rendered(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\nText\n    [Guide](missing-guide.md)\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_multiline_inline_links_support_crlf(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_bytes(
+        b"# Example\r\n\r\n[Guide](\r\n docs/missing.md)\r\n",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
 def test_markdown_audit_does_not_read_an_oversized_root_readme(
     tmp_path: Path,
 ) -> None:
@@ -815,6 +924,33 @@ def test_markdown_audit_does_not_read_an_oversized_root_readme(
     assert result["has_readme"] is False
     assert result["markdown_files"] == 0
     assert any(finding["code"] == "missing-readme" for finding in result["findings"])
+
+
+@pytest.mark.parametrize(
+    ("limit_name", "limit"),
+    [
+        ("MAX_MARKDOWN_FILES", 1),
+        ("MAX_MARKDOWN_REPOSITORY_BYTES", 12),
+    ],
+)
+def test_markdown_audit_fails_closed_on_repository_wide_input_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    limit_name: str,
+    limit: int,
+) -> None:
+    monkeypatch.setattr(documentation_audit, limit_name, limit)
+    (tmp_path / "README.md").write_text("# Example\n", encoding="utf-8")
+    (tmp_path / "SECOND.md").write_text("# Second document\n", encoding="utf-8")
+
+    result = audit_repository(tmp_path)
+
+    assert result["markdown_input_limit_exceeded"] is True
+    assert any(
+        finding["code"] == "markdown-input-limit"
+        and finding["severity"] == "error"
+        for finding in result["findings"]
+    )
 
 
 def test_markdown_audit_bounds_project_record_reads(tmp_path: Path) -> None:
@@ -1004,6 +1140,8 @@ def test_committed_notebook_uses_pinned_inputs_and_explicit_integrity_gates() ->
     assert "verify_integrity=True" not in code
     assert "input_manifest = {" not in code
     assert "assert " not in code
+    assert "def normalize_archived" in code
+    assert 'inventory["repository"].str.casefold().nunique() == 323' in code
     for cell in notebook.cells:
         expected_id = hashlib.sha256(
             f"{cell.cell_type}\0{cell.source}".encode(),
@@ -1524,6 +1662,27 @@ def test_web_uris_require_a_valid_host_and_port(uri: str) -> None:
     assert "links.demo must be an absolute HTTP(S) URI" in validate_project_record(record)
 
 
+def test_duplicate_detection_does_not_rescan_the_input_list() -> None:
+    class CountForbiddenList(list[str]):
+        def count(self, value: str) -> int:
+            raise AssertionError(f"quadratic count called for {value!r}")
+
+    values = CountForbiddenList(["beta", "alpha", "beta", "alpha", "gamma"])
+
+    assert documentation_record._duplicates(values) == ["alpha", "beta"]
+
+
+def test_timezone_conversion_overflow_is_a_validation_error() -> None:
+    record = _record()
+    record["generated_at"] = "0001-01-01T00:00:00+23:59"
+    record["verified_at"] = "0001-01-01T00:00:00+23:59"
+
+    errors = validate_project_record(record)
+
+    assert "generated_at must be an ISO 8601 date-time with a timezone" in errors
+    assert "verified_at must be an ISO 8601 date-time with a timezone" in errors
+
+
 def test_reference_style_markdown_links_are_audited(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text(
         "# Example\n\n[Guide][guide]\n\n[guide]: docs/missing.md\n",
@@ -1603,6 +1762,38 @@ def test_list_and_unindented_reference_destinations_are_audited(
     )
 
 
+def test_reference_destinations_decode_commonmark_punctuation_escapes(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/a(b).md").write_text("# Guide\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n[Guide][guide]\n\n[guide]: docs/a\\(b\\).md\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert not any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
+def test_excess_list_padding_keeps_reference_definitions_in_code(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "README.md").write_text(
+        "# Example\n\n-     [guide]: docs/missing.md\n\n[Guide][guide]\n",
+        encoding="utf-8",
+    )
+
+    result = audit_repository(tmp_path)
+
+    assert not any(
+        finding["code"] == "broken-local-links" for finding in result["findings"]
+    )
+
+
 def test_symlinked_project_record_is_not_read(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
     repository.mkdir()
@@ -1653,3 +1844,31 @@ def test_builder_rejects_explicit_invalid_visibility() -> None:
             source="fixture",
             index=0,
         )
+
+
+@pytest.mark.parametrize("value", ["false", 0, None, []])
+def test_builder_rejects_nonboolean_archived_values(value: object) -> None:
+    builder_path = (
+        Path(__file__).parents[1] / "docs/audits/build_reader_mode_estate_audit.py"
+    )
+    tree = ast.parse(builder_path.read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "source_archived"
+    )
+    namespace: dict[str, object] = {}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(builder_path), "exec"), namespace)
+
+    with pytest.raises(RuntimeError, match="invalid archived value"):
+        namespace["source_archived"](
+            {"archived": value},
+            source="fixture",
+            index=0,
+        )
+
+    assert namespace["source_archived"](
+        {"archived": False},
+        source="fixture",
+        index=0,
+    ) is False

@@ -65,6 +65,17 @@ def source_visibility(row: dict, *, source: str, index: int) -> str:
     raise RuntimeError(f"{source} row {index} has no valid visibility")
 
 
+def source_archived(row: dict, *, source: str, index: int) -> bool:
+    """Resolve archived state without coercing malformed values to truthiness."""
+    metadata = row.get("metadata", {})
+    if not isinstance(metadata, dict):
+        raise RuntimeError(f"{source} row {index} has invalid metadata")
+    value = row.get("archived", metadata.get("archived", False))
+    if not isinstance(value, bool):
+        raise RuntimeError(f"{source} row {index} has invalid archived value: {value!r}")
+    return value
+
+
 def verify_live_inputs_against_manifest() -> dict:
     """Fail before notebook execution unless live inputs match the pinned manifest."""
     try:
@@ -113,6 +124,7 @@ def verify_live_inputs_against_manifest() -> dict:
             if not isinstance(row, dict):
                 raise RuntimeError(f"{source} row {index} is not an object")
             visibility_counts[source_visibility(row, source=source, index=index)] += 1
+            source_archived(row, source=source, index=index)
         actual = {
             "source_segment": source,
             "filename": filename,
@@ -484,7 +496,19 @@ cells = [
             return None
 
 
-        def normalize_row(source, bundle, row):
+        def normalize_archived(row, source, index):
+            metadata = row.get("metadata", {})
+            if not isinstance(metadata, dict):
+                raise TypeError(f"{source} row {index} has invalid metadata")
+            value = row.get("archived", metadata.get("archived", False))
+            if not isinstance(value, bool):
+                raise TypeError(
+                    f"{source} row {index} has invalid archived value: {value!r}"
+                )
+            return value
+
+
+        def normalize_row(source, bundle, row, index):
             repository = normalize_repository(source, bundle, row)
             scores = normalize_scores(row, repository)
             metadata = row.get("metadata", {})
@@ -509,7 +533,7 @@ cells = [
                 or row.get("priority")
                 or "unranked"
             )
-            archived = bool(row.get("archived", metadata.get("archived", False)))
+            archived = normalize_archived(row, source, index)
             return {
                 "repository": repository,
                 "source_segment": source,
@@ -536,14 +560,17 @@ cells = [
 
 
         rows = [
-            normalize_row(source, bundle, row)
+            normalize_row(source, bundle, row, index)
             for source, bundle in raw.items()
-            for row in bundle["repositories"]
+            for index, row in enumerate(bundle["repositories"])
         ]
         inventory = pd.DataFrame(rows).sort_values("repository").reset_index(drop=True)
 
         require(len(inventory) == 323, f"expected 323 rows, found {len(inventory)}")
-        require(inventory["repository"].nunique() == 323, "repository keys are not unique")
+        require(
+            inventory["repository"].str.casefold().nunique() == 323,
+            "repository keys are not unique case-insensitively",
+        )
         require(
             len(SOURCE_FILES) == 7,
             f"expected seven source segments, found {len(SOURCE_FILES)}",

@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import subprocess
+from collections import Counter
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -800,7 +801,7 @@ def _industry_evidence_errors(
 
 
 def _duplicates(values: list[str]) -> list[str]:
-    return sorted({value for value in values if values.count(value) > 1})
+    return sorted(value for value, count in Counter(values).items() if count > 1)
 
 
 def _contained_path(root: Path, relative: str) -> Path | None:
@@ -1201,7 +1202,10 @@ def _parse_datetime(value: Any) -> datetime | None:
         return None
     if parsed.tzinfo is None:
         return None
-    return parsed.astimezone(timezone.utc)
+    try:
+        return parsed.astimezone(timezone.utc)
+    except (OverflowError, ValueError):
+        return None
 
 
 def _assertion_evidence_binding_errors(
