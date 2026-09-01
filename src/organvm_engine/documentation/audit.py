@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from organvm_engine._stable_io import StableReadError, read_stable_regular_bytes
 from organvm_engine.documentation.record import load_project_record, validate_project_record
 
 DIMENSIONS = (
@@ -512,13 +513,13 @@ def _read_bounded_markdown(path: Path) -> str | None:
 
 
 def _read_bounded_markdown_payload(path: Path) -> tuple[str, int] | None:
-    """Read one bounded Markdown input and retain its exact byte count."""
+    """Read one stable, bounded Markdown input through no-follow binding."""
     try:
-        with path.open("rb") as stream:
-            payload = stream.read(MAX_MARKDOWN_FILE_BYTES + 1)
-    except OSError:
-        return None
-    if len(payload) > MAX_MARKDOWN_FILE_BYTES:
+        payload = read_stable_regular_bytes(
+            path,
+            maximum_bytes=MAX_MARKDOWN_FILE_BYTES,
+        )
+    except StableReadError:
         return None
     return payload.decode("utf-8", errors="replace"), len(payload)
 
@@ -1046,24 +1047,6 @@ def _markdown_reference_containers(
     return value, tuple(prefixes)
 
 
-def _markdown_apply_reference_containers(
-    value: str,
-    prefixes: tuple[tuple[str, int], ...],
-) -> str | None:
-    """Apply one definition line's quote/list prefixes to its continuation."""
-    for kind, columns in prefixes:
-        if kind == "quote":
-            quote = MARKDOWN_BLOCKQUOTE.match(value)
-            if quote is None:
-                return None
-            value = value[quote.end() :]
-            continue
-        if _markdown_indent_columns(value) < columns:
-            return None
-        value = _markdown_remove_indent(value, columns)
-    return value
-
-
 def _markdown_apply_container_prefixes_partial(
     value: str,
     prefixes: tuple[tuple[str, int], ...],
@@ -1153,14 +1136,6 @@ def _markdown_unescape(value: str) -> str:
         rendered.append(value[position])
         position += 1
     return "".join(rendered)
-
-
-def _decode_markdown_character_references(value: str) -> str:
-    """Decode only syntactically complete CommonMark character references."""
-    return MARKDOWN_CHARACTER_REFERENCE.sub(
-        lambda match: _decode_markdown_character_reference(match.group(0)),
-        value,
-    )
 
 
 def _decode_markdown_character_reference(reference: str) -> str:
@@ -1611,16 +1586,6 @@ def _markdown_strip_blockquotes_with_depth(value: str) -> tuple[str, int]:
         value = value[match.end() :]
         depth += 1
     return value, depth
-
-
-def _markdown_strip_blockquote_depth(value: str, depth: int) -> str | None:
-    """Strip exactly ``depth`` quote markers without consuming nested content."""
-    for _level in range(depth):
-        match = MARKDOWN_BLOCKQUOTE.match(value)
-        if match is None:
-            return None
-        value = value[match.end() :]
-    return value
 
 
 def _markdown_opens_paragraph(value: str) -> bool:

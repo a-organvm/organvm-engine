@@ -1199,3 +1199,21 @@ def test_docs_audit_cli_writes_markdown(tmp_path):
     )
     assert cmd_docs_audit(args) == 0
     assert "Reader-mode documentation audit" in output.read_text()
+
+
+def test_docs_audit_cli_reports_output_write_errors(tmp_path, capsys):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text("# Repo\n", encoding="utf-8")
+    output = tmp_path / "missing-parent" / "audit.md"
+    args = Namespace(
+        paths=[str(repo)],
+        workspace=None,
+        format="markdown",
+        json=False,
+        output=str(output),
+        strict=False,
+    )
+
+    assert cmd_docs_audit(args) == 1
+    assert "cannot write documentation audit" in capsys.readouterr().err

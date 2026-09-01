@@ -287,6 +287,9 @@ def test_receipt_cas_fails_closed_for_unsafe_git_marker(tmp_path) -> None:
 def test_receipt_cas_rejects_cross_device_git_admin(tmp_path, monkeypatch) -> None:
     import organvm_engine.contextmd.receipt as receipt_mod
 
+    if not Path("/proc").is_dir():
+        pytest.skip("procfs is required for descriptor replacement simulation")
+
     target = tmp_path / "context-sync.json"
     proc_fd = receipt_mod.os.open(
         "/proc",
@@ -796,6 +799,7 @@ def test_receipt_fsync_failure_never_unlinks_a_concurrent_replacement(
     import organvm_engine.contextmd.receipt as receipt_mod
 
     target = tmp_path / "context-sync.json"
+    real_fsync = receipt_mod.os.fsync
     real_rename = receipt_mod.os.rename
     replaced = False
     moved_public_names: list[str] = []
@@ -811,6 +815,7 @@ def test_receipt_fsync_failure_never_unlinks_a_concurrent_replacement(
             target.write_text("CONCURRENT\n", encoding="utf-8")
             replaced = True
             raise OSError("simulated parent fsync failure")
+        return real_fsync(descriptor)
 
     def track_public_rename(src, dst, *args, **kwargs):
         if src == target.name:

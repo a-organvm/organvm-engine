@@ -579,40 +579,37 @@ def write_context_sync_receipt(path: Path, receipt: dict[str, Any]) -> str:
         )
         staging_name = None
         os.fsync(cas_fd)
-        try:
-            if not _installed_receipt_matches(
-                parent_fd,
-                filename,
-                staging_status,
-                payload,
-            ):
-                raise ContextSyncReceiptError(
-                    "receipt destination changed during publication",
-                )
-            _assert_absolute_parent_is_live(path, parent_fd, "receipt destination")
-            os.fsync(parent_fd)
-            _assert_absolute_parent_is_live(path, parent_fd, "receipt destination")
-            if not _installed_receipt_matches(
-                parent_fd,
-                filename,
-                staging_status,
-                payload,
-            ):
-                raise ContextSyncReceiptError(
-                    "receipt destination changed during publication",
-                )
-            _assert_absolute_parent_is_live(path, parent_fd, "receipt destination")
-            if not _installed_receipt_matches(
-                parent_fd,
-                filename,
-                staging_status,
-                payload,
-            ):
-                raise ContextSyncReceiptError(
-                    "receipt destination changed during publication",
-                )
-        except Exception:
-            raise
+        if not _installed_receipt_matches(
+            parent_fd,
+            filename,
+            staging_status,
+            payload,
+        ):
+            raise ContextSyncReceiptError(
+                "receipt destination changed during publication",
+            )
+        _assert_absolute_parent_is_live(path, parent_fd, "receipt destination")
+        os.fsync(parent_fd)
+        _assert_absolute_parent_is_live(path, parent_fd, "receipt destination")
+        if not _installed_receipt_matches(
+            parent_fd,
+            filename,
+            staging_status,
+            payload,
+        ):
+            raise ContextSyncReceiptError(
+                "receipt destination changed during publication",
+            )
+        _assert_absolute_parent_is_live(path, parent_fd, "receipt destination")
+        if not _installed_receipt_matches(
+            parent_fd,
+            filename,
+            staging_status,
+            payload,
+        ):
+            raise ContextSyncReceiptError(
+                "receipt destination changed during publication",
+            )
     except Exception:
         if staging_name is not None and cas_fd is not None:
             with suppress(Exception):

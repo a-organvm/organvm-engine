@@ -102,7 +102,14 @@ def cmd_docs_audit(args) -> int:
         rendered = _render_table(results)
 
     if args.output:
-        Path(args.output).write_text(rendered, encoding="utf-8")
+        try:
+            Path(args.output).write_text(rendered, encoding="utf-8")
+        except OSError as exc:
+            print(
+                f"Error: cannot write documentation audit to {args.output}: {exc}",
+                file=sys.stderr,
+            )
+            return 1
         print(f"Documentation audit written to {args.output}")
     else:
         sys.stdout.write(rendered)

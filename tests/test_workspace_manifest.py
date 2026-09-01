@@ -1,11 +1,11 @@
 """Tests for workspace manifest."""
 
-import os
 from pathlib import Path
 
 import pytest
 import yaml
 
+from conftest import replace_with_nonregular
 from organvm_engine.seed.manifest import (
     is_partial_workspace,
     load_workspace_manifest,
@@ -13,20 +13,6 @@ from organvm_engine.seed.manifest import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
-
-
-def _replace_manifest(path: Path, kind: str, outside: Path) -> None:
-    path.unlink()
-    if kind == "fifo":
-        if not hasattr(os, "mkfifo"):
-            pytest.skip("FIFO creation is unavailable")
-        os.mkfifo(path)
-    elif kind == "symlink":
-        path.symlink_to(outside)
-    elif kind == "directory":
-        path.mkdir()
-    else:  # pragma: no cover - parametrization is closed above
-        raise AssertionError(f"unknown replacement kind: {kind}")
 
 
 class TestManifestLoading:
@@ -74,7 +60,7 @@ class TestManifestLoading:
         def swap_after_is_file(path, *args, **kwargs):
             nonlocal swapped
             if Path(path) == manifest_path and not swapped:
-                _replace_manifest(manifest_path, replacement_kind, outside)
+                replace_with_nonregular(manifest_path, replacement_kind, outside)
                 swapped = True
             return real_read(path, *args, **kwargs)
 

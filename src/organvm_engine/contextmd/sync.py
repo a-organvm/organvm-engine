@@ -153,11 +153,13 @@ def sync_all(
         )
 
     if receipt_enabled:
-        organ_directory_map = _registry_organ_directory_map(reg)
+        target_organs = organs or [str(key) for key in reg.get("organs", {})]
+        organ_directory_map = _registry_organ_directory_map(reg, target_organs)
     else:
         from organvm_engine.git.superproject import REGISTRY_KEY_MAP
 
         organ_directory_map = REGISTRY_KEY_MAP
+        target_organs = organs or list(organ_directory_map)
 
     all_seeds = []
     repo_to_seed = {}
@@ -225,7 +227,6 @@ def sync_all(
     target_preimages: list[dict[str, Any]] = []
     rendered_remote_references: list[dict[str, str]] = []
 
-    target_organs = organs or list(organ_directory_map.keys())
     if receipt_enabled:
         target_preimages = _preflight_context_outputs(
             workspace=ws,
@@ -235,6 +236,16 @@ def sync_all(
             organ_directory_map=organ_directory_map,
             workspace_identity=receipt_workspace_identity,
         )
+        receipt_target_absolute = _lexical_absolute(Path(receipt_path))
+        output_targets = {
+            _lexical_absolute(ws / str(binding["path"]))
+            for binding in target_preimages
+        }
+        if receipt_target_absolute in output_targets:
+            raise RuntimeError(
+                "receipt destination collides with a generated context output: "
+                f"{receipt_target_absolute}",
+            )
     target_preimage_map = {
         str(binding["path"]): binding for binding in target_preimages
     }
@@ -406,6 +417,27 @@ def sync_all(
 
     if receipt_enabled:
         assert receipt_path is not None
+        rediscovered_seed_paths = discover_seeds(ws)
+        for root in extra_roots:
+            rediscovered_seed_paths.extend(discover_seeds(root))
+            rediscovered_seed_paths.extend(_discover_flat_seeds(root))
+        rediscovered_seed_paths = sorted(
+            set(rediscovered_seed_paths),
+            key=_lexical_absolute,
+        )
+        if rediscovered_seed_paths != seed_paths:
+            raise RuntimeError(
+                "seed evidence path set changed while preparing receipted sync",
+            )
+        rediscovered_sops = discover_sops(workspace=ws)
+        for root in extra_roots:
+            rediscovered_sops.extend(discover_sops(workspace=root))
+            rediscovered_sops.extend(_discover_flat_sops(root))
+        if bind_context_sync_sops(rediscovered_sops, ws) != receipt_sop_inputs:
+            raise RuntimeError(
+                "SOP evidence path set changed while preparing receipted sync",
+            )
+
         from organvm_engine.contextmd.receipt import (
             build_context_sync_receipt,
             write_context_sync_receipt,
@@ -773,6 +805,8 @@ def _inject_section_result(
     import re
 
     custody: tuple[str, str] | None = None
+    existing_payload: bytes | None = None
+    parent_identity: dict[str, int] | None = None
     if custody_root is not None:
         parent_fd, filename, output_label = _open_custody_parent(
             file_path,
@@ -796,6 +830,7 @@ def _inject_section_result(
     input_binding: dict[str, Any] | None = None
     if custody is not None:
         _filename, output_label = custody
+        assert parent_identity is not None
         if existing_payload is None:
             input_binding = {
                 "path": output_label,
@@ -952,14 +987,17 @@ def _render_existing_context(
             content,
             flags=re_module.DOTALL,
         )
-        if new_content == content:
+        healing_changed_content = content != original_content.strip()
+        if new_content == content and not healing_changed_content:
             return "unchanged", original_content, None
         timestamp_pattern = (
             r"(?m)^\*Last synced: "
             r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\*$"
         )
-        if re_module.sub(timestamp_pattern, "*Last synced: <semantic>*", new_content) == (
-            re_module.sub(timestamp_pattern, "*Last synced: <semantic>*", content)
+        if (
+            not healing_changed_content
+            and re_module.sub(timestamp_pattern, "*Last synced: <semantic>*", new_content)
+            == re_module.sub(timestamp_pattern, "*Last synced: <semantic>*", content)
         ):
             return "unchanged", original_content, None
         return (
@@ -1141,11 +1179,19 @@ def _safe_path_component(value: object) -> bool:
     )
 
 
-def _registry_organ_directory_map(registry: dict[str, Any]) -> dict[str, str]:
-    """Derive receipted output roots only from the already bound registry."""
+def _registry_organ_directory_map(
+    registry: dict[str, Any],
+    organ_keys: list[str] | None = None,
+) -> dict[str, str]:
+    """Derive receipted output roots only for the selected registry organs."""
     mapping: dict[str, str] = {}
     claimed: dict[str, str] = {}
-    for raw_key, organ in registry.get("organs", {}).items():
+    registry_organs = registry.get("organs", {})
+    selected_keys = list(registry_organs) if organ_keys is None else organ_keys
+    for raw_key in selected_keys:
+        if raw_key not in registry_organs:
+            continue
+        organ = registry_organs[raw_key]
         key = str(raw_key)
         candidates = {
             value
@@ -1194,7 +1240,7 @@ def _read_custody_payload(parent_fd: int, filename: str) -> bytes | None:
         total = 0
         while chunk := os.read(descriptor, 128 * 1024):
             total += len(chunk)
-            if total > 16_000_000:
+            if total > MAX_CONTEXT_OUTPUT_BYTES:
                 raise RuntimeError(f"context output exceeds size limit: {filename}")
             chunks.append(chunk)
         after = os.fstat(descriptor)
@@ -1910,7 +1956,7 @@ def _read_open_custody_payload(descriptor: int, filename: str) -> bytes:
     total = 0
     while chunk := os.read(descriptor, 128 * 1024):
         total += len(chunk)
-        if total > 16_000_000:
+        if total > MAX_CONTEXT_OUTPUT_BYTES:
             raise RuntimeError(f"context output exceeds size limit: {filename}")
         chunks.append(chunk)
     after = os.fstat(descriptor)

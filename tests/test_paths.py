@@ -1,10 +1,10 @@
 """Tests for workspace path resolution."""
 
-import os
 from pathlib import Path
 
 import pytest
 
+from conftest import replace_with_nonregular
 from organvm_engine import paths
 
 
@@ -76,15 +76,11 @@ class TestPaths:
         def swap_after_is_file(path, *args, **kwargs):
             nonlocal swapped
             if Path(path) == config_path and not swapped:
-                config_path.unlink()
-                if replacement_kind == "fifo":
-                    if not hasattr(os, "mkfifo"):
-                        pytest.skip("FIFO creation is unavailable")
-                    os.mkfifo(config_path)
-                elif replacement_kind == "symlink":
-                    config_path.symlink_to(outside)
-                else:
-                    config_path.mkdir()
+                replace_with_nonregular(
+                    config_path,
+                    replacement_kind,
+                    outside,
+                )
                 swapped = True
             return real_read(path, *args, **kwargs)
 

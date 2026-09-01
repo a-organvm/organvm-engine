@@ -1,11 +1,11 @@
 """Tests for sop.discover module."""
 
-import os
 import stat
 from pathlib import Path
 
 import pytest
 
+from conftest import replace_with_nonregular
 from organvm_engine._stable_io import StableReadError, read_stable_regular_bytes
 from organvm_engine.sop.discover import (
     _derive_sop_name,
@@ -13,20 +13,6 @@ from organvm_engine.sop.discover import (
     _parse_frontmatter,
     discover_sops,
 )
-
-
-def _replace_with_nonregular(path: Path, kind: str, outside: Path) -> None:
-    path.unlink()
-    if kind == "fifo":
-        if not hasattr(os, "mkfifo"):
-            pytest.skip("FIFO creation is unavailable")
-        os.mkfifo(path)
-    elif kind == "symlink":
-        path.symlink_to(outside)
-    elif kind == "directory":
-        path.mkdir()
-    else:  # pragma: no cover - parametrization is closed above
-        raise AssertionError(f"unknown replacement kind: {kind}")
 
 
 def _make_sop(tmp_path: Path, org: str, repo: str, filename: str, content: str = "") -> Path:
@@ -314,7 +300,7 @@ class TestDiscoverSops:
         def swap_after_discovery(path, *args, **kwargs):
             nonlocal swapped
             if Path(path) == sop_path and not swapped:
-                _replace_with_nonregular(sop_path, replacement_kind, outside)
+                replace_with_nonregular(sop_path, replacement_kind, outside)
                 swapped = True
             return real_read(path, *args, **kwargs)
 
@@ -338,8 +324,6 @@ class TestDiscoverSops:
     ):
         import organvm_engine.sop.discover as discover_mod
 
-        if not hasattr(os, "mkfifo"):
-            pytest.skip("FIFO creation is unavailable")
         seed = tmp_path / "seed.yaml"
         seed.write_text("repo: bound-name\norg: bound-org\n", encoding="utf-8")
         (tmp_path / ".sops").mkdir()
@@ -352,7 +336,7 @@ class TestDiscoverSops:
         def swap_seed(path, *args, **kwargs):
             nonlocal swapped
             if Path(path) == seed and not swapped:
-                _replace_with_nonregular(seed, "fifo", outside)
+                replace_with_nonregular(seed, "fifo", outside)
                 swapped = True
             return real_read(path, *args, **kwargs)
 
@@ -389,7 +373,7 @@ def test_stable_reader_rejects_stat_to_open_nonregular_swap(
             and not flags & getattr(stable_io.os, "O_DIRECTORY", 0)
             and not swapped
         ):
-            _replace_with_nonregular(source, replacement_kind, outside)
+            replace_with_nonregular(source, replacement_kind, outside)
             swapped = True
             if replacement_kind == "fifo":
                 assert flags & getattr(stable_io.os, "O_NONBLOCK", 0)

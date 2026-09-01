@@ -15,6 +15,8 @@ from urllib.parse import urlparse
 
 import yaml
 
+from organvm_engine._stable_io import StableReadError, read_stable_regular_bytes
+
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
     """Safe YAML loader that rejects ambiguous duplicate mapping keys."""
@@ -150,6 +152,10 @@ REQUIRED_FIELDS = (
     "generated_at",
     "verified_at",
 )
+PROJECT_ID = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+AUTHORSHIP_FIELDS = frozenset(
+    {"owner", "role", "contributions", "collaborators", "generated", "inherited", "external"},
+)
 
 
 def load_project_record(path: str | Path) -> dict[str, Any]:
@@ -161,6 +167,74 @@ def load_project_record(path: str | Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"Project record is not a mapping: {record_path}")
     return _normalize_structured_data(data, record_path)
+
+
+def _builtin_record_shape_errors(record: Mapping[str, Any]) -> list[str]:
+    """Enforce the project-record.v1 baseline without an optional schema file."""
+    errors: list[str] = []
+    project_id = record.get("project_id")
+    if not isinstance(project_id, str) or PROJECT_ID.fullmatch(project_id) is None:
+        errors.append("project_id must be a lowercase slug")
+
+    for field, minimum, maximum in (
+        ("name", 1, 160),
+        ("one_sentence", 20, 300),
+        ("problem", 20, None),
+    ):
+        value = record.get(field)
+        if (
+            not isinstance(value, str)
+            or len(value) < minimum
+            or (maximum is not None and len(value) > maximum)
+        ):
+            rendered_maximum = "" if maximum is None else f" and at most {maximum}"
+            errors.append(
+                f"{field} must be a string with at least {minimum}"
+                f"{rendered_maximum} characters",
+            )
+
+    intended_users = record.get("intended_users")
+    if (
+        not isinstance(intended_users, list)
+        or not intended_users
+        or any(not isinstance(value, str) or len(value) < 2 for value in intended_users)
+        or len(set(intended_users)) != len(intended_users)
+    ):
+        errors.append(
+            "intended_users must be a non-empty list of unique strings "
+            "with at least 2 characters",
+        )
+
+    authorship = record.get("authorship")
+    if not isinstance(authorship, Mapping):
+        errors.append("authorship must be a mapping")
+    else:
+        unknown = sorted(
+            str(key) for key in authorship if not isinstance(key, str) or key not in AUTHORSHIP_FIELDS
+        )
+        if unknown:
+            errors.append(f"authorship contains unsupported fields: {unknown}")
+        for field, minimum in (("owner", 1), ("role", 3)):
+            value = authorship.get(field)
+            if not isinstance(value, str) or len(value) < minimum:
+                errors.append(
+                    f"authorship.{field} must be a string with at least {minimum} characters",
+                )
+        for field in ("contributions", "collaborators", "generated", "inherited", "external"):
+            value = authorship.get(field)
+            if field == "contributions" and (not isinstance(value, list) or not value):
+                errors.append("authorship.contributions must be a non-empty list")
+                continue
+            if value is None and field != "contributions":
+                continue
+            if (
+                not isinstance(value, list)
+                or any(not isinstance(item, str) for item in value)
+                or len(set(value)) != len(value)
+                or (field == "contributions" and any(len(item) < 2 for item in value))
+            ):
+                errors.append(f"authorship.{field} must be a list of unique strings")
+    return errors
 
 
 def validate_project_record(
@@ -190,6 +264,7 @@ def validate_project_record(
     for field in REQUIRED_FIELDS:
         if field not in record:
             errors.append(f"missing required field: {field}")
+    errors.extend(_builtin_record_shape_errors(record))
 
     if record.get("contract_name") != CONTRACT_NAME:
         errors.append(
@@ -834,14 +909,6 @@ def _validate_local_file(root: Path, relative: str, label: str, errors: list[str
         errors.append(f"{label} does not exist: {relative}")
 
 
-def _valid_datetime(value: str) -> bool:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    return parsed.tzinfo is not None
-
-
 def _valid_web_uri(value: str) -> bool:
     if any(character.isspace() for character in value):
         return False
@@ -1308,18 +1375,23 @@ def _assertion_evidence_binding_errors(
                     label=label,
                 ),
             )
-        cache_key = _cached_evidence_identity(
+        initial_identity = _cached_evidence_identity(
             root,
             evidence_reference,
             evidence_identity_cache,
         )
-        if cache_key is None:
-            cache_key = f"file-path:{candidate}"
+        cache_key = initial_identity or f"file-path:{candidate}"
         cached_digest = evidence_digest_cache.get(cache_key)
         if cached_digest is None:
             try:
-                cached_digest = ("sha256:" + _stream_sha256(candidate), None)
-            except OSError as exc:
+                local_digest = "sha256:" + _stream_sha256(candidate)
+                final_identity = _resolved_evidence_identity(root, evidence_reference)
+                if initial_identity is None or final_identity != initial_identity:
+                    raise StableReadError(
+                        f"evidence identity changed while hashing: {evidence_reference}",
+                    )
+                cached_digest = (local_digest, None)
+            except (OSError, StableReadError) as exc:
                 cached_digest = (None, str(exc))
             evidence_digest_cache[cache_key] = cached_digest
         actual, read_error = cached_digest
@@ -1444,12 +1516,9 @@ def _git_evidence_binding_errors(
 
 
 def _stream_sha256(path: Path) -> str:
-    """Hash one local file without allocating its complete contents."""
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
+    """Hash one bounded, stable regular file through no-follow path binding."""
+    payload = read_stable_regular_bytes(path)
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _stream_git_object_sha256(
@@ -1598,16 +1667,18 @@ def _normalize_structured_data(data: dict[str, Any], path: Path) -> dict[str, An
 
 
 def _read_bounded_record_text(path: Path) -> str:
-    """Read one structured record without allowing unbounded allocation."""
+    """Read one stable, bounded structured record without following replacements."""
     try:
-        with path.open("rb") as stream:
-            payload = stream.read(MAX_STRUCTURED_RECORD_BYTES + 1)
-    except OSError:
-        raise
-    if len(payload) > MAX_STRUCTURED_RECORD_BYTES:
-        raise ValueError(
-            f"structured record exceeds {MAX_STRUCTURED_RECORD_BYTES} bytes: {path}",
+        payload = read_stable_regular_bytes(
+            path,
+            maximum_bytes=MAX_STRUCTURED_RECORD_BYTES,
         )
+    except StableReadError as exc:
+        if "exceeds size limit" in str(exc):
+            raise ValueError(
+                f"structured record exceeds {MAX_STRUCTURED_RECORD_BYTES} bytes: {path}",
+            ) from exc
+        raise OSError(str(exc)) from exc
     try:
         return payload.decode("utf-8")
     except UnicodeDecodeError as exc:

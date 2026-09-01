@@ -13,6 +13,7 @@ import io
 import json
 import os
 import re
+import stat
 import tempfile
 import tokenize
 import traceback
@@ -22,9 +23,23 @@ from textwrap import dedent
 import nbformat
 from nbclient import NotebookClient
 
+from organvm_engine.documentation.privacy import (
+    PUBLIC_EXACT_REWRITES,
+    PUBLIC_PROSE_REWRITES,
+    private_only_repository_slugs,
+    repository_reference_pattern,
+)
+
 HERE = Path(__file__).resolve().parent
 NOTEBOOK = HERE / "2026-08-31-reader-mode-estate-audit.ipynb"
 INPUT_MANIFEST = HERE / "reader-mode-input-manifest.json"
+PUBLISHED_ARTIFACT_NAMES = (
+    NOTEBOOK.name,
+    "reader-mode-estate-summary.json",
+    "reader-mode-public-rollout.json",
+    "reader-mode-estate-audit.md",
+)
+MAX_PUBLICATION_ARTIFACT_BYTES = 64_000_000
 SOURCE_FILES = {
     "personal": "personal.json",
     "ergon": "ergon.json",
@@ -34,14 +49,6 @@ SOURCE_FILES = {
     "umbrella_extended": "umbrella-extended.json",
     "organvm_gap": "organvm-gap.json",
 }
-PUBLIC_PROSE_REWRITES = (
-    ("current personal profile/portfolio", "current individual profile/portfolio"),
-    ("current personal profile", "current individual profile"),
-    ("the personal profile", "the individual profile"),
-    ("personal information management", "individual information management"),
-)
-PUBLIC_EXACT_REWRITES = {"contrib": "contribution"}
-REPOSITORY_CHARACTER = r"A-Za-z0-9._-"
 
 
 def audit_input_dir() -> Path:
@@ -76,11 +83,17 @@ def source_archived(row: dict, *, source: str, index: int) -> bool:
     return value
 
 
-def verify_live_inputs_against_manifest() -> dict:
-    """Fail before notebook execution unless live inputs match the pinned manifest."""
+def verify_live_inputs_against_manifest() -> tuple[
+    dict,
+    bytes,
+    dict[str, bytes],
+    dict[str, dict],
+]:
+    """Return the pinned manifest, exact bytes, source snapshots, and parsed bundles."""
     try:
-        manifest = json.loads(INPUT_MANIFEST.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        manifest_bytes = INPUT_MANIFEST.read_bytes()
+        manifest = json.loads(manifest_bytes)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Cannot read pinned input manifest: {INPUT_MANIFEST.name}") from exc
 
     if manifest.get("schema_version") != "reader-mode-input-manifest.v1":
@@ -106,6 +119,8 @@ def verify_live_inputs_against_manifest() -> dict:
         "private": 0,
     }
     input_dir = audit_input_dir()
+    source_payloads: dict[str, bytes] = {}
+    source_bundles: dict[str, dict] = {}
     for source, filename in SOURCE_FILES.items():
         expected = by_segment[source]
         if expected.get("filename") != filename:
@@ -114,7 +129,7 @@ def verify_live_inputs_against_manifest() -> dict:
         try:
             source_bytes = source_path.read_bytes()
             bundle = json.loads(source_bytes)
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"Cannot read authorized input {filename!r}") from exc
         repositories = bundle.get("repositories") if isinstance(bundle, dict) else None
         if not isinstance(repositories, list):
@@ -137,62 +152,15 @@ def verify_live_inputs_against_manifest() -> dict:
             raise RuntimeError(
                 f"Authorized input {filename!r} does not match its pinned bytes/counts",
             )
+        source_payloads[source] = source_bytes
+        source_bundles[source] = bundle
         live_totals["repositories"] += actual["rows"]
         live_totals["public"] += actual["public"]
         live_totals["private"] += actual["private"]
 
     if manifest.get("totals") != live_totals:
         raise RuntimeError("Pinned input manifest totals do not match the live inputs")
-    return manifest
-
-
-def bounded_identifier_pattern(identifiers: set[str]) -> str:
-    """Build a longest-first, repository-token-bounded identifier pattern."""
-    if not identifiers:
-        return r"(?!)"
-    alternatives = "|".join(
-        re.escape(value) for value in sorted(identifiers, key=len, reverse=True)
-    )
-    return (
-        rf"(?<![{REPOSITORY_CHARACTER}])(?:{alternatives})"
-        rf"(?:(?=\.git(?:$|[^{REPOSITORY_CHARACTER}]))|"
-        rf"(?![{REPOSITORY_CHARACTER}]))"
-    )
-
-
-def private_only_repository_slugs(
-    private_full_identifiers: set[str],
-    public_full_identifiers: set[str],
-) -> set[str]:
-    """Return private slugs that do not collide with a public repository slug."""
-    private_slugs = {
-        repository.split("/", 1)[-1] for repository in private_full_identifiers
-    }
-    public_slug_keys = {
-        repository.split("/", 1)[-1].casefold()
-        for repository in public_full_identifiers
-    }
-    return {
-        slug for slug in private_slugs if slug.casefold() not in public_slug_keys
-    }
-
-
-def repository_reference_pattern(
-    private_full_identifiers: set[str],
-    private_only_slugs: set[str],
-    public_full_identifiers: set[str],
-) -> re.Pattern[str]:
-    """Match every private-only reference while shielding complete public names."""
-    if {value.casefold() for value in private_full_identifiers} & {
-        value.casefold() for value in public_full_identifiers
-    }:
-        raise RuntimeError("A repository identifier is both public and private")
-    return re.compile(
-        rf"(?P<private_full>{bounded_identifier_pattern(private_full_identifiers)})"
-        rf"|(?P<public_full>{bounded_identifier_pattern(public_full_identifiers)})"
-        rf"|(?P<private_slug>{bounded_identifier_pattern(private_only_slugs)})",
-        flags=re.IGNORECASE,
-    )
+    return manifest, manifest_bytes, source_payloads, source_bundles
 
 
 def markdown(source: str) -> nbformat.NotebookNode:
@@ -682,82 +650,28 @@ cells = [
         public_full_identifiers = set(
             inventory.loc[inventory["visibility"] == "public", "repository"]
         )
-        private_slugs = {
-            repository.split("/", 1)[-1] for repository in private_full_identifiers
-        }
-        public_slug_keys = {
-            repository.split("/", 1)[-1].casefold()
-            for repository in public_full_identifiers
-        }
-        private_only_slugs = {
-            slug for slug in private_slugs if slug.casefold() not in public_slug_keys
-        }
-        require(
-            not {
-                repository.casefold() for repository in private_full_identifiers
-            } & {
-                repository.casefold() for repository in public_full_identifiers
-            },
-            "a repository identifier is both public and private",
+        from organvm_engine.documentation.privacy import (
+            private_only_repository_slugs,
+            redact_private_references,
+            repository_reference_pattern,
         )
 
-
-        def bounded_identifier_pattern(identifiers):
-            repository_character = r"A-Za-z0-9._-"
-            if not identifiers:
-                return r"(?!)"
-            alternatives = "|".join(
-                re.escape(identifier)
-                for identifier in sorted(identifiers, key=len, reverse=True)
-            )
-            return (
-                rf"(?<![{repository_character}])(?:{alternatives})"
-                rf"(?:(?=\\.git(?:$|[^{repository_character}]))|"
-                rf"(?![{repository_character}]))"
-            )
-
-
-        private_reference_pattern = re.compile(
-            rf"(?P<private_full>{bounded_identifier_pattern(private_full_identifiers)})"
-            rf"|(?P<public_full>{bounded_identifier_pattern(public_full_identifiers)})"
-            rf"|(?P<private_slug>{bounded_identifier_pattern(private_only_slugs)})",
-            flags=re.IGNORECASE,
+        private_only_slugs = private_only_repository_slugs(
+            private_full_identifiers,
+            public_full_identifiers,
         )
-
-        public_prose_rewrites = (
-            ("current personal profile/portfolio", "current individual profile/portfolio"),
-            ("current personal profile", "current individual profile"),
-            ("the personal profile", "the individual profile"),
-            ("personal information management", "individual information management"),
+        private_reference_pattern = repository_reference_pattern(
+            private_full_identifiers,
+            private_only_slugs,
+            public_full_identifiers,
         )
-        public_exact_rewrites = {"contrib": "contribution"}
-
-
-        def redact_private_references(value):
-            if isinstance(value, str):
-                value = public_exact_rewrites.get(value, value)
-                for original, replacement in public_prose_rewrites:
-                    value = value.replace(original, replacement)
-                return private_reference_pattern.sub(
-                    lambda match: (
-                        match.group(0)
-                        if match.lastgroup == "public_full"
-                        else "[private repository]"
-                    ),
-                    value,
-                )
-            if isinstance(value, list):
-                return [redact_private_references(item) for item in value]
-            if isinstance(value, dict):
-                return {
-                    key: redact_private_references(item) for key, item in value.items()
-                }
-            return value
-
 
         for column in public_inventory.columns:
             public_inventory[column] = public_inventory[column].map(
-                redact_private_references
+                lambda value: redact_private_references(
+                    value,
+                    private_reference_pattern,
+                )
             )
         public_integrity_count = int(public_inventory["integrity_attention"].sum())
 
@@ -1086,9 +1000,6 @@ cells = [
         report = "\\n".join(report_lines) + "\\n"
 
         serialized_artifacts = {
-            "reader-mode-input-manifest.json": json.dumps(
-                input_manifest, indent=2, allow_nan=False
-            ) + "\\n",
             "reader-mode-estate-summary.json": json.dumps(
                 aggregate_summary, indent=2, allow_nan=False
             ) + "\\n",
@@ -1125,7 +1036,6 @@ cells = [
         for filename, payload in serialized_artifacts.items():
             (OUTPUT_DIR / filename).write_text(payload, encoding="utf-8")
 
-        print("Wrote reader-mode-input-manifest.json")
         print("Wrote reader-mode-estate-summary.json")
         print("Wrote reader-mode-public-rollout.json")
         print("Wrote reader-mode-estate-audit.md")
@@ -1214,37 +1124,51 @@ def execute_in_process(document: nbformat.NotebookNode) -> nbformat.NotebookNode
     return document
 
 
-previous_cwd = Path.cwd()
-try:
-    verify_live_inputs_against_manifest()
-    os.chdir(HERE)
-    if os.environ.get("ORGANVM_NOTEBOOK_EXECUTION") == "in-process":
-        executed = execute_in_process(notebook)
-    else:
-        try:
-            client = NotebookClient(
-                notebook,
-                timeout=600,
-                kernel_name="python3",
-                allow_errors=False,
-            )
-            executed = client.execute()
-            executed.metadata["execution"] = {"mode": "nbclient"}
-        except RuntimeError as exc:
-            if "Kernel died" not in str(exc):
-                raise
-            executed = execute_in_process(notebook)
-finally:
-    os.chdir(previous_cwd)
+def execute_notebook(
+    document: nbformat.NotebookNode,
+    *,
+    input_dir: Path,
+    output_dir: Path,
+) -> nbformat.NotebookNode:
+    """Execute only against private verified snapshots in an isolated staging cwd."""
+    previous_cwd = Path.cwd()
+    previous_input_dir = os.environ.get("ORGANVM_DOC_AUDIT_INPUT_DIR")
+    try:
+        os.environ["ORGANVM_DOC_AUDIT_INPUT_DIR"] = str(input_dir)
+        os.chdir(output_dir)
+        if os.environ.get("ORGANVM_NOTEBOOK_EXECUTION") == "in-process":
+            executed = execute_in_process(document)
+        else:
+            try:
+                client = NotebookClient(
+                    document,
+                    timeout=600,
+                    kernel_name="python3",
+                    allow_errors=False,
+                )
+                executed = client.execute()
+                executed.metadata["execution"] = {"mode": "nbclient"}
+            except RuntimeError as exc:
+                if "Kernel died" not in str(exc):
+                    raise
+                executed = execute_in_process(document)
+    finally:
+        os.chdir(previous_cwd)
+        if previous_input_dir is None:
+            os.environ.pop("ORGANVM_DOC_AUDIT_INPUT_DIR", None)
+        else:
+            os.environ["ORGANVM_DOC_AUDIT_INPUT_DIR"] = previous_input_dir
+    return executed
 
 
-def repository_identifiers_by_visibility() -> tuple[set[str], set[str]]:
-    """Resolve full repository identifiers without exposing them in output."""
+def repository_identifiers_by_visibility(
+    verified_source_bundles: dict[str, dict],
+) -> tuple[set[str], set[str]]:
+    """Resolve identifiers only from manifest-verified parsed source snapshots."""
     private_identifiers: set[str] = set()
     public_identifiers: set[str] = set()
-    input_dir = audit_input_dir()
     for source, filename in SOURCE_FILES.items():
-        bundle = json.loads((input_dir / filename).read_text(encoding="utf-8"))
+        bundle = verified_source_bundles[source]
         for index, row in enumerate(bundle["repositories"]):
             visibility = source_visibility(row, source=source, index=index)
             if filename == "personal.json":
@@ -1258,20 +1182,17 @@ def repository_identifiers_by_visibility() -> tuple[set[str], set[str]]:
     return private_identifiers, public_identifiers
 
 
-private_full_identifiers, public_full_identifiers = repository_identifiers_by_visibility()
-if len(private_full_identifiers) != 84:
-    raise RuntimeError(
-        f"Expected 84 private repository identifiers, found {len(private_full_identifiers)}",
-    )
-private_only_slugs = private_only_repository_slugs(
-    private_full_identifiers,
-    public_full_identifiers,
-)
-private_reference_pattern = repository_reference_pattern(
-    private_full_identifiers,
-    private_only_slugs,
-    public_full_identifiers,
-)
+def materialize_verified_inputs(
+    input_dir: Path,
+    source_payloads: dict[str, bytes],
+) -> None:
+    """Write the exact verified snapshots into an owner-private execution directory."""
+    input_dir.mkdir(mode=0o700)
+    for source, filename in SOURCE_FILES.items():
+        target = input_dir / filename
+        with target.open("xb") as stream:
+            stream.write(source_payloads[source])
+        target.chmod(0o600)
 
 
 def bare_slug_scan_payload(path: Path, payload: str) -> str:
@@ -1403,30 +1324,100 @@ def bare_slug_scan_payload(path: Path, payload: str) -> str:
     return payload
 
 
-publication_files = [
-    path
-    for path in HERE.iterdir()
-    if path.is_file() and path.suffix in {".ipynb", ".json", ".md", ".py"}
-]
-temporary_notebook: Path | None = None
-try:
-    file_descriptor, temporary_name = tempfile.mkstemp(
-        dir=HERE,
-        prefix=f".{NOTEBOOK.name}.",
-        suffix=".tmp",
+def _read_regular_bytes_once(path: Path) -> bytes:
+    """Read one bounded regular file through a no-follow descriptor."""
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
     )
-    os.close(file_descriptor)
-    temporary_notebook = Path(temporary_name)
-    nbformat.write(executed, temporary_notebook)
-    temporary_notebook.chmod(0o644)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeError(f"Cannot open staged artifact {path.name!r}") from exc
+    try:
+        identity_before = os.fstat(descriptor)
+        if not stat.S_ISREG(identity_before.st_mode):
+            raise RuntimeError(f"Staged artifact {path.name!r} is not a regular file")
+        if identity_before.st_size > MAX_PUBLICATION_ARTIFACT_BYTES:
+            raise RuntimeError(f"Staged artifact {path.name!r} exceeds the size limit")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, 1_048_576)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_PUBLICATION_ARTIFACT_BYTES:
+                raise RuntimeError(f"Staged artifact {path.name!r} exceeds the size limit")
+            chunks.append(chunk)
+        identity_after = os.fstat(descriptor)
+        if (
+            identity_before.st_dev,
+            identity_before.st_ino,
+            identity_before.st_size,
+            identity_before.st_mtime_ns,
+        ) != (
+            identity_after.st_dev,
+            identity_after.st_ino,
+            identity_after.st_size,
+            identity_after.st_mtime_ns,
+        ):
+            raise RuntimeError(f"Staged artifact {path.name!r} changed while reading")
+        payload = b"".join(chunks)
+        if len(payload) != identity_before.st_size:
+            raise RuntimeError(f"Staged artifact {path.name!r} changed while reading")
+        return payload
+    finally:
+        os.close(descriptor)
 
+
+def read_staged_candidate_bytes(stage_dir: Path) -> dict[Path, bytes]:
+    """Read each staged publication candidate exactly once."""
+    return {
+        HERE / name: _read_regular_bytes_once(stage_dir / name)
+        for name in PUBLISHED_ARTIFACT_NAMES
+    }
+
+
+def privacy_gate_candidate_bytes(
+    candidate_bytes: dict[Path, bytes],
+    *,
+    manifest_bytes: bytes,
+    private_reference_pattern: re.Pattern[str],
+) -> int:
+    """Scan the exact candidate bytes that will be published plus current peers."""
+    candidate_text: dict[Path, str] = {}
+    for path, payload in candidate_bytes.items():
+        try:
+            candidate_text[path] = payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise RuntimeError(f"Staged artifact {path.name!r} is not UTF-8") from exc
+    try:
+        manifest_text = manifest_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError("Pinned input manifest is not UTF-8") from exc
+
+    publication_paths = {
+        path
+        for path in HERE.iterdir()
+        if path.is_file() and path.suffix in {".ipynb", ".json", ".md", ".py"}
+    }
+    publication_paths.update(candidate_text)
+    publication_paths.add(INPUT_MANIFEST)
     privacy_hits_by_file: dict[str, int] = {}
-    for path in publication_files:
-        payload = (
-            temporary_notebook.read_text(encoding="utf-8")
-            if path == NOTEBOOK
-            else path.read_text(encoding="utf-8")
-        )
+    for path in sorted(publication_paths):
+        if path in candidate_text:
+            payload = candidate_text[path]
+        elif path == INPUT_MANIFEST:
+            payload = manifest_text
+        else:
+            try:
+                payload = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                raise RuntimeError(f"Cannot scan public artifact {path.name!r}") from exc
         private_full_hits = sum(
             match.lastgroup == "private_full"
             for match in private_reference_pattern.finditer(payload)
@@ -1447,16 +1438,112 @@ try:
             "Detected private repository identifier hits in public artifacts: "
             + rendered_hits,
         )
+    return len(publication_paths)
 
-    temporary_notebook.replace(NOTEBOOK)
-    temporary_notebook = None
-finally:
-    if temporary_notebook is not None:
-        temporary_notebook.unlink(missing_ok=True)
 
-print(f"Executed {NOTEBOOK}")
-print(
-    f"Privacy gate passed for {len(publication_files)} public files against "
-    f"{len(private_full_identifiers)} private repository identifiers and "
-    "all private-only bare-slug forms",
-)
+def publish_exact_candidate_bytes(candidate_bytes: dict[Path, bytes]) -> None:
+    """Publish the already-scanned bytes through same-directory temporary files."""
+    temporary_paths: dict[Path, Path] = {}
+    try:
+        for target, payload in candidate_bytes.items():
+            descriptor, temporary_name = tempfile.mkstemp(
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+            )
+            temporary = Path(temporary_name)
+            temporary_paths[target] = temporary
+            try:
+                os.fchmod(descriptor, 0o644)
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(payload)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            except Exception:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+                raise
+        for target, temporary in temporary_paths.items():
+            os.replace(temporary, target)
+        temporary_paths.clear()
+        directory_descriptor = os.open(HERE, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        for temporary in temporary_paths.values():
+            temporary.unlink(missing_ok=True)
+
+
+def main() -> None:
+    """Build, scan, and publish a complete candidate without pre-gate live writes."""
+    (
+        _manifest,
+        manifest_bytes,
+        verified_source_payloads,
+        verified_source_bundles,
+    ) = verify_live_inputs_against_manifest()
+    with tempfile.TemporaryDirectory(
+        dir=HERE,
+        prefix=".reader-mode-audit-build.",
+    ) as temporary_root_name:
+        temporary_root = Path(temporary_root_name)
+        temporary_root.chmod(0o700)
+        input_dir = temporary_root / "inputs"
+        stage_dir = temporary_root / "stage"
+        materialize_verified_inputs(input_dir, verified_source_payloads)
+        stage_dir.mkdir(mode=0o700)
+        staged_manifest = stage_dir / INPUT_MANIFEST.name
+        with staged_manifest.open("xb") as stream:
+            stream.write(manifest_bytes)
+        staged_manifest.chmod(0o600)
+
+        executed = execute_notebook(
+            notebook,
+            input_dir=input_dir,
+            output_dir=stage_dir,
+        )
+        nbformat.write(executed, stage_dir / NOTEBOOK.name)
+
+        staged_manifest_bytes = _read_regular_bytes_once(staged_manifest)
+        if staged_manifest_bytes != manifest_bytes:
+            raise RuntimeError("Notebook execution changed the pinned input manifest")
+        candidate_bytes = read_staged_candidate_bytes(stage_dir)
+
+        private_full_identifiers, public_full_identifiers = (
+            repository_identifiers_by_visibility(verified_source_bundles)
+        )
+        if len(private_full_identifiers) != 84:
+            raise RuntimeError(
+                "Expected 84 private repository identifiers, "
+                f"found {len(private_full_identifiers)}",
+            )
+        private_only_slugs = private_only_repository_slugs(
+            private_full_identifiers,
+            public_full_identifiers,
+        )
+        private_reference_pattern = repository_reference_pattern(
+            private_full_identifiers,
+            private_only_slugs,
+            public_full_identifiers,
+        )
+        publication_count = privacy_gate_candidate_bytes(
+            candidate_bytes,
+            manifest_bytes=manifest_bytes,
+            private_reference_pattern=private_reference_pattern,
+        )
+        publish_exact_candidate_bytes(candidate_bytes)
+
+    print(f"Executed {NOTEBOOK}")
+    print(
+        f"Privacy gate passed for {publication_count} public files against "
+        f"{len(private_full_identifiers)} private repository identifiers and "
+        "all private-only bare-slug forms",
+    )
+
+
+if __name__ == "__main__":
+    main()

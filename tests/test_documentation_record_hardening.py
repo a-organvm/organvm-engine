@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import importlib.util
 import json
 import re
 import subprocess
@@ -19,6 +20,13 @@ from organvm_engine.cli.docs import cmd_docs_audit, cmd_docs_validate
 from organvm_engine.documentation import audit as documentation_audit
 from organvm_engine.documentation import record as documentation_record
 from organvm_engine.documentation.audit import audit_repository
+from organvm_engine.documentation.privacy import (
+    PUBLIC_EXACT_REWRITES,
+    PUBLIC_PROSE_REWRITES,
+    private_only_repository_slugs,
+    redact_private_references,
+    repository_reference_pattern,
+)
 from organvm_engine.documentation.record import load_project_record, validate_project_record
 
 
@@ -36,7 +44,11 @@ def _record() -> dict:
         "intended_users": ["maintainers"],
         "implementation_status": "PROTOTYPE",
         "deployment_status": "not-deployed",
-        "authorship": {"owner": "Test Maintainer"},
+        "authorship": {
+            "owner": "Test Maintainer",
+            "role": "maintainer",
+            "contributions": ["validation"],
+        },
         "claim_references": [
             {
                 "id": "project-status",
@@ -1387,28 +1399,6 @@ def test_builder_scans_python_except_for_exact_structural_labels() -> None:
 
 
 def test_builder_privacy_pattern_distinguishes_structural_and_private_names() -> None:
-    builder_path = (
-        Path(__file__).parents[1] / "docs/audits/build_reader_mode_estate_audit.py"
-    )
-    tree = ast.parse(builder_path.read_text(encoding="utf-8"))
-    function_names = {
-        "bounded_identifier_pattern",
-        "private_only_repository_slugs",
-        "repository_reference_pattern",
-    }
-    functions = [
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name in function_names
-    ]
-    namespace = {
-        "REPOSITORY_CHARACTER": r"A-Za-z0-9._-",
-        "re": re,
-    }
-    exec(
-        compile(ast.Module(body=functions, type_ignores=[]), str(builder_path), "exec"),
-        namespace,
-    )
     private_identifiers = {
         "secret/personal",
         "secret/contrib",
@@ -1416,11 +1406,11 @@ def test_builder_privacy_pattern_distinguishes_structural_and_private_names() ->
         "secret/hidden-project",
     }
     public_identifiers = {"organvm/public-project"}
-    private_only = namespace["private_only_repository_slugs"](
+    private_only = private_only_repository_slugs(
         private_identifiers,
         public_identifiers,
     )
-    pattern = namespace["repository_reference_pattern"](
+    pattern = repository_reference_pattern(
         private_identifiers,
         private_only,
         public_identifiers,
@@ -1446,11 +1436,24 @@ def test_builder_privacy_pattern_distinguishes_structural_and_private_names() ->
         ("private_full", "secret/hidden-project"),
         ("public_full", "organvm/public-project"),
     ]
-    builder_source = builder_path.read_text(encoding="utf-8")
-    assert "if public_inventory[column].dtype == object" not in builder_source
-    assert "public_inventory[column] = public_inventory[column].map(" in builder_source
-    assert '"current personal profile", "current individual profile"' in builder_source
-    assert 'public_exact_rewrites = {"contrib": "contribution"}' in builder_source
+    redacted = redact_private_references(
+        {
+            "summary": "current personal profile for secret/hidden-project",
+            "exact": "contrib",
+            "nested": ["organvm/public-project", "edu-organism"],
+        },
+        pattern,
+    )
+    assert redacted == {
+        "summary": "current individual profile for [private repository]",
+        "exact": "contribution",
+        "nested": ["organvm/public-project", "[private repository]"],
+    }
+    assert PUBLIC_PROSE_REWRITES[1] == (
+        "current personal profile",
+        "current individual profile",
+    )
+    assert PUBLIC_EXACT_REWRITES == {"contrib": "contribution"}
 
 
 def test_committed_notebook_uses_pinned_inputs_and_explicit_integrity_gates() -> None:
@@ -2746,3 +2749,345 @@ def test_builder_rejects_nonboolean_archived_values(value: object) -> None:
         source="fixture",
         index=0,
     ) is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("project_id", None),
+        ("name", []),
+        ("one_sentence", None),
+        ("problem", {}),
+        ("intended_users", None),
+        ("authorship", []),
+    ],
+)
+def test_builtin_project_record_shape_is_enforced_without_external_schema(
+    field: str,
+    value: object,
+) -> None:
+    record = _record()
+    record[field] = value
+
+    errors = validate_project_record(record)
+
+    assert any(field in error for error in errors)
+
+
+def test_evidence_hash_rejects_a_path_identity_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _write_git_fixture(tmp_path)
+    evidence_path = tmp_path / "docs/evidence/sources/validation.txt"
+    original_stream = documentation_record._stream_sha256
+    replaced = False
+
+    def replace_after_hash(path: Path) -> str:
+        nonlocal replaced
+        digest = original_stream(path)
+        replacement = path.with_name("replacement.txt")
+        replacement.write_bytes(path.read_bytes())
+        replacement.replace(path)
+        replaced = True
+        return digest
+
+    monkeypatch.setattr(documentation_record, "_stream_sha256", replace_after_hash)
+
+    errors = validate_project_record(record, root=tmp_path)
+
+    assert replaced is True
+    assert any("evidence identity changed while hashing" in error for error in errors)
+
+
+def test_assertion_read_rejects_an_unstable_path_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _write_git_fixture(tmp_path)
+    assertion_path = tmp_path / "docs/evidence/claims/validation.json"
+    original_read = documentation_record.read_stable_regular_bytes
+
+    def fail_assertion(path: Path, **kwargs) -> bytes:
+        if Path(path) == assertion_path:
+            raise documentation_record.StableReadError("simulated assertion replacement")
+        return original_read(path, **kwargs)
+
+    monkeypatch.setattr(
+        documentation_record,
+        "read_stable_regular_bytes",
+        fail_assertion,
+    )
+
+    errors = validate_project_record(record, root=tmp_path)
+
+    assert any("cannot load assertion" in error for error in errors)
+
+
+def test_markdown_audit_skips_an_unstable_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    (repository / "README.md").write_text("# Reader surface\n", encoding="utf-8")
+
+    def fail_stable_read(*_args, **_kwargs):
+        raise documentation_audit.StableReadError("simulated Markdown replacement")
+
+    monkeypatch.setattr(
+        documentation_audit,
+        "read_stable_regular_bytes",
+        fail_stable_read,
+    )
+
+    result = audit_repository(repository)
+
+    assert result["markdown_files"] == 0
+
+
+def _load_audit_builder():
+    builder_path = (
+        Path(__file__).parents[1] / "docs/audits/build_reader_mode_estate_audit.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "reader_mode_audit_builder_test",
+        builder_path,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _safe_live_artifacts(module, root: Path) -> dict[Path, bytes]:
+    notebook_path = root / module.NOTEBOOK.name
+    summary_path = root / "reader-mode-estate-summary.json"
+    rollout_path = root / "reader-mode-public-rollout.json"
+    report_path = root / "reader-mode-estate-audit.md"
+    artifacts = {
+        notebook_path: nbformat.writes(
+            nbformat.v4.new_notebook(
+                cells=[nbformat.v4.new_markdown_cell("old public notebook")],
+            ),
+        ).encode(),
+        summary_path: b'{"scope":{"source_segments":{}},"state":"old"}\n',
+        rollout_path: b'{"state":"old"}\n',
+        report_path: b"# Old public report\n",
+    }
+    for path, payload in artifacts.items():
+        path.write_bytes(payload)
+    return artifacts
+
+
+def _private_builder_inputs(module) -> tuple[dict[str, bytes], dict[str, dict]]:
+    bundles = {
+        source: {"repositories": []}
+        for source in module.SOURCE_FILES
+    }
+    bundles["ergon"] = {
+        "repositories": [
+            {
+                "repository": f"secret/private-{index}",
+                "visibility": "private",
+            }
+            for index in range(84)
+        ],
+    }
+    payloads = {
+        source: json.dumps(bundle).encode()
+        for source, bundle in bundles.items()
+    }
+    return payloads, bundles
+
+
+def _configure_builder_main(
+    module,
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[bytes, dict[Path, bytes]]:
+    monkeypatch.setattr(module, "HERE", root)
+    monkeypatch.setattr(module, "NOTEBOOK", root / module.NOTEBOOK.name)
+    monkeypatch.setattr(module, "INPUT_MANIFEST", root / module.INPUT_MANIFEST.name)
+    manifest_bytes = b'{"sources":[]}\n'
+    module.INPUT_MANIFEST.write_bytes(manifest_bytes)
+    originals = _safe_live_artifacts(module, root)
+    payloads, bundles = _private_builder_inputs(module)
+    monkeypatch.setattr(
+        module,
+        "verify_live_inputs_against_manifest",
+        lambda: ({}, manifest_bytes, payloads, bundles),
+    )
+    return manifest_bytes, originals
+
+
+def test_importing_audit_builder_has_no_filesystem_side_effects() -> None:
+    audit_dir = Path(__file__).parents[1] / "docs/audits"
+    paths = [
+        audit_dir / "2026-08-31-reader-mode-estate-audit.ipynb",
+        audit_dir / "reader-mode-input-manifest.json",
+        audit_dir / "reader-mode-estate-summary.json",
+        audit_dir / "reader-mode-public-rollout.json",
+        audit_dir / "reader-mode-estate-audit.md",
+    ]
+    before = {path: path.read_bytes() for path in paths}
+
+    _load_audit_builder()
+
+    assert {path: path.read_bytes() for path in paths} == before
+
+
+def test_builder_executes_from_verified_snapshots_after_live_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_audit_builder()
+    monkeypatch.setattr(module, "HERE", tmp_path)
+    monkeypatch.setattr(module, "NOTEBOOK", tmp_path / module.NOTEBOOK.name)
+    monkeypatch.setattr(module, "INPUT_MANIFEST", tmp_path / module.INPUT_MANIFEST.name)
+    originals = _safe_live_artifacts(module, tmp_path)
+    live_input_dir = tmp_path / "live-inputs"
+    live_input_dir.mkdir()
+    source_payloads = {
+        source: b'{"repositories":[]}\n'
+        for source in module.SOURCE_FILES
+    }
+    sources = []
+    for source, filename in module.SOURCE_FILES.items():
+        payload = source_payloads[source]
+        (live_input_dir / filename).write_bytes(payload)
+        sources.append(
+            {
+                "source_segment": source,
+                "filename": filename,
+                "rows": 0,
+                "public": 0,
+                "private": 0,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            },
+        )
+    manifest = {
+        "schema_version": "reader-mode-input-manifest.v1",
+        "sources": sources,
+        "totals": {
+            "source_segments": len(module.SOURCE_FILES),
+            "repositories": 0,
+            "public": 0,
+            "private": 0,
+        },
+    }
+    module.INPUT_MANIFEST.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setenv("ORGANVM_DOC_AUDIT_INPUT_DIR", str(live_input_dir))
+
+    def mutate_live_then_stop(_document, *, input_dir: Path, output_dir: Path):
+        first_source = next(iter(module.SOURCE_FILES))
+        filename = module.SOURCE_FILES[first_source]
+        (live_input_dir / filename).write_bytes(b'{"repositories":[{"leak":true}]}')
+        assert (input_dir / filename).read_bytes() == source_payloads[first_source]
+        assert input_dir.parent != output_dir
+        raise RuntimeError("snapshot verified")
+
+    monkeypatch.setattr(module, "execute_notebook", mutate_live_then_stop)
+
+    with pytest.raises(RuntimeError, match="snapshot verified"):
+        module.main()
+
+    assert {path: path.read_bytes() for path in originals} == originals
+
+
+def test_notebook_failure_cannot_mutate_live_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_audit_builder()
+    manifest_bytes, originals = _configure_builder_main(module, tmp_path, monkeypatch)
+
+    def fail_in_stage(_document, *, input_dir: Path, output_dir: Path):
+        (output_dir / "reader-mode-estate-audit.md").write_text(
+            "unsafe staged output",
+            encoding="utf-8",
+        )
+        raise RuntimeError("simulated notebook failure")
+
+    monkeypatch.setattr(module, "execute_notebook", fail_in_stage)
+
+    with pytest.raises(RuntimeError, match="simulated notebook failure"):
+        module.main()
+
+    assert module.INPUT_MANIFEST.read_bytes() == manifest_bytes
+    assert {path: path.read_bytes() for path in originals} == originals
+
+
+def test_privacy_failure_cannot_mutate_live_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_audit_builder()
+    manifest_bytes, originals = _configure_builder_main(module, tmp_path, monkeypatch)
+
+    def write_private_candidate(_document, *, input_dir: Path, output_dir: Path):
+        (output_dir / "reader-mode-estate-summary.json").write_text(
+            '{"scope":{"source_segments":{}}}\n',
+            encoding="utf-8",
+        )
+        (output_dir / "reader-mode-public-rollout.json").write_text(
+            "{}\n",
+            encoding="utf-8",
+        )
+        (output_dir / "reader-mode-estate-audit.md").write_text(
+            "secret/private-0\n",
+            encoding="utf-8",
+        )
+        return nbformat.v4.new_notebook(
+            cells=[nbformat.v4.new_markdown_cell("public notebook")],
+        )
+
+    monkeypatch.setattr(module, "execute_notebook", write_private_candidate)
+
+    with pytest.raises(RuntimeError, match="Detected private repository identifier"):
+        module.main()
+
+    assert module.INPUT_MANIFEST.read_bytes() == manifest_bytes
+    assert {path: path.read_bytes() for path in originals} == originals
+
+
+def test_safe_candidate_publishes_exact_scanned_bytes_and_preserves_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_audit_builder()
+    manifest_bytes, _originals = _configure_builder_main(module, tmp_path, monkeypatch)
+    expected_outputs = {
+        "reader-mode-estate-summary.json": b'{"scope":{"source_segments":{}},"state":"new"}\n',
+        "reader-mode-public-rollout.json": b'{"state":"new"}\n',
+        "reader-mode-estate-audit.md": b"# New public report\n",
+    }
+
+    def write_safe_candidate(_document, *, input_dir: Path, output_dir: Path):
+        for name, payload in expected_outputs.items():
+            (output_dir / name).write_bytes(payload)
+        return nbformat.v4.new_notebook(
+            cells=[nbformat.v4.new_markdown_cell("new public notebook")],
+        )
+
+    published: dict[Path, bytes] = {}
+    real_publish = module.publish_exact_candidate_bytes
+
+    def capture_publish(candidate_bytes: dict[Path, bytes]) -> None:
+        published.update(candidate_bytes)
+        real_publish(candidate_bytes)
+
+    monkeypatch.setattr(module, "execute_notebook", write_safe_candidate)
+    monkeypatch.setattr(module, "publish_exact_candidate_bytes", capture_publish)
+
+    module.main()
+
+    assert module.INPUT_MANIFEST.read_bytes() == manifest_bytes
+    assert set(path.name for path in published) == set(module.PUBLISHED_ARTIFACT_NAMES)
+    for path, payload in published.items():
+        assert path.read_bytes() == payload
+    for name, payload in expected_outputs.items():
+        assert (tmp_path / name).read_bytes() == payload
+    executed = nbformat.read(tmp_path / module.NOTEBOOK.name, as_version=4)
+    assert executed.cells[0].source == "new public notebook"
+

@@ -1276,6 +1276,9 @@ def test_custody_only_deletes_private_journal_aliases(tmp_path, monkeypatch) -> 
     import organvm_engine.contextmd.sync as sync_mod
     from organvm_engine.contextmd import AUTO_END, AUTO_START
 
+    if not Path("/proc/self/fd").is_dir():
+        pytest.skip("procfs file descriptors are required for this race simulation")
+
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     target = workspace / "AGENTS.md"
@@ -1543,3 +1546,149 @@ def test_failed_sync_receipt_has_no_unbound_post_install_effect(
     assert output["sha256"] == output["journal_object"]
     assert result["errors"]
     assert not list(workspace.glob(".CLAUDE.md.*"))
+
+
+def test_render_existing_context_preserves_legacy_healing_when_only_timestamp_matches() -> None:
+    import re
+
+    import organvm_engine.contextmd.sync as sync_mod
+    from organvm_engine.contextmd import AUTO_END, AUTO_START
+
+    section = (
+        f"{AUTO_START}\nbody\n"
+        "*Last synced: 2026-09-01T10:00:00Z*\n"
+        f"{AUTO_END}"
+    )
+    original = (
+        section
+        + "\n\n<!-- ERROR: Repo 'stale' not found -->"
+        + "\n\n## Active Handoff Protocol\nobsolete\n"
+    )
+
+    action, rendered, change = sync_mod._render_existing_context(
+        Path("AGENTS.md"),
+        original,
+        section,
+        re,
+    )
+
+    assert action == "updated"
+    assert change is not None
+    assert "<!-- ERROR:" not in rendered
+    assert "obsolete" not in rendered
+
+
+def test_receipted_directory_mapping_ignores_unselected_ambiguous_organs() -> None:
+    import organvm_engine.contextmd.sync as sync_mod
+
+    registry = {
+        "organs": {
+            "SELECTED": {
+                "directory": "selected-organ",
+                "repositories": [{"org": "selected-organ"}],
+            },
+            "UNRELATED": {
+                "directory": "first-directory",
+                "repositories": [{"org": "second-directory"}],
+            },
+        },
+    }
+
+    assert sync_mod._registry_organ_directory_map(registry, ["SELECTED"]) == {
+        "SELECTED": "selected-organ",
+    }
+
+
+def test_receipt_destination_cannot_alias_a_generated_context_output(
+    tmp_path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with pytest.raises(RuntimeError, match="collides with a generated context output"):
+        sync_all(
+            workspace=workspace,
+            registry_path=str(FIXTURES / "registry-minimal.json"),
+            additional_workspace_roots=[],
+            receipt_path=workspace / "CLAUDE.md",
+        )
+
+    assert not (workspace / "CLAUDE.md").exists()
+    assert not (workspace / "GEMINI.md").exists()
+    assert not (workspace / "AGENTS.md").exists()
+
+
+def test_receipted_sync_rejects_a_seed_path_added_before_publication(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import organvm_engine.seed.discover as seed_discover
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    real_discover = seed_discover.discover_seeds
+    calls = 0
+
+    def discover_with_late_seed(root):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            late_seed = (
+                Path(root)
+                / seed_discover.ORGAN_ORGS[0]
+                / "late-repository"
+                / "seed.yaml"
+            )
+            late_seed.parent.mkdir(parents=True)
+            late_seed.write_text("repo: late-repository\n", encoding="utf-8")
+        return real_discover(root)
+
+    monkeypatch.setattr(seed_discover, "discover_seeds", discover_with_late_seed)
+
+    with pytest.raises(RuntimeError, match="seed evidence path set changed"):
+        sync_all(
+            workspace=workspace,
+            registry_path=str(FIXTURES / "registry-minimal.json"),
+            additional_workspace_roots=[],
+            receipt_path=workspace / "receipt.json",
+        )
+
+    assert calls == 2
+    assert not (workspace / "receipt.json").exists()
+
+
+def test_receipted_sync_rebinds_sops_at_the_publication_boundary(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import organvm_engine.contextmd.receipt as receipt_mod
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    real_bind = receipt_mod.bind_context_sync_sops
+    calls = 0
+
+    def change_on_final_binding(entries, root):
+        nonlocal calls
+        calls += 1
+        binding = real_bind(entries, root)
+        if calls == 3:
+            return {**binding, "manifest_sha256": "sha256:" + "f" * 64}
+        return binding
+
+    monkeypatch.setattr(
+        receipt_mod,
+        "bind_context_sync_sops",
+        change_on_final_binding,
+    )
+
+    with pytest.raises(RuntimeError, match="SOP evidence path set changed"):
+        sync_all(
+            workspace=workspace,
+            registry_path=str(FIXTURES / "registry-minimal.json"),
+            additional_workspace_roots=[],
+            receipt_path=workspace / "receipt.json",
+        )
+
+    assert calls == 3
+    assert not (workspace / "receipt.json").exists()
