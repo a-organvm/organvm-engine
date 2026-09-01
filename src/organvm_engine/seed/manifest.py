@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from organvm_engine._stable_io import read_stable_regular_bytes
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,8 +36,7 @@ def load_workspace_manifest(path: Path | str) -> dict | None:
     try:
         import yaml
 
-        with manifest_path.open() as f:
-            data = yaml.safe_load(f)
+        data = yaml.safe_load(read_stable_regular_bytes(manifest_path))
         if isinstance(data, dict):
             return data
     except Exception:
